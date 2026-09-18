@@ -1,0 +1,46 @@
+cabal-version:      3.0
+name:               cost-translate-integration
+version:            0.1.0.0
+synopsis:           External-runtime feasibility probes for cost-translate
+build-type:         Simple
+
+common settings
+    default-language: GHC2021
+    ghc-options:      -Wall
+
+-- Handwritten feasibility probes complement the real generated-code tests.
+test-suite cost-translate-integration
+    import:           settings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test-integration
+                    , probes
+    main-is:          Main.hs
+    other-modules:    Probes
+    build-depends:
+        base >=4.18 && <5,
+        MemoristANT,
+        tasty,
+        tasty-hunit,
+        QuickCheck
+
+-- External-runtime regressions, including the authorized scanl correction.
+test-suite runtime-scanl
+    import:           settings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:    ../test
+    main-is:          RuntimeScanlCandidate.hs
+    build-depends:    base, MemoristANT
+
+test-suite runtime-polymorphic-sharing
+    import:           settings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:    ../test
+    main-is:          RuntimePolymorphicSharingGate.hs
+    build-depends:    base, MemoristANT
+
+test-suite runtime-higher-kinded
+    import:           settings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:    ../test
+    main-is:          RuntimeHigherKindedGate.hs
+    build-depends:    base, MemoristANT, QuickCheck

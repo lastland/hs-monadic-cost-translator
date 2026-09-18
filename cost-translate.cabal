@@ -1,0 +1,67 @@
+cabal-version:      3.0
+name:               cost-translate
+version:            0.1.0.0
+synopsis:           Translate pure Haskell to a monadic cost interface (proof of concept)
+build-type:         Simple
+extra-source-files:
+    test/OutputAstProbe.hs
+    test/RuntimeFilterGate.hs
+    test/RuntimeScanlGate.hs
+    test/RuntimeScanlCandidate.hs
+    test/RuntimePolymorphicSharingGate.hs
+    test/RuntimeHigherKindedGate.hs
+
+common settings
+    default-language: GHC2021
+    ghc-options:      -Wall
+
+library
+    import:           settings
+    hs-source-dirs:   src
+    exposed-modules:
+        Cost.Translate
+    other-modules:
+        Cost.Translate.Frontend
+        Cost.Translate.Datatypes
+        Cost.Translate.Names
+        Cost.Translate.Pretty
+        Cost.Translate.Foldable
+        Cost.Translate.Validation
+        Cost.Translate.Kinds
+        Cost.Translate.Sharing
+        Cost.Translate.Callable
+        Cost.Translate.Diagnostic
+        Cost.Translate.Typed
+        Cost.Translate.Output
+    build-depends:
+        base >=4.18 && <5,
+        ghc,
+        ghc-boot-th,
+        ghc-paths,
+        containers,
+        directory,
+        filepath,
+        process,
+        temporary,
+        transformers
+
+executable cost-translate
+    import:           settings
+    hs-source-dirs:   app
+    main-is:          Main.hs
+    build-depends:
+        base,
+        cost-translate
+
+test-suite cost-translate-test
+    import:           settings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    build-depends:
+        base,
+        cost-translate,
+        directory,
+        filepath,
+        process,
+        temporary

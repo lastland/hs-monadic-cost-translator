@@ -1,6 +1,6 @@
 # Pure Haskell to monadic cost translation: proof of concept
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Problem Statement
 
@@ -142,6 +142,11 @@ code as successful output.
 
 - Generate ordinary lazy algebraic datatype representations, conversion support,
   demand types, and the supporting runtime instances.
+- User-approved implementation clarification: generated conversions require the
+  source datatype and all its constructors to be exported. Hidden constructors
+  fail translation with a source-located unsupported diagnostic. Future support
+  for conversion across abstract source types is tracked in
+  `issues/04-private-constructor-conversion.md`.
 - Wrap every ordinary lazy field in a thunk, including primitive-valued fields.
   A primitive value has no internal lazy fields, but computing it can be deferred.
 - Generate structural demand generators and shrinkers using the reference
@@ -250,5 +255,5 @@ cannot explain effectively.
 
 If a feasibility probe contradicts a requirement, bring back the concrete failed
 case for a design decision. Do not silently narrow the agreed subset. This
-document specifies intended work; no translator, build scaffold, or feasibility
-probe has been implemented or verified yet.
+document specifies intended work; current verification and unresolved findings
+are recorded in `IMPLEMENTATION-STATUS.md`.

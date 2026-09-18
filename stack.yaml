@@ -1,0 +1,10 @@
+resolver:
+  # lts-24.22 ghc-9.10.3 (same snapshot as the external hs-pbt reference)
+  url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/22.yaml
+
+packages:
+- .
+
+# The translator itself must not depend on the target runtime (hs-pbt);
+# see docs/adr/0003-external-monadic-interface.md. Integration checks that
+# need the runtime live in ./integration with their own stack.yaml.

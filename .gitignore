@@ -1,0 +1,9 @@
+.stack-work/
+dist-newstyle/
+*.hi
+*.o
+
+# External reference runtime; intentionally not part of version control.
+hs-pbt/
+
+paper.pdf

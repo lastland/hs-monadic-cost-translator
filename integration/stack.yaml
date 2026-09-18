@@ -1,0 +1,16 @@
+# Integration project for the cost-semantics translator.
+#
+# Depends on the root cost-translate package ('..') and the external
+# MemoristANT runtime ('../hs-pbt').  Same snapshot as the root project
+# (lts-24.22, ghc-9.10.3) plus QuickCheck 2.17.1.0 required by hs-pbt.
+
+snapshot:
+  url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/22.yaml
+
+packages:
+- .
+- ..
+- ../hs-pbt
+
+extra-deps:
+- QuickCheck-2.17.1.0
