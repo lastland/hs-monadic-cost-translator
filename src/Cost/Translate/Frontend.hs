@@ -166,7 +166,7 @@ bindingError located = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": " ++ d
 
 -- Signature/demand diagnostics reach users through ADR-0002 locations.
 locatedAt :: SrcSpan -> Either String a -> Either String a
-locatedAt span = either (Left . ((showSDocUnsafe (ppr span) ++ ": ") ++)) Right
+locatedAt srcSpan = either (Left . ((showSDocUnsafe (ppr srcSpan) ++ ": ") ++)) Right
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)

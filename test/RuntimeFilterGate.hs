@@ -1,6 +1,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- Run in the integration Stack environment. This is a feasibility probe,
 -- deliberately separate from the tests of actual generated output in Main.hs.
+-- The partial 'head' is the probe's subject: it validates the headM
+-- replacement's laziness, so rewriting it away would defeat the probe.
+{-# OPTIONS_GHC -Wno-x-partial #-}
 module Main (main) where
 
 import Control.Exception (SomeException, evaluate, try)

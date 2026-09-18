@@ -1,6 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- Keep the source control-flow shape explicit: this probe tests its suspension.
 {- HLINT ignore "Use list comprehension" -}
+-- The partial 'head' is the probe's subject; see RuntimeFilterGate.hs too.
+{-# OPTIONS_GHC -Wno-x-partial #-}
 -- Independent feasibility gate: run in the external-runtime integration environment.
 module Main (main) where
 
@@ -12,9 +14,9 @@ import qualified Memorist.Example.ListInf as MI
 import qualified Memorist.Base.Thunk as MT
 
 source :: Int -> Int
-source x = head (scanl add x (bad x))
+source x = head (scanl plus x (bad x))
   where
-    add a b = a + b
+    plus a b = a + b
     bad n = if (undefined :: Bool) then [n] else []
 
 addM :: Th Int -> Th Int -> MemoristM Int
