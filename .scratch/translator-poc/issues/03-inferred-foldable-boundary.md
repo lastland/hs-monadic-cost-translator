@@ -16,6 +16,12 @@ noncommutative argument order, unused fields/callbacks, and independently counte
 entry ticks. The earlier failure description below records the motivating case;
 it is no longer the active blocker.
 
+## Comments
+
+- Addressed by commit `91e2d08`: the direct `FoldableT` interface was
+  implemented, reviewed, and verified in the full integration suite.
+  Status left for the maintainer to close.
+
 ## Original failing case
 
 ```haskell

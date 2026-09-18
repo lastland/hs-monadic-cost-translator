@@ -4,6 +4,10 @@ Status: ready-for-human
 
 ## Resolution
 
+Addressed by commit `91e2d08`: kind-correct representation, conversion, and
+demand generation shipped with the translator implementation and passed the
+full integration suite. Status left for the maintainer to close.
+
 The earlier kind errors were generator defects, not evidence of impossibility
 or grounds for reducing scope. Compiled probes and generated-code acceptance
 tests now pass without changing the external runtime API.
