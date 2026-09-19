@@ -53,6 +53,9 @@ cost-translate SOURCE.hs OUTPUT.hs
 ```
 
 Use an uppercase Haskell module basename for the output, such as `Generated.hs`.
+Example sources for trying the CLI live in [`examples/`](examples/); see
+[`examples/README.md`](examples/README.md) for per-file walkthroughs with
+verified values and costs.
 The tool writes `Generated.hs.log`, including source-located resolved function
 identities, syntactic arities, supplied argument counts, adapters and compiler
 diagnostics. Failed unsupported translations retain this log. A failed candidate
