@@ -37,8 +37,8 @@ the source module, so both must be on the include path:
 work=$(mktemp -d)
 cp examples/Basic.hs "$work/"
 cd "$work"
-stack --stack-yaml /path/to/hs-cost-monadic-translator/integration/stack.yaml exec -- \
-    cost-translate Basic.hs Generated.hs
+stack --stack-yaml /path/to/hs-cost-monadic-translator/integration/stack.yaml run cost-translate -- \
+    Basic.hs Generated.hs
 stack --stack-yaml /path/to/hs-cost-monadic-translator/integration/stack.yaml exec -- \
     ghc -v0 -fforce-recomp -package MemoristANT -package QuickCheck -i. Generated.hs
 ```

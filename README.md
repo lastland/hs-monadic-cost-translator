@@ -35,8 +35,8 @@ at `hs-pbt/` (ignored by Git) and QuickCheck 2.17.1.0:
 
 ```sh
 stack --stack-yaml integration/stack.yaml build
-stack --stack-yaml integration/stack.yaml exec -- \
-  cost-translate Example.hs Generated.hs
+stack --stack-yaml integration/stack.yaml run cost-translate -- \
+  Example.hs Generated.hs
 ```
 
 That integration configuration is a development/test environment, not a
