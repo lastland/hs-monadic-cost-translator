@@ -22,40 +22,38 @@ The compiler is pinned by Stack **LTS 24.22 / GHC 9.10.3**:
 
 ```sh
 stack build
+stack run cost-translate -- Example.hs Generated.hs
 ```
 
 The translator package does **not** depend on MemoristANT or bundle its source.
 Generated modules require an existing GHC environment exposing
 `MemoristANT` and `QuickCheck`. The CLI does not install either package or accept
 a custom runtime path. It invokes `ghc` from `PATH`; use the same pinned compiler
-as the translator.
+as the translator. The root Stack project registers the locally supplied
+external checkout at `hs-pbt/` (ignored by Git) and QuickCheck 2.17.1.0, so
+GHC's environment under `stack run` can typecheck generated candidates; the
+runtime checkout must exist locally for these commands.
 
-The separate integration project uses the locally supplied external checkout
-at `hs-pbt/` (ignored by Git) and QuickCheck 2.17.1.0:
+The separate integration project runs the acceptance test suites. It is a
+development/test environment, not a translator dependency, and assumes the
+external runtime already exists:
 
 ```sh
-stack --stack-yaml integration/stack.yaml build
-stack --stack-yaml integration/stack.yaml run cost-translate -- \
-  Example.hs Generated.hs
+stack --stack-yaml integration/stack.yaml test
 ```
 
-That integration configuration is a development/test environment, not a
-translator dependency. It assumes the external runtime already exists. Its
-`scanlM` must include the authorized demand-laziness correction recorded in
+Its `scanlM` must include the authorized demand-laziness correction recorded in
 [scanl-demand-fix.patch](.scratch/translator-poc/scanl-demand-fix.patch).
 The runtime regression tests verify both delayed input-spine forcing and delayed
 callback forcing.
 
 ## CLI and generated interface
 
-```text
-cost-translate SOURCE.hs OUTPUT.hs
+```sh
+stack run cost-translate -- SOURCE.hs OUTPUT.hs
 ```
 
-The synopsis shows the argument shape; the binary is not installed onto
-`PATH`. Run it through the `stack ... run cost-translate --` command shown
-above. Use an uppercase Haskell module basename for the output, such as
-`Generated.hs`.
+Use an uppercase Haskell module basename for the output, such as `Generated.hs`.
 Example sources for trying the CLI live in [`examples/`](examples/); see
 [`examples/README.md`](examples/README.md) for per-file walkthroughs with
 verified values and costs.
@@ -339,7 +337,7 @@ remains outside the strict-scalar primitive policy and is rejected explicitly.
 ## Tests
 
 ```sh
-# Translator build, without a runtime package dependency:
+# Translator build, including the registered local runtime checkout:
 stack build
 
 # All generated-code acceptance tests, handwritten feasibility probes,

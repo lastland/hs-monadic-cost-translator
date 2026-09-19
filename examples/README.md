@@ -19,28 +19,24 @@ running a handwritten driver against it.
 ## Setup
 
 Generated modules need a GHC environment exposing `MemoristANT` and
-`QuickCheck`. The integration Stack project provides it, including the
-locally supplied runtime checkout at `hs-pbt/` (see the root README for its
+`QuickCheck`. The root Stack project provides it by registering the locally
+supplied runtime checkout at `hs-pbt/` (see the root README for its
 prerequisites):
 
 ```sh
 stack build
-stack --stack-yaml integration/stack.yaml build
 ```
 
 ## Translating an example
 
-Translate and compile in a scratch directory. The generated module imports
-the source module, so both must be on the include path:
+Translate and compile from the repository root. The generated module imports
+the source module, so the examples directory stays on the include path:
 
 ```sh
 work=$(mktemp -d)
-cp examples/Basic.hs "$work/"
-cd "$work"
-stack --stack-yaml /path/to/hs-cost-monadic-translator/integration/stack.yaml run cost-translate -- \
-    Basic.hs Generated.hs
-stack --stack-yaml /path/to/hs-cost-monadic-translator/integration/stack.yaml exec -- \
-    ghc -v0 -fforce-recomp -package MemoristANT -package QuickCheck -i. Generated.hs
+stack run cost-translate -- examples/Basic.hs "$work/Generated.hs"
+stack exec -- ghc -v0 -fforce-recomp -package MemoristANT -package QuickCheck \
+    -iexamples "$work/Generated.hs"
 ```
 
 `cost-translate` writes `Generated.hs.log` next to the output. A failed
@@ -69,8 +65,9 @@ main = do
     print (MT.toInteger (infcost (fromPure1 doubleM (5 :: Int)) fullDemand))
 ```
 
-Compile it like the generated module (`-package MemoristANT -package
-QuickCheck -i.`) and run. If the source module has top-level value
+Compile a driver placed in `$work` with both `$work` and `examples` on the
+include path (`-package MemoristANT -package QuickCheck -i"$work"
+-iexamples`) and run it. If the source module has top-level value
 bindings, the output exports a `Bindings` record and every generated
 function takes it as its first argument; see `Shared.hs` below.
 
