@@ -52,7 +52,10 @@ callback forcing.
 cost-translate SOURCE.hs OUTPUT.hs
 ```
 
-Use an uppercase Haskell module basename for the output, such as `Generated.hs`.
+The synopsis shows the argument shape; the binary is not installed onto
+`PATH`. Run it through the `stack ... run cost-translate --` command shown
+above. Use an uppercase Haskell module basename for the output, such as
+`Generated.hs`.
 Example sources for trying the CLI live in [`examples/`](examples/); see
 [`examples/README.md`](examples/README.md) for per-file walkthroughs with
 verified values and costs.
