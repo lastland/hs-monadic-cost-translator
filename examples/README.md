@@ -240,4 +240,5 @@ function binding into a value binding), plain `data` for single-constructor
 types (`newtype` is outside the subset), and `if`/`then`/`else` instead of
 comprehensions. These files are therefore not part of the repository's
 `hlint` hygiene line. Generated modules use labeled common/module-specific
-sections and are checked separately with `-Wall -Werror` and `hlint`.
+sections, blank-line-separated declarations and grouped alphabetical imports;
+they are checked separately with `-Wall -Werror` and `hlint`.

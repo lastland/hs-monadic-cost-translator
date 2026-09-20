@@ -5,12 +5,17 @@ module Cost.Translate.Pretty
 
 import GHC.Driver.Session (DynFlags, xopt_set)
 import qualified GHC.LanguageExtensions.Type as Extension
-import GHC.Utils.Outputable (ppr, vcat)
+import GHC.Utils.Outputable (SDoc, ppr, text, vcat)
 import GHC.Driver.Ppr (showSDoc)
 import Cost.Translate.Diagnostic (Diagnostic(..))
 import Cost.Translate.Output (Decl)
-import GHC (HsModule(..), GhcPs, unLoc, moduleNameString)
+import GHC
+    ( HsModule(..), HsDecl(..), HsBindLR(..), Sig(..), StandaloneKindSig(..), GhcPs
+    , LImportDecl, ImportDecl(..), ImportDeclQualifiedStyle(..), RdrName, tcdName
+    , unLoc, moduleNameString
+    )
 import Data.Char (isUpper, isAlphaNum)
+import Data.List (intercalate, intersect, partition, sortOn)
 
 data Section = Section
     { sectionCommon :: Bool
@@ -19,21 +24,65 @@ data Section = Section
     }
 
 renderModule :: DynFlags -> HsModule GhcPs -> String
-renderModule flags ast = renderPreamble generatedExtensions ++ showSDoc renderedFlags (ppr ast) ++ "\n"
-  where renderedFlags = foldl xopt_set flags generatedExtensions
+renderModule flags ast = renderPreamble generatedExtensions ++ showSDoc renderedFlags body ++ "\n"
+  where
+    renderedFlags = foldl xopt_set flags generatedExtensions
+    body = renderBody ast [renderDeclarations declarations | not (null declarations)]
+    declarations = hsmodDecls ast
 
 renderSectionedModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> [Section] -> String
 renderSectionedModule flags extensions ast sections = renderPreamble extensions ++
-    showSDoc renderedFlags (ppr (ast { hsmodDecls = [] })) ++
-    concatMap (renderSection renderedFlags) sections ++ "\n"
+    showSDoc renderedFlags (renderBody ast [separated (map renderSection sections) | not (null sections)]) ++ "\n"
   where
     renderedFlags = foldl xopt_set flags generatedExtensions
-    renderSection sectionFlags (Section common name declarations) =
-        "\n-- ==== " ++ (if common then "Common: " else "Module-specific: ") ++ name ++ " ====\n\n" ++
-        showSDoc sectionFlags (vcat (map ppr declarations)) ++ "\n"
+    renderSection (Section common name declarations) = separated (text banner : declarationBlock)
+      where
+        banner = "-- ==== " ++ (if common then "Common: " else "Module-specific: ") ++ name ++ " ===="
+        declarationBlock = [renderDeclarations declarations | not (null declarations)]
+
+renderBody :: HsModule GhcPs -> [SDoc] -> SDoc
+renderBody ast declarations = separated (moduleLine : imports ++ declarations)
+  where
+    moduleLine = ppr (ast { hsmodImports = [], hsmodDecls = [] })
+    imports = renderImports (hsmodImports ast)
+
+renderImports :: [LImportDecl GhcPs] -> [SDoc]
+renderImports imports = map renderGroup (filter (not . null) [plain, qualified])
+  where
+    (plain, qualified) = partition ((== NotQualified) . ideclQualified . unLoc) imports
+    renderGroup = vcat . map ppr . sortOn importName
+    importName = moduleNameString . unLoc . ideclName . unLoc
+
+renderDeclarations :: [Decl] -> SDoc
+renderDeclarations = separated . map (vcat . map ppr) . declarationGroups
+
+separated :: [SDoc] -> SDoc
+separated = vcat . intercalate [text ""] . map (:[])
+
+declarationGroups :: [Decl] -> [[Decl]]
+declarationGroups = go []
+  where
+    go pending [] = map (:[]) pending
+    go pending (declaration:rest) = case signatureNames declaration of
+        [] -> let (matching, remaining) = partition (matches declaration) pending in
+            (matching ++ [declaration]) : go remaining rest
+        _ -> go (pending ++ [declaration]) rest
+    matches declaration signature = not (null (signatureNames signature `intersect` declarationNames declaration))
+
+signatureNames :: Decl -> [RdrName]
+signatureNames located = case unLoc located of
+    SigD _ (TypeSig _ names _) -> map unLoc names
+    KindSigD _ (StandaloneKindSig _ name _) -> [unLoc name]
+    _ -> []
+
+declarationNames :: Decl -> [RdrName]
+declarationNames located = case unLoc located of
+    ValD _ FunBind { fun_id = name } -> [unLoc name]
+    TyClD _ declaration -> [tcdName declaration]
+    _ -> []
 
 renderPreamble :: [Extension.Extension] -> String
-renderPreamble extensions = unlines (filter (not . null) [generatedPragma extensions, generatedOptions])
+renderPreamble extensions = intercalate "\n" (filter (not . null) [generatedPragma extensions, generatedOptions]) ++ "\n\n"
 
 -- The only output rendering pass. GHC syntax is already structural; there is
 -- no reparse of assembled source. ModuleName itself accepts arbitrary strings,
@@ -61,7 +110,7 @@ generatedExtensions =
 
 generatedPragma :: [Extension.Extension] -> String
 generatedPragma extensions = if null unique then "" else
-    "{-# LANGUAGE " ++ concatMap ((++ ", ") . show) unique ++ "NoMonoLocalBinds #-}"
+    "{-# LANGUAGE\n    " ++ intercalate ",\n    " (map show unique ++ ["NoMonoLocalBinds"]) ++ " #-}"
   where unique = foldr add [] extensions
         add extension seen = if extension `elem` seen then seen else extension : seen
 
@@ -79,7 +128,5 @@ requiredExtensions :: Bool -> [Extension.Extension]
 requiredExtensions magicHash = if magicHash then generatedExtensions else filter (/= Extension.MagicHash) generatedExtensions
 
 generatedOptions :: String
-generatedOptions = unlines
-    [ "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints."
-    , "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"
-    ]
+generatedOptions = "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints.\n" ++
+    "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"

@@ -4,7 +4,8 @@ import Cost.Translate (translateFile)
 import Control.Monad (unless, when)
 import Control.Exception (SomeException, displayException, try)
 import System.Directory (getTemporaryDirectory, doesFileExist, findExecutable)
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf, sort)
+import Data.Char (isSpace)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.IO.Temp (createTempDirectory)
@@ -294,6 +295,8 @@ checkGeneratedWarnings = do
       either fail pure minimalResult
       generated <- readFile (root </> "Generated.hs")
       minimal <- readFile (root </> "MinimalGenerated.hs")
+      checkGeneratedLayout "Generated.hs" generated
+      checkGeneratedLayout "MinimalGenerated.hs" minimal
       let banners = filter ("-- ==== " `isPrefixOf`) (lines generated)
           expectedBanners =
               [ "-- ==== Common: sharing and scalar support ===="
@@ -325,7 +328,60 @@ checkGeneratedWarnings = do
               (linted,lintOut,lintErr) <- readProcessWithExitCode command [root </> "Generated.hs", root </> "MinimalGenerated.hs"] ""
               writeFile (root </> "hlint.log") (lintOut ++ lintErr)
               unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
-      putStrLn "PASS: generated banners, minimal/datatype imports, -Wall -Werror, and optional HLint"
+      putStrLn "PASS: generated layout, banners, minimal/datatype imports, -Wall -Werror, and optional HLint"
+
+checkGeneratedLayout :: FilePath -> String -> IO ()
+checkGeneratedLayout name source = do
+    unless (hasOneFinalNewline source) $
+        fail (name ++ ": expected exactly one final newline")
+    when ("\n\n\n" `isInfixOf` source) $
+        fail (name ++ ": found a run of three newlines")
+    unless (all noTrailingWhitespace sourceLines) $
+        fail (name ++ ": found trailing whitespace")
+    moduleLine <- exactlyOne "module header" (positions ("module " `isPrefixOf`) sourceLines)
+    let plainImports = positions isPlainImport sourceLines
+        qualifiedImports = positions ("import qualified " `isPrefixOf`) sourceLines
+        declarations = positions isTopLevelDeclaration sourceLines
+    case (plainImports, qualifiedImports, reverse plainImports, reverse qualifiedImports) of
+        (firstPlain:_, firstQualified:_, lastPlain:_, lastQualified:_) -> do
+            unless (firstPlain == moduleLine + 2 && sourceLines !! (moduleLine + 1) == "") $
+                fail (name ++ ": expected one blank line after the module header")
+            unless (consecutive plainImports && consecutive qualifiedImports &&
+                    firstQualified == lastPlain + 2 && sourceLines !! (lastPlain + 1) == "") $
+                fail (name ++ ": expected plain and qualified import groups separated by one blank line")
+            unless (importLines plainImports == sort (importLines plainImports) &&
+                    importLines qualifiedImports == sort (importLines qualifiedImports)) $
+                fail (name ++ ": expected alphabetically sorted import groups")
+            unless (lastQualified + 1 < length sourceLines && sourceLines !! (lastQualified + 1) == "") $
+                fail (name ++ ": expected a blank line after imports")
+        _ -> fail (name ++ ": expected plain and qualified import groups")
+    when (null declarations) $
+        fail (name ++ ": expected at least one top-level declaration")
+    case [lineNumber | lineNumber <- declarations,
+                       lineNumber == 0 || sourceLines !! (lineNumber - 1) /= "",
+                       not (precededBySignature lineNumber)] of
+        [] -> pure ()
+        lineNumber:_ -> fail (name ++ ": expected one blank line before top-level declaration at line " ++ show (lineNumber + 1))
+  where
+    sourceLines = lines source
+    noTrailingWhitespace line = null line || not (isSpace (last line))
+    isPlainImport line = "import " `isPrefixOf` line && not ("import qualified " `isPrefixOf` line)
+    isTopLevelDeclaration line@(first:_) = not (isSpace first) &&
+        not (any (`isPrefixOf` line) ["{-#", "--", "module ", "import "])
+    isTopLevelDeclaration [] = False
+    positions predicate = map fst . filter (predicate . snd) . zip [0..]
+    importLines = map (sourceLines !!)
+    precededBySignature lineNumber = case
+        reverse (filter isTopLevelDeclaration (takeWhile (not . null) (reverse (take lineNumber sourceLines)))) of
+        [signature] -> "::" `isInfixOf` signature
+        _ -> False
+    consecutive indexes = and (zipWith (\a b -> b == a + 1) indexes (drop 1 indexes))
+    exactlyOne _ [lineNumber] = pure lineNumber
+    exactlyOne label found = fail (name ++ ": expected one " ++ label ++ ", found " ++ show (length found))
+    hasOneFinalNewline text = case reverse text of
+        '\n':previous:_ -> previous /= '\n'
+        ['\n'] -> True
+        _ -> False
 
 checkHigherKindedDemands :: IO ()
 checkHigherKindedDemands = do
