@@ -233,10 +233,11 @@ the same dictionary share.
 
 ## Conventions in these files
 
-The examples intentionally use shapes the translator accepts even where
+The source examples intentionally use shapes the translator accepts even where
 idiomatic Haskell would differ: eta-expanded named functions such as
 `mapped xs = map bump xs` (a point-free `mapped = map bump` would turn a
 function binding into a value binding), plain `data` for single-constructor
 types (`newtype` is outside the subset), and `if`/`then`/`else` instead of
 comprehensions. These files are therefore not part of the repository's
-`hlint` hygiene line.
+`hlint` hygiene line. Generated modules use labeled common/module-specific
+sections and are checked separately with `-Wall -Werror` and `hlint`.

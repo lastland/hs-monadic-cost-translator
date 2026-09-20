@@ -1,4 +1,4 @@
-module Cost.Translate.Datatypes (renderType, emitDatatypes, constructors, selectors, checkConversionExports) where
+module Cost.Translate.Datatypes (renderType, emitDatatypes, emitDatatypeSections, constructors, selectors, checkConversionExports) where
 
 import GHC
 import GHC.Types.Basic (Boxity(..))
@@ -110,9 +110,15 @@ constructorInfo locals con = do
 
 emitDatatypes :: [TyCon] -> Either String [O.Decl]
 emitDatatypes types = do
+    (common, support, declarations) <- emitDatatypeSections types
+    pure (common ++ support ++ declarations)
+
+emitDatatypeSections :: [TyCon] -> Either String ([O.Decl], [O.Decl], [O.Decl])
+emitDatatypeSections types = do
     support <- kindSupport types
+    selectorDecls <- selectorDefinitions types
     declarations <- concat <$> mapM located types
-    pure (support ++ charSupport ++ demandSupport ++ selectorDefinitions types ++ declarations)
+    pure (charSupport ++ demandSupport, support, selectorDecls ++ declarations)
   where
     located tc = either (Left . ((showSDocUnsafe (ppr (nameSrcSpan (getName tc))) ++ ": ") ++)) Right (emit tc)
     emit tc = do
@@ -152,9 +158,9 @@ emitDatatypes types = do
              O.sig (demandHelperName "shrink" (getName tc)) (signature (constraints "GeneratedK") (O.arrows [typ "T",demand] (O.listT demand))),
              O.val (demandHelperName "shrink" (getName tc)) [] (O.v "shrinkDemandCompatible"),
              inst (map (shape "QC.Arbitrary") vs) (O.tc "QC.Arbitrary" [typ "D"])
-                [O.val "arbitrary" [] (O.call "QC.sized" [O.lam [O.p "n"] (O.call "QC.oneof" [O.list (map emitArbitrary cs)])]), O.val "shrink" [O.p "_"] (O.list [])],
+                [O.val "arbitrary" [] (O.call "QC.sized" [O.lam [O.p "n"] (oneOf (map emitArbitrary cs))]), O.val "shrink" [O.p "_"] (O.list [])],
              inst demandArb (O.tc "M.DemandArb" [typ "T"])
-                [O.val "arbDemandFrom" [O.p "x"] (O.call "QC.sized" [O.lam [O.p "n"] (O.call "genDemandBudget" [O.v "n",O.v "x"])])],
+                [O.val "arbDemandFrom" [O.p "x"] (O.call "QC.sized" [O.sectionR "genDemandBudget" (O.v "x")])],
              inst reprDemand (O.tc "M.ReprDemand" [original]) [],
              inst reprDemandArb (O.tc "M.ReprDemandArb" [original]) []]
 
@@ -170,7 +176,10 @@ emitFull c = O.val "fullDemand" [patternFor (targetCon c) (fieldNames c)] $ with
     (O.call (demandCon c) [O.call "M.fullDemand" [O.v x] | x <- fieldNames c])
 emitUsage c = O.val "usage" [patternFor (targetCon c) (fieldNames c),patternFor (demandCon c) (map (++"d") (fieldNames c))] $ withWitnesses (demandWitnesses c)
     (foldr (O.op "M.union") (O.v "M.empty") [O.call "M.usage" [O.v x,O.v (x ++ "d")] | x <- fieldNames c])
-emitMinimum c = O.val "minDemand" [patternFor (targetCon c) (replicate (length (fieldNames c)) "_")] (O.call (demandCon c) (replicate (length (fieldNames c)) (O.v "M.Skip")))
+emitMinimum c = O.val "minDemand" [minimumPattern] (O.call (demandCon c) (replicate fieldCount (O.v "M.Skip")))
+  where
+    fieldCount = length (fieldNames c)
+    minimumPattern = if fieldCount == 0 then O.conP (targetCon c) [] else O.conRecordP (targetCon c)
 emitGen c = O.val "genDemandBudget" [O.p "n",patternFor (targetCon c) (fieldNames c)] $ withWitnesses (demandWitnesses c)
     (applicative (demandCon c) [O.call "genField" [budget c,O.v x] | x <- fieldNames c])
 emitShrink c = O.val "shrinkDemandCompatible" [patternFor (targetCon c) (fieldNames c),patternFor (demandCon c) (map (++"d") (fieldNames c))] $ withWitnesses (demandWitnesses c)
@@ -184,23 +193,51 @@ budget :: Constructor -> O.Expr
 budget c = O.op "div" (O.v "n") (O.integer (fromIntegral (max 1 (length (fieldNames c)))))
 
 applicative :: String -> [O.Expr] -> O.Expr
-applicative con = foldl (O.op "<*>") (O.ret (O.v con))
+applicative con [] = O.ret (O.v con)
+applicative con (field:fields) = foldl (O.op "<*>") (O.op "<$>" (O.v con) field) fields
 
 appendLists :: [O.Expr] -> O.Expr
 appendLists [] = O.list []
 appendLists xs = foldr1 (O.op "++") xs
 
-selectorDefinitions :: [TyCon] -> [O.Decl]
-selectorDefinitions types = [O.val generated [O.p "recordThunk"]
-    (O.doE [O.thenS (O.ann (O.v "M.tick") (O.tc "M.MemoristM" [O.t "()"])), O.bind "recordValue" (O.call "M.force" [O.v "recordThunk"])]
-        (O.caseE (O.v "recordValue")
-            ([(patternFor c ["field" ++ show i | i <- [0..count-1]], O.call "M.force" [O.v ("field" ++ show index)]) |
-                (_,c,count,fs) <- constructors types, (index,field) <- zip [0 :: Int ..] fs, field == name] ++
-             [(O.p "_",O.call "error" [O.string "source record selector failure"]) | not (total name)]))) |
-    (name,generated) <- nub (selectors types)]
+oneOf :: [O.Expr] -> O.Expr
+oneOf [choice] = choice
+oneOf choices = O.call "QC.oneof" [O.list choices]
+
+selectorDefinitions :: [TyCon] -> Either String [O.Decl]
+selectorDefinitions types = concat <$> mapM forType types
   where
-    total name = all (elem name . map flSelector . dataConFieldLabels)
-        [c | t <- types, any (elem name . map flSelector . dataConFieldLabels) (tyConDataCons t), c <- tyConDataCons t]
+    forType tc = do
+        quantified <- mapM (renderBinder types) (tyConTyVars tc)
+        let vs = map (O.t . getOccString) (visibleVariables tc)
+            recordType = O.tc (generatedName "T" (getName tc)) vs
+            fields = nub [(flSelector field, generatedName "M" (flSelector field)) |
+                con <- tyConDataCons tc, field <- dataConFieldLabels con]
+        concat <$> mapM (emitSelector quantified recordType tc) fields
+    emitSelector quantified recordType tc (name,generated) = do
+        fieldTy <- maybe (Left "missing record selector field type") Right (selectorType tc name)
+        rendered <- render "T" types fieldTy
+        let signature = O.forallT quantified (O.arrow (O.tc "M.Th" [recordType]) (O.tc "M.MemoristM" [rendered]))
+            cases = [(patternFor (generatedName "T" (getName con))
+                        [if i == index then fieldName else "_" | i <- [0..fieldCount-1]],
+                      O.call "M.force" [O.v fieldName]) |
+                     con <- tyConDataCons tc,
+                     let labels = map flSelector (dataConFieldLabels con),
+                     (index,field) <- zip [0 :: Int ..] labels, field == name,
+                     let fieldCount = length (dataConOrigArgTys con),
+                     let fieldName = "field" ++ show index]
+            fallback = [(O.p "_",O.call "error" [O.string "source record selector failure"]) | not (total tc name)]
+            body = O.doE
+                [O.thenS (O.ann (O.v "M.tick") (O.tc "M.MemoristM" [O.t "()"])),
+                 O.bind "recordValue" (O.call "M.force" [O.v "recordThunk"])]
+                (O.caseE (O.v "recordValue") (cases ++ fallback))
+        pure [O.sig generated signature, O.val generated [O.p "recordThunk"] body]
+    selectorType tc name = case
+        [scaledThing ty | con <- tyConDataCons tc,
+         (field,ty) <- zip (map flSelector (dataConFieldLabels con)) (dataConOrigArgTys con), field == name] of
+        ty:_ -> Just ty
+        [] -> Nothing
+    total tc name = all (elem name . map flSelector . dataConFieldLabels) (tyConDataCons tc)
 
 -- The external runtime has no Char conversions. The generated module carries
 -- the identity conversions locally rather than changing the runtime; Char
@@ -210,7 +247,7 @@ charSupport :: [O.Decl]
 charSupport =
     [ O.instanceD (O.tc "M.Repr" [O.t "Char"])
         [O.assoc "Rep" [O.t "Char"] (O.t "Char"),
-         O.val "reprM" [O.p "c"] (O.ret (O.v "c")),
+         O.val "reprM" [] (O.v "pure"),
          O.val "abstract" [O.p "c"] (O.v "c")]
     , O.instanceD (O.tc "M.Demand" [O.t "Char"])
         [O.assoc "Dem" [O.t "Char"] (O.t "Char"),
@@ -218,7 +255,7 @@ charSupport =
     , O.instanceD (O.tc "M.LBoundDemand" [O.t "Char"])
         [O.val "minDemand" [O.p "c"] (O.v "c")]
     , O.instanceD (O.tc "M.DemandArb" [O.t "Char"])
-        [O.val "arbDemandFrom" [O.p "c"] (O.ret (O.v "c"))]
+        [O.val "arbDemandFrom" [] (O.v "pure")]
     ]
 
 -- Local instances avoid replacing/orphaning the runtime's list-demand API.

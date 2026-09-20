@@ -63,7 +63,10 @@ tuple :: [Expr] -> Expr
 tuple xs = noLocA (ExplicitTuple noAnn (map (Present noExtField) xs) Boxed)
 
 op :: String -> Expr -> Expr -> Expr
-op name a z = noLocA (OpApp noAnn (parenthesizeHsExpr appPrec a) (v name) (parenthesizeHsExpr appPrec z))
+op name a z = noLocA (OpApp noAnn (parenthesizeHsExpr opPrec a) (v name) (parenthesizeHsExpr opPrec z))
+
+sectionR :: String -> Expr -> Expr
+sectionR name z = mkHsPar (noLocA (SectionR noExtField (v name) (parenthesizeHsExpr opPrec z)))
 
 lam :: [Pat] -> Expr -> Expr
 lam = mkHsLam
@@ -100,6 +103,9 @@ p name = noLocA (VarPat noExtField (noLocA (rdr varName name)))
 
 conP :: String -> [Pat] -> Pat
 conP name ps = noLocA (ConPat noAnn (noLocA (rdr dataName name)) (PrefixCon [] (map (parenthesizePat appPrec) ps)))
+
+conRecordP :: String -> Pat
+conRecordP name = noLocA (ConPat noAnn (noLocA (rdr dataName name)) (RecCon (HsRecFields [] Nothing)))
 
 t :: String -> Ty
 t "()" = tupleT []

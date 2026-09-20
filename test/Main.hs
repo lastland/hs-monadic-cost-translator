@@ -3,7 +3,7 @@ module Main (main) where
 import Cost.Translate (translateFile)
 import Control.Monad (unless, when)
 import Control.Exception (SomeException, displayException, try)
-import System.Directory (getTemporaryDirectory, doesFileExist)
+import System.Directory (getTemporaryDirectory, doesFileExist, findExecutable)
 import Data.List (isInfixOf, isPrefixOf)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
@@ -279,15 +279,53 @@ checkGeneratedWarnings = do
     when (null selected || "generated-warnings" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-warnings-"
-      writeFile (root </> "Example.hs") "module Example where\ndata One = One { only :: Int }\nidentity x = x\nunbox (One x) = x\n"
+      writeFile (root </> "Example.hs") $ unlines
+          [ "module Example where"
+          , "data Pair = Pair { first :: Int, second :: Int }"
+          , "unbox :: Pair -> Int"
+          , "unbox Pair { first = x, second = _ } = x"
+          , "captured :: Int -> Int"
+          , "captured x = let y = x+x; add z = y+z in add x+add x"
+          ]
       result <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
       either fail pure result
+      writeFile (root </> "Minimal.hs") "module Minimal where\nidentity :: Int -> Int\nidentity x = x\n"
+      minimalResult <- translateFile (root </> "Minimal.hs") (root </> "MinimalGenerated.hs")
+      either fail pure minimalResult
+      generated <- readFile (root </> "Generated.hs")
+      minimal <- readFile (root </> "MinimalGenerated.hs")
+      let banners = filter ("-- ==== " `isPrefixOf`) (lines generated)
+          expectedBanners =
+              [ "-- ==== Common: sharing and scalar support ===="
+              , "-- ==== Common: foldable support ===="
+              , "-- ==== Common: datatype conversion and demand support ===="
+              , "-- ==== Module-specific: source datatypes and conversions from Example ===="
+              , "-- ==== Module-specific: translated bindings from Example ===="
+              ]
+      unless (banners == expectedBanners) $
+          fail ("wrong generated section banners: " ++ show banners)
+      unless ("{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}" `isInfixOf` generated) $
+          fail "generated warning suppressions are missing"
+      when (any (`isInfixOf` minimal) ["Data.Kind", "Data.Proxy", "GHC.TypeLits", "qualified Minimal as Source"]) $
+          fail "minimal generated module has unnecessary imports"
       (compiled,out,err) <- readProcessWithExitCode "ghc"
-          ["-v0", "-fno-code", "-fforce-recomp", "-Werror=unused-local-binds", "-Werror=overlapping-patterns", "-Werror=simplifiable-class-constraints",
-           "-package", "MemoristANT", "-package", "QuickCheck", "-i" ++ root, root </> "Generated.hs"] ""
+          ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
+            "-package", "MemoristANT", "-package", "QuickCheck", "-i" ++ root, root </> "Generated.hs"] ""
       writeFile (root </> "warnings.log") (out ++ err)
-      unless (compiled == ExitSuccess) (fail err)
-      putStrLn "PASS: generated code has no unused fallbacks or redundant single-constructor cases"
+      unless (compiled == ExitSuccess) (fail (out ++ err))
+      (minimalCompiled,minimalOut,minimalErr) <- readProcessWithExitCode "ghc"
+          ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
+            "-package", "MemoristANT", "-package", "QuickCheck", "-i" ++ root, root </> "MinimalGenerated.hs"] ""
+      writeFile (root </> "minimal-warnings.log") (minimalOut ++ minimalErr)
+      unless (minimalCompiled == ExitSuccess) (fail (minimalOut ++ minimalErr))
+      hlint <- findExecutable "hlint"
+      case hlint of
+          Nothing -> putStrLn "SKIP: generated code HLint check (hlint unavailable)"
+          Just command -> do
+              (linted,lintOut,lintErr) <- readProcessWithExitCode command [root </> "Generated.hs", root </> "MinimalGenerated.hs"] ""
+              writeFile (root </> "hlint.log") (lintOut ++ lintErr)
+              unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
+      putStrLn "PASS: generated banners, minimal/datatype imports, -Wall -Werror, and optional HLint"
 
 checkHigherKindedDemands :: IO ()
 checkHigherKindedDemands = do

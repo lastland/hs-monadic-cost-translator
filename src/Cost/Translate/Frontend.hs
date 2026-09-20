@@ -14,9 +14,10 @@ import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
 import GHC.Core.TyCo.Rep (scaledThing)
-import Cost.Translate.Datatypes (renderType, emitDatatypes, constructors, selectors, checkConversionExports)
+import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
-import Cost.Translate.Pretty (prettyModule)
+import Cost.Translate.Pretty
+    (Section(..), prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport)
@@ -70,7 +71,8 @@ generate file targetModule = runGhc (Just libdir) $ do
                         expressionTypes = Map.fromList
                             [(location, (hasFreeVariables ty, rendered)) |
                              (location,ty) <- Map.toList hints, Right rendered <- [renderType datatypes ty]]
-                        (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary))) datatypes types literalTypes expressionTypes group
+                        (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
+                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes expressionTypes group
                         validation = do
                             when (any (`xopt` ms_hspp_opts summary) [Extension.Strict, Extension.StrictData, Extension.RebindableSyntax])
                                 (Left (file ++ ":1: Strict, StrictData and RebindableSyntax are unsupported"))
@@ -78,7 +80,8 @@ generate file targetModule = runGhc (Just libdir) $ do
                             mapM_ checkDeclaration (hsmodDecls (unLoc (parsedSource checked)))
                             checkConversionExports (modInfoExports (tm_checked_module_info checked)) datatypes
                             validateComparisons (mg_binds (coreModule desugared))
-                    in (first UnsupportedSource (validation >> result) >>= prettyModule flags, logs)
+                    in (first UnsupportedSource (validation >> result) >>= \(ast, sections, extensions) ->
+                        prettyModule flags extensions ast sections, logs)
                 Nothing -> (Left (UnsupportedSource (file ++ ": GHC did not retain renamed source")), "")
         _ -> pure (Left (UnsupportedSource (file ++ ": expected one source module")), "")
 
@@ -96,8 +99,8 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs), String)
-emitModule target source datatypes types literalTypes expressionTypes group =
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule target source magicHash datatypes types literalTypes expressionTypes group =
     let binds = case hs_valds group of
             XValBindsLR (NValBinds groups _) -> concatMap (bagToList . snd) groups
             ValBinds _ bs _ -> bagToList bs
@@ -110,7 +113,7 @@ emitModule target source datatypes types literalTypes expressionTypes group =
                  ++ " arity " ++ show (arity ms) | b@(L _ (FunBind _ n ms)) <- allBinds] ++
                 concatMap (logExpression logEnv) (expressions group))
         result = do
-            dataDecls <- emitDatatypes datatypes
+            (datatypeSupport, kindSupport, datatypeDeclarations) <- emitDatatypeSections datatypes
             fields <- mapM bindingField binds
             declarations <- if any (\case L _ (FunBind _ _ ms) -> arity ms == 0; _ -> False) binds
                 then do
@@ -123,18 +126,45 @@ emitModule target source datatypes types literalTypes expressionTypes group =
                     pure [O.recordD "Bindings" fields,
                           O.sig "initialize" (O.tc "M.MemoristM" [O.t "Bindings"]), O.val "initialize" [] initializer]
                 else concat <$> sequence [do code <- emitBind env binding; pure [O.sig name ty,code] | (binding,(name,ty)) <- zip binds fields]
-            let imports = [O.importD "Data.Kind" Nothing, O.importD "Data.Proxy" Nothing,
-                    O.hideImport "Prelude" (Set.toList (Set.fromList
-                        ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- binds] ++ map snd (selectors datatypes))))] ++
-                    [O.importD name (Just alias) | (name,alias) <-
-                        [("Memorist.Memorist","M"),("GHC.TypeLits","TypeLits"),("Type.Reflection","Reflection"),
-                         ("Data.List.NonEmpty","NE"),("Data.Char","Char"),(source,"Source"),("Test.QuickCheck","QC"),
-                         ("Memorist.Example.List","ML"),("Memorist.Example.ListInf","MI"),
-                         ("Memorist.Example.NewtonRaphson","MN"),("Memorist.Data.List","L")]]
-            pure (O.moduleD target imports
-                (sharingSupport (not (Set.null reflected)) ++ scalarSupport ++ foldableSupport ++ dataDecls ++ declarations))
+            let hasDatatypes = not (null datatypes)
+                hasReflection = not (Set.null reflected)
+                hasPolymorphicBindings = not (all (null . fst . splitForAllTyVars) (Map.elems types))
+                extensions = addMagicHash $ if hasDatatypes
+                    then requiredExtensions False
+                    else if hasReflection then reflectionExtensions
+                    else if hasPolymorphicBindings then polymorphicExtensions
+                    else basicExtensions
+                addMagicHash enabled = [Extension.MagicHash | magicHash] ++ enabled
+                common = [ Section True "sharing and scalar support" (sharingSupport hasReflection ++ scalarSupport)
+                         , Section True "foldable support" foldableSupport
+                         , Section True "datatype conversion and demand support" datatypeSupport
+                         ]
+                specific = [ Section False ("source datatypes and conversions from " ++ source) (kindSupport ++ datatypeDeclarations)
+                           , Section False ("translated bindings from " ++ source) declarations
+                           ]
+                sections = common ++ specific
+                usedQualifiers = Set.fromList
+                    [moduleNameString qualifier | Qual qualifier _ <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
+                usedUnqualified = Set.fromList
+                    [occNameString occurrence | Unqual occurrence <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
+                hidden = Set.toList (Set.filter isPreludeExport (Set.fromList
+                    ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- binds] ++ map snd (selectors datatypes))))
+                qualifiedImport name alias = [O.importD name (Just alias) | alias `Set.member` usedQualifiers]
+                imports = [if null hidden then O.importD "Prelude" Nothing else O.hideImport "Prelude" hidden] ++
+                    [O.importD "Data.Kind" Nothing | "Type" `Set.member` usedUnqualified] ++
+                    [O.importD "Data.Proxy" Nothing | "Proxy" `Set.member` usedUnqualified] ++
+                    concat [ qualifiedImport "Memorist.Memorist" "M", qualifiedImport "GHC.TypeLits" "TypeLits"
+                           , qualifiedImport "Type.Reflection" "Reflection", qualifiedImport "Data.List.NonEmpty" "NE"
+                           , qualifiedImport "Data.Char" "Char", qualifiedImport source "Source"
+                           , qualifiedImport "Test.QuickCheck" "QC", qualifiedImport "Memorist.Example.List" "ML"
+                           , qualifiedImport "Memorist.Example.ListInf" "MI"
+                           , qualifiedImport "Memorist.Example.NewtonRaphson" "MN"
+                           , qualifiedImport "Memorist.Data.List" "L" ]
+            pure (O.moduleD target imports [], sections, extensions)
     in (result, logs)
   where
+    isPreludeExport name = name `elem`
+        ["mapM", "mapM_", "sequence", "sequence_", "foldr", "foldl", "filter", "zipWith", "concatMap"]
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
                                   [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
                                   (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
@@ -374,7 +404,8 @@ matchPatterns env ((thunk, located) : rest) success failure = case unLoc located
                         (lookup (fieldName (unLoc (hfbLHS field))) (zip labels slots))
                     pure (slot, hfbRHS field)) (rec_flds fields)
                 body <- matchPatterns env (ordered ++ rest) success failure
-                pure (constructorCase con slots body)
+                let used = [slot | (slot, pat) <- ordered, not (wildcard pat)]
+                pure (constructorCase con [if slot `elem` used then slot else "_" | slot <- slots] body)
             _ -> Left "unsupported record pattern"
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": pattern not implemented yet")
   where
@@ -382,9 +413,13 @@ matchPatterns env ((thunk, located) : rest) success failure = case unLoc located
     literalCase value body = O.doE [O.bind "matched" (O.call "M.force" [O.v thunk])]
         (O.ifE (O.op "==" (O.v "matched") value) body failure)
     constructor con pats = do
-        let fields = fieldSlots (length pats)
+        let fields = zipWith (\field pat -> if wildcard pat then "_" else field) (fieldSlots (length pats)) pats
         body <- matchPatterns env (zip fields pats ++ rest) success failure
         pure (constructorCase con fields body)
+    wildcard pat = case unLoc pat of
+        WildPat _ -> True
+        ParPat _ nested -> wildcard nested
+        _ -> False
     fieldSlots count = [thunk ++ "f" ++ show i | i <- [0 :: Int .. count-1]]
     constructorCase con fields body = O.doE [O.bind "matched" (O.call "M.force" [O.v thunk])] $
         O.caseE (O.v "matched") ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
@@ -444,11 +479,14 @@ withTypedValBinds signatures env binds finish = case binds of
                     (maybe (Right Nothing) sharingPaths (Map.lookup (unLoc name) (inferredBindings scope)))
                 let reference = if isJust paths then O.call n [O.tuple []] else O.v n
                 continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
-                let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
-                    allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
-                    parameters = [O.conP "()" [] | isJust paths]
-                    declaration = O.val n parameters (O.app allocate [O.call "M.lazy" [action],O.v (n ++ "anchor")])
-                pure (O.doE [O.bind (n ++ "anchor") (O.call "M.lazy" [O.ret (O.tuple [])])] (O.letE (signature ++ [declaration]) continuation))
+                if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
+                    then do
+                        let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
+                            allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
+                            parameters = [O.conP "()" [] | isJust paths]
+                            declaration = O.val n parameters (O.app allocate [O.call "M.lazy" [action],O.v (n ++ "anchor")])
+                        pure (O.doE [O.bind (n ++ "anchor") (O.call "M.lazy" [O.ret (O.tuple [])])] (O.letE (signature ++ [declaration]) continuation))
+                    else pure continuation
         _ -> do
             let scope' = insertEnv (unLoc name) (Function (localName (unLoc name)) (arity matches)) scope
             declaration <- typedBind scope' binding
@@ -496,7 +534,7 @@ emitExpr env located = case unLoc located of
         Just (Constructor con count labels) -> do
             actions <- mapM (\label -> maybe (Right (O.ret (failureExpr "source missing record field"))) (emitExpr env) (lookup label [(fieldName (unLoc (hfbLHS (unLoc f))), hfbRHS (unLoc f)) | f <- rec_flds fields])) labels
             unless (length actions == count) (Left "record construction field layout mismatch")
-            pure (lazyArguments actions (returnConstructor con))
+            pure (lazyArguments argumentPrefix actions (returnConstructor con))
         _ -> unsupported
     HsRecSel _ field -> case resolve env (fieldName field) of
         Just (Function fn _) -> Right (O.ret (O.v fn))
@@ -506,7 +544,7 @@ emitExpr env located = case unLoc located of
         let n = freshThunk "caseThunk" env
         body <- emitMatches env [n] (unLoc (mg_alts matches))
         pure (O.doE [O.bind n (O.call "M.lazy" [action])] body)
-    ExplicitList _ elements -> list elements
+    ExplicitList _ elements -> list (0 :: Int) elements
     HsApp {} -> let (fun, args) = spine located in case unLoc fun of
         HsVar _ name | isComposition (unLoc name) -> callable
         HsVar _ name | builtin (unLoc name) "GHC.Internal.Err" "error",
@@ -516,7 +554,7 @@ emitExpr env located = case unLoc located of
             Just (Constructor con count _) | length args == count -> construct con args
             _ | Just (fn,count) <- functionResolver env (unLoc name), length args <= count -> do
                 actions <- mapM (emitExpr env) args
-                pure (lazyArguments actions (\names -> let invocation = O.app fn names in
+                pure (lazyArguments argumentPrefix actions (\names -> let invocation = O.app fn names in
                     if length args == count then invocation else O.ret invocation))
             _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported call " ++ getOccString (unLoc name) ++ " from " ++ maybe "local scope" (moduleNameString . moduleName) (nameModule_maybe (unLoc name)))
         _ -> callable
@@ -533,24 +571,25 @@ emitExpr env located = case unLoc located of
         Just (free,ty) | allowFree || not free -> O.ann code (O.tc "M.MemoristM" [ty])
         _ -> code
     callable = emitCallable (functionResolver env) (emitExpr env) located
+    argumentPrefix = actionName "argument" (getLocA located)
     apply fn args = do
         actions <- mapM (emitExpr env) args
-        pure (lazyArguments actions (O.app fn))
+        pure (lazyArguments argumentPrefix actions (O.app fn))
     construct con args = do
         actions <- mapM (emitExpr env) args
-        pure (lazyArguments actions (returnConstructor con))
+        pure (lazyArguments argumentPrefix actions (returnConstructor con))
     returnConstructor con names = O.ret (O.call con names)
-    list [] = Right (O.ret (O.v "L.NilT"))
-    list (x:xs) = do
+    list _ [] = Right (O.ret (O.v "L.NilT"))
+    list depth (x:xs) = do
         h <- emitExpr env x
-        t <- list xs
-        pure (lazyArguments [h,t] (returnConstructor "L.ConsT"))
+        t <- list (depth + 1) xs
+        pure (lazyArguments (argumentPrefix ++ "_list" ++ show depth) [h,t] (returnConstructor "L.ConsT"))
     unsupported = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported expression " ++ showSDocUnsafe (ppr located))
 
-lazyArguments :: [O.Expr] -> ([O.Expr] -> O.Expr) -> O.Expr
-lazyArguments actions finish = O.doE [O.bind name (O.call "M.lazy" [action]) | (name,action) <- zip names actions]
+lazyArguments :: String -> [O.Expr] -> ([O.Expr] -> O.Expr) -> O.Expr
+lazyArguments prefix actions finish = O.doE [O.bind name (O.call "M.lazy" [action]) | (name,action) <- zip names actions]
     (finish (map O.v names))
-  where names = ["argument" ++ show i | i <- [0 :: Int .. length actions - 1]]
+  where names = [prefix ++ "_" ++ show i | i <- [0 :: Int .. length actions - 1]]
 
 builtin :: Name -> String -> String -> Bool
 builtin name modName occurrence = getOccString name == occurrence &&
