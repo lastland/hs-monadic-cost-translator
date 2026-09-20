@@ -241,4 +241,6 @@ types (`newtype` is outside the subset), and `if`/`then`/`else` instead of
 comprehensions. These files are therefore not part of the repository's
 `hlint` hygiene line. Generated modules use labeled common/module-specific
 sections, blank-line-separated declarations and grouped alphabetical imports;
-they are checked separately with `-Wall -Werror` and `hlint`.
+source binders retain their names, with primes added only to avoid collisions,
+while generated temporaries use short positional names. The modules are checked
+separately with `-Wall -Werror` and `hlint`.

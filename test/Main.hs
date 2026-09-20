@@ -27,6 +27,30 @@ main = do
     runExample "captured-local-function"
         "double x = x + x\ncaptured x = let y = double x; add z = y + z in add x + add x\n"
         "capturedM" 30 4
+    runExample "readable-name-argument-collision"
+        "third _ _ z = z\nobserved arg0' = third 1 2 arg0'\n"
+        "observedM" 5 2
+    runExample "readable-name-global-collision"
+        "double x = x + x\nobserved x = let doubleM y = y + 1 in double (doubleM x)\n"
+        "observedM" 12 3
+    runExample "readable-name-field-collision"
+        "pick field0 ((x,_),_) = field0 + x\nobserved n = pick n ((3,0),0)\n"
+        "observedM" 8 2
+    runExample "readable-name-anchor-collision"
+        "observed xanchor = let x = xanchor + 1 in x\n"
+        "observedM" 6 1
+    runExample "readable-name-case-thunk-collision"
+        "observed x = let caseThunk0 y = y + 1 in case x of z -> caseThunk0 z\n"
+        "observedM" 6 2
+    runExample "readable-name-continuation-collisions"
+        "choose 0 = 0\nchoose nextEquation0 = nextEquation0\nobserved nextGuard0 | nextGuard0 > 0 = choose nextGuard0 | otherwise = 0\n"
+        "observedM" 5 2
+    runExample "readable-name-guard-thunk-collision"
+        "observed guardThunk0 | value <- guardThunk0 = value\n"
+        "observedM" 5 1
+    runExample "readable-parenthesized-parameter"
+        "observed (source) = source\n"
+        "observedM" 5 1
     checkWholeModuleFailure
     runExample "handwritten-filter-lazy-tail"
         "keep x = True\nfiltered x = head (filter keep (x : undefined))\n"
@@ -287,6 +311,16 @@ checkGeneratedWarnings = do
           , "unbox Pair { first = x, second = _ } = x"
           , "captured :: Int -> Int"
           , "captured x = let y = x+x; add z = y+z in add x+add x"
+          , "choose :: Int -> Int"
+          , "choose 0 = 0"
+          , "choose x = x"
+          , "composed :: Int -> Int"
+          , "composed partial = (captured . captured) partial"
+          , "singleton :: Int -> [Int]"
+          , "singleton x = [x]"
+          , "stringPattern :: Int -> String -> Int"
+          , "stringPattern field0 \"a\" = field0"
+          , "stringPattern field0 _ = field0"
           ]
       result <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
       either fail pure result
@@ -297,6 +331,10 @@ checkGeneratedWarnings = do
       minimal <- readFile (root </> "MinimalGenerated.hs")
       checkGeneratedLayout "Generated.hs" generated
       checkGeneratedLayout "MinimalGenerated.hs" minimal
+      unless (all (`isInfixOf` generated) ["capturedM x", "add z", "chooseM arg0", "nextEquation0", "partial' <-"]) $
+          fail "generated local names do not preserve readable source names"
+      when (any (`isInfixOf` generated) ["_arg", "argument_", "partial0", "arg0'"]) $
+          fail "generated output contains opaque local names"
       let banners = filter ("-- ==== " `isPrefixOf`) (lines generated)
           expectedBanners =
               [ "-- ==== Common: sharing and scalar support ===="

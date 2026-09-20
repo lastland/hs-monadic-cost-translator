@@ -51,8 +51,8 @@ callArity resolve expr = do
 -- Prepare captured arguments once, then specialize a composition when its
 -- first argument arrives. Flattening it into a lambda and only allocating the
 -- intermediate at saturation would charge g x twice in map ((f . g) x) ys.
-emitCallable :: Resolver -> (LHsExpr GhcRn -> Either String O.Expr) -> LHsExpr GhcRn -> Either String O.Expr
-emitCallable resolve render expr = do
+emitCallable :: (Int -> String) -> Resolver -> (LHsExpr GhcRn -> Either String O.Expr) -> LHsExpr GhcRn -> Either String O.Expr
+emitCallable freshName resolve render expr = do
     _ <- callArity resolve expr
     evalStateT (do (prefix,fun) <- prepare expr; result <- finish fun; pure (O.doE prefix result)) 0
   where
@@ -67,7 +67,7 @@ emitCallable resolve render expr = do
                 (pg,cg) <- prepare g
                 pure (pf ++ pg, Compose cf cg)
         actions <- lift (mapM render args)
-        names <- replicateM (length args) fresh
+        names <- replicateM (length args) (fresh freshName)
         (more,applied) <- specialize fun (map O.v names)
         pure (prefix ++ zipWith suspend names actions ++ more, applied)
     specialize (Call name n captured) args = pure ([], Call name (n-length args) (captured ++ args))
@@ -80,24 +80,24 @@ emitCallable resolve render expr = do
     specialize (Compose f g) (input:rest) = do
         (pg,cg) <- specialize g [input]
         gAction <- finish cg
-        middle <- fresh
+        middle <- fresh freshName
         (pf,cf) <- specialize f (O.v middle:rest)
         pure (suspend middle (O.doE pg gAction) : pf, cf)
     finish (Call name 0 args) = pure (O.app name args)
     finish (Call name _ args) = pure (O.ret (O.app name args))
     finish fun@(Compose f _) = do
-        args <- replicateM (arity f) fresh
+        args <- replicateM (arity f) (fresh freshName)
         (prefix,applied) <- specialize fun (map O.v args)
         body <- finish applied
         pure (O.ret (O.lam (map O.p args) (O.doE prefix body)))
     arity (Call _ n _) = n
     arity (Compose f _) = arity f
 
-fresh :: Build String
-fresh = do
+fresh :: (Int -> String) -> Build String
+fresh freshName = do
     n <- get
     put (n+1)
-    pure ("partial" ++ show n)
+    pure (freshName n)
 
 suspend :: String -> O.Expr -> O.Stmt
 suspend name action = O.bind name (O.call "M.lazy" [action])

@@ -9,7 +9,6 @@ import GHC.Paths (libdir)
 import GHC.Driver.Session (xopt)
 import qualified GHC.LanguageExtensions.Type as Extension
 import GHC.Types.Name (nameModule_maybe, getOccString)
-import GHC.Types.Unique (getUnique)
 import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
@@ -32,7 +31,8 @@ import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe, showSDocOneLine, defaultSDocContext, SDocContext(sdocSuppressUniques))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Data.List (isPrefixOf)
+import Data.List (elemIndex, isPrefixOf, nub)
+import Data.Char (isAlpha, isAlphaNum)
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (maybeToList, isJust)
 import GHC.Types.Name.Occurrence (occNameString)
@@ -101,11 +101,9 @@ checkDeclaration located = case unLoc located of
 
 emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
 emitModule target source magicHash datatypes types literalTypes expressionTypes group =
-    let binds = case hs_valds group of
-            XValBindsLR (NValBinds groups _) -> concatMap (bagToList . snd) groups
-            ValBinds _ bs _ -> bagToList bs
+    let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
-                         | L _ (FunBind _ n ms) <- binds] constructorEnv
+                          | L _ (FunBind _ n ms) <- binds] constructorEnv
         allBinds = collect group :: [LHsBind GhcRn]
         logEnv = extendEnv [(unLoc n, Function (getOccString (unLoc n)) (arity ms)) | L _ (FunBind _ n ms) <- allBinds] constructorEnv
         logs = unlines ("GHC parsed, renamed and typechecked source; lazy A-normalization before optimization" :
@@ -125,7 +123,9 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                         pure (O.ret (O.call "Bindings" values))
                     pure [O.recordD "Bindings" fields,
                           O.sig "initialize" (O.tc "M.MemoristM" [O.t "Bindings"]), O.val "initialize" [] initializer]
-                else concat <$> sequence [do code <- emitBind env binding; pure [O.sig name ty,code] | (binding,(name,ty)) <- zip binds fields]
+                else concat <$> sequence [do code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts binding }) binding
+                                             pure [O.sig name ty,code] |
+                                          (binding,(name,ty)) <- zip binds fields]
             let hasDatatypes = not (null datatypes)
                 hasReflection = not (Set.null reflected)
                 hasPolymorphicBindings = not (all (null . fst . splitForAllTyVars) (Map.elems types))
@@ -166,8 +166,15 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     isPreludeExport name = name `elem`
         ["mapM", "mapM_", "sequence", "sequence_", "foldr", "foldl", "filter", "zipWith", "concatMap"]
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
-                                  [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
-                                  (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
+                                   [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
+                                   (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
+                                   (planNames reservedNames constructorLayouts group)
+    constructorLayouts = Map.fromList [(n,fields') | (n,_,_,fields') <- constructors datatypes]
+    topLevelBinds = case hs_valds group of
+        XValBindsLR (NValBinds groups _) -> concatMap (bagToList . snd) groups
+        ValBinds _ bs _ -> bagToList bs
+    reservedNames = Set.fromList ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- topLevelBinds] ++
+        map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
@@ -265,6 +272,17 @@ data Env = Env
     , sourceDatatypes :: [TyCon]
     , reflectiveBindings :: Set.Set Name
     , singleConstructors :: Set.Set String
+    , namePlan :: NamePlan
+    }
+
+data NamePlan = NamePlan
+    { plannedLocals :: Map.Map Name String
+    , plannedParameters :: Map.Map (Name, Int) String
+    , plannedArguments :: Map.Map String [String]
+    , plannedActions :: Map.Map String String
+    , plannedFields :: Map.Map String String
+    , plannedMatches :: Map.Map String String
+    , plannedAnchors :: Map.Map Name String
     }
 
 lookupEnv :: Name -> Env -> Maybe Binding
@@ -279,27 +297,48 @@ extendEnv additions env = env { envBindings = Map.union (Map.fromList additions)
 fieldName :: FieldOcc GhcRn -> Name
 fieldName = foExt
 
-freshThunk :: String -> Env -> String
-freshThunk prefix env = choose (0 :: Int)
-  where
-    used = [occNameString (rdrNameOcc n) | Thunk e <- Map.elems (envBindings env), n <- collect e :: [RdrName]]
-    choose i = let n = prefix ++ show i in
-        if any (n `isPrefixOf`) used then choose (i+1) else n
-
 arity :: MatchGroup GhcRn (LHsExpr GhcRn) -> Int
 arity matches = case unLoc (mg_alts matches) of
     L _ m : _ -> length (m_pats m)
     [] -> 0
 
-localName :: Name -> String
-localName name = "v" ++ show (getUnique name) ++ "_"
+localName :: Env -> Name -> String
+localName env name = Map.findWithDefault "local" name (plannedLocals (namePlan env))
+
+parameterNames :: Env -> Name -> MatchGroup GhcRn (LHsExpr GhcRn) -> [String]
+parameterNames env name matches =
+    [maybe (planned i) (readableBinder env) (patternBinder pattern') |
+     (i,pattern') <- zip [0..] (firstPatterns matches)]
+  where planned i = Map.findWithDefault ("arg" ++ show i) (name,i) (plannedParameters (namePlan env))
+
+patternBinder :: LPat GhcRn -> Maybe Name
+patternBinder (L _ pattern') = case pattern' of
+    VarPat _ name -> Just (unLoc name)
+    AsPat _ name _ -> Just (unLoc name)
+    ParPat _ nested -> patternBinder nested
+    _ -> Nothing
+
+readableBinder :: Env -> Name -> String
+readableBinder env name = freshPrimed (occupiedNames env) base
+  where
+    occurrence = getOccString name
+    base = if simpleIdentifier occurrence then occurrence else "local"
+
+occupiedNames :: Env -> Set.Set String
+occupiedNames env = fixedReservedNames `Set.union` Set.fromList
+    ([occNameString (rdrNameOcc name) | Thunk expression <- Map.elems (envBindings env),
+                                      name <- collect expression :: [RdrName]] ++
+     [name | Function name _ <- Map.elems (envBindings env), simpleIdentifier name] ++
+     concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
+     Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan))
+  where plan = namePlan env
 
 emitBind :: Env -> LHsBind GhcRn -> Either String O.Decl
 emitBind outer binding = case unLoc binding of
     FunBind _ name matches -> do
         unless (arity matches > 0) $
             Left (showSDocUnsafe (ppr (getLocA binding)) ++ ": top-level shared value initialization not implemented yet")
-        let params = [localName (unLoc name) ++ "arg" ++ show i | i <- [0 .. arity matches - 1]]
+        let params = parameterNames outer (unLoc name) matches
         body <- emitMatches outer params (unLoc (mg_alts matches))
         fname <- case lookupEnv (unLoc name) outer of
             Just (Function n _) -> Right n
@@ -313,7 +352,7 @@ emitMatches :: Env -> [String] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either Strin
 emitMatches _ _ [] = Right (failureExpr "source pattern match failure")
 emitMatches env args (located@(L _ match) : rest) = do
     fallback <- emitMatches env args rest
-    let next = actionName "nextEquation" (getLocA located)
+    let next = actionName env "nextEquation" (getLocA located)
         failure = if null rest then fallback else O.v next
     current <- matchPatterns env (zip args (m_pats match))
         (\scope -> withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' ->
@@ -325,7 +364,7 @@ emitGuards _ [] fallback = Right fallback
 emitGuards env [L _ (GRHS _ [] body)] _ = emitExpr env body
 emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
     next <- emitGuards env rest fallback
-    let name = actionName "nextGuard" (getLocA located)
+    let name = actionName env "nextGuard" (getLocA located)
     current <- go env guards (O.v name)
     pure (shareAction name next current)
   where
@@ -335,9 +374,9 @@ emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
         condition <- emitExpr scope expr
         remaining <- go scope gs next
         pure (O.doE [O.bind "guardResult" condition] (O.ifE (O.v "guardResult") remaining next))
-    go scope (L _ (BindStmt _ pat expr) : gs) next = do
+    go scope (statement@(L _ (BindStmt _ pat expr)) : gs) next = do
         action <- emitExpr scope expr
-        let n = freshThunk "guardThunk" scope
+        let n = actionName scope "guardThunk" (getLocA statement)
         remaining <- matchPatterns scope [(n, pat)] (\scope' -> go scope' gs next) next
         pure (O.doE [O.bind n (O.call "M.lazy" [action])] remaining)
     go scope (L _ (LetStmt _ locals) : gs) next = withLocals scope locals (\scope' -> go scope' gs next)
@@ -354,18 +393,28 @@ failureExpr message = O.call "error" [O.string message]
 tick :: O.Expr
 tick = O.ann (O.v "M.tick") (O.tc "M.MemoristM" [O.t "()"])
 
-actionName :: String -> SrcSpan -> String
-actionName prefix (RealSrcSpan location _) = prefix ++ concatMap (("_" ++) . show)
+actionKey :: String -> SrcSpan -> String
+actionKey prefix (RealSrcSpan location _) = prefix ++ concatMap (("_" ++) . show)
     [srcSpanStartLine location, srcSpanStartCol location, srcSpanEndLine location, srcSpanEndCol location]
-actionName prefix _ = prefix ++ "_generated"
+actionKey prefix _ = prefix ++ "_generated"
+
+actionName :: Env -> String -> SrcSpan -> String
+actionName env prefix = plannedAction env . actionKey prefix
+
+plannedAction :: Env -> String -> String
+plannedAction env key = Map.findWithDefault key key (plannedActions (namePlan env))
 
 matchPatterns :: Env -> [(String, LPat GhcRn)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
-matchPatterns env [] success _ = success env
-matchPatterns env ((thunk, located) : rest) success failure = case unLoc located of
+matchPatterns env patterns = matchPatternsAt env
+    [(thunk,pattern',patternRoot pattern' index) | (index,(thunk,pattern')) <- zip [0 :: Int ..] patterns]
+
+matchPatternsAt :: Env -> [(String, LPat GhcRn, String)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
+matchPatternsAt env [] success _ = success env
+matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc located of
     VarPat _ name -> continue (insertEnv (unLoc name) (Thunk (O.v thunk)) env)
     WildPat _ -> continue env
-    ParPat _ pat -> matchPatterns env ((thunk, pat) : rest) success failure
-    AsPat _ name pat -> matchPatterns (insertEnv (unLoc name) (Thunk (O.v thunk)) env) ((thunk, pat) : rest) success failure
+    ParPat _ pat -> matchPatternsAt env ((thunk, pat, path) : rest) success failure
+    AsPat _ name pat -> matchPatternsAt (insertEnv (unLoc name) (Thunk (O.v thunk)) env) ((thunk, pat, path) : rest) success failure
     TuplePat _ [a,b] Boxed -> constructor "M.PairT" [a,b]
     ListPat _ [] -> constructor "L.NilT" []
     ListPat ext (p:ps) -> constructor "L.ConsT" [p, L (getLoc located) (ListPat ext ps)]
@@ -379,8 +428,8 @@ matchPatterns env ((thunk, located) : rest) success failure = case unLoc located
     -- proceeds cell by cell and stops at the first mismatch, exactly like the
     -- source comparison, instead of comparing thunk representations.
     LitPat _ (HsString _ text) ->
-        matchPatterns env ((thunk, noLocA (ListPat noExtField
-            (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text)))) : rest) success failure
+        matchPatternsAt env ((thunk, noLocA (ListPat noExtField
+            (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text))), path) : rest) success failure
     ConPat _ name details -> do
         con <- case () of
             _ | Just (Constructor c _ _) <- lookupEnv (unLoc name) env -> Right c
@@ -393,36 +442,53 @@ matchPatterns env ((thunk, located) : rest) success failure = case unLoc located
         case details of
             PrefixCon _ pats -> constructor con pats
             InfixCon a b -> constructor con [a,b]
-            RecCon fields | Just (Constructor _ count labels) <- lookupEnv (unLoc name) env -> do
-                let slots = fieldSlots count
+            RecCon fields | Just (Constructor _ _ labels) <- lookupEnv (unLoc name) env -> do
+                let slots = [fieldSlot env (fieldPath path i) pattern' | (i,pattern') <- zip [0..]
+                        [maybe (noLocA (WildPat noExtField)) (hfbRHS . unLoc) (lookup label
+                            [(fieldName (unLoc (hfbLHS (unLoc f))), f) | f <- rec_flds fields]) | label <- labels]]
                 -- Extract in representation order, but perform each supplied
                 -- subpattern in source order. Reordering these tests can force
                 -- a bottom in a field that a preceding mismatch would skip.
                 ordered <- mapM (\f -> do
                     let field = unLoc f
-                    slot <- maybe (Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unknown record pattern field")) Right
-                        (lookup (fieldName (unLoc (hfbLHS field))) (zip labels slots))
-                    pure (slot, hfbRHS field)) (rec_flds fields)
-                body <- matchPatterns env (ordered ++ rest) success failure
-                let used = [slot | (slot, pat) <- ordered, not (wildcard pat)]
+                    (slot,index) <- maybe (Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unknown record pattern field")) Right
+                        (lookup (fieldName (unLoc (hfbLHS field))) (zip labels (zip slots [0..])))
+                    pure (slot, hfbRHS field, fieldPath path index)) (rec_flds fields)
+                body <- matchPatternsAt env (ordered ++ rest) success failure
+                let used = [slot | (slot, pat, _) <- ordered, not (wildcard pat)]
                 pure (constructorCase con [if slot `elem` used then slot else "_" | slot <- slots] body)
             _ -> Left "unsupported record pattern"
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": pattern not implemented yet")
   where
-    continue scope = matchPatterns scope rest success failure
-    literalCase value body = O.doE [O.bind "matched" (O.call "M.force" [O.v thunk])]
-        (O.ifE (O.op "==" (O.v "matched") value) body failure)
+    continue scope = matchPatternsAt scope rest success failure
+    literalCase value body = O.doE [O.bind matchName (O.call "M.force" [O.v thunk])]
+        (O.ifE (O.op "==" (O.v matchName) value) body failure)
     constructor con pats = do
-        let fields = zipWith (\field pat -> if wildcard pat then "_" else field) (fieldSlots (length pats)) pats
-        body <- matchPatterns env (zip fields pats ++ rest) success failure
+        let paths = [fieldPath path i | i <- [0 .. length pats - 1]]
+            fields = zipWith (fieldSlot env) paths pats
+        body <- matchPatternsAt env (zip3 fields pats paths ++ rest) success failure
         pure (constructorCase con fields body)
     wildcard pat = case unLoc pat of
         WildPat _ -> True
         ParPat _ nested -> wildcard nested
         _ -> False
-    fieldSlots count = [thunk ++ "f" ++ show i | i <- [0 :: Int .. count-1]]
-    constructorCase con fields body = O.doE [O.bind "matched" (O.call "M.force" [O.v thunk])] $
-        O.caseE (O.v "matched") ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
+    constructorCase con fields body = O.doE [O.bind matchName (O.call "M.force" [O.v thunk])] $
+        O.caseE (O.v matchName) ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
+    matchName = Map.findWithDefault "matched" path (plannedMatches (namePlan env))
+
+patternRoot :: LPat GhcRn -> Int -> String
+patternRoot pattern' index = actionKey "pattern" (getLocA pattern') ++ "_" ++ show index
+
+fieldPath :: String -> Int -> String
+fieldPath path index = path ++ "_field" ++ show index
+
+fieldSlot :: Env -> String -> LPat GhcRn -> String
+fieldSlot env path pattern' = case unLoc pattern' of
+    VarPat _ name -> readableBinder env (unLoc name)
+    AsPat _ name _ -> readableBinder env (unLoc name)
+    ParPat _ nested -> fieldSlot env path nested
+    WildPat _ -> "_"
+    _ -> Map.findWithDefault path path (plannedFields (namePlan env))
 
 emitLocals :: Env -> HsLocalBinds GhcRn -> LHsExpr GhcRn -> Either String O.Expr
 emitLocals env locals body = withLocals env locals (`emitExpr` body)
@@ -456,7 +522,7 @@ withTypedValBinds signatures env binds finish = case binds of
     groupsGo scope [] = finish scope
     groupsGo scope ((recursive, bs):rest) = do
         let bindings = bagToList bs
-            functions = [(unLoc n, Function (localName (unLoc n)) (arity ms)) | L _ (FunBind _ n ms) <- bindings, arity ms > 0]
+            functions = [(unLoc n, Function (localName scope (unLoc n)) (arity ms)) | L _ (FunBind _ n ms) <- bindings, arity ms > 0]
         mapM_ (\b -> case unLoc b of { FunBind {} -> Right (); _ -> bindingError b }) bindings
         case recursive of
             Recursive -> do
@@ -474,7 +540,7 @@ withTypedValBinds signatures env binds finish = case binds of
                     Right n | n > 0 -> Left (showSDocUnsafe (ppr (getLocA rhs)) ++ ": function-valued alias has no validated calling convention")
                     _ -> Right ()) (grhssGRHSs (m_grhss match))
                 action <- withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' -> emitGuards scope' (grhssGRHSs (m_grhss match)) (failureExpr "source guard failure")
-                let n = localName (unLoc name)
+                let n = localName scope (unLoc name)
                 paths <- locatedAt (getLocA name)
                     (maybe (Right Nothing) sharingPaths (Map.lookup (unLoc name) (inferredBindings scope)))
                 let reference = if isJust paths then O.call n [O.tuple []] else O.v n
@@ -484,18 +550,19 @@ withTypedValBinds signatures env binds finish = case binds of
                         let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
                             allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
                             parameters = [O.conP "()" [] | isJust paths]
-                            declaration = O.val n parameters (O.app allocate [O.call "M.lazy" [action],O.v (n ++ "anchor")])
-                        pure (O.doE [O.bind (n ++ "anchor") (O.call "M.lazy" [O.ret (O.tuple [])])] (O.letE (signature ++ [declaration]) continuation))
+                            anchorName = Map.findWithDefault (n ++ "anchor") (unLoc name) (plannedAnchors (namePlan scope))
+                            declaration = O.val n parameters (O.app allocate [O.call "M.lazy" [action],O.v anchorName])
+                        pure (O.doE [O.bind anchorName (O.call "M.lazy" [O.ret (O.tuple [])])] (O.letE (signature ++ [declaration]) continuation))
                     else pure continuation
         _ -> do
-            let scope' = insertEnv (unLoc name) (Function (localName (unLoc name)) (arity matches)) scope
+            let scope' = insertEnv (unLoc name) (Function (localName scope (unLoc name)) (arity matches)) scope
             declaration <- typedBind scope' binding
             continuation <- go scope' rest done
             pure (O.letE declaration continuation)
     go _ (b:_) _ = bindingError b
     typedBind scope b@(L _ (FunBind _ name _)) = do
         declaration <- emitBind scope b
-        pure (maybeToList (O.sig (localName (unLoc name)) <$> Map.lookup (unLoc name) signatures) ++ [declaration])
+        pure (maybeToList (O.sig (localName scope (unLoc name)) <$> Map.lookup (unLoc name) signatures) ++ [declaration])
     typedBind _ b = bindingError b
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
@@ -534,14 +601,14 @@ emitExpr env located = case unLoc located of
         Just (Constructor con count labels) -> do
             actions <- mapM (\label -> maybe (Right (O.ret (failureExpr "source missing record field"))) (emitExpr env) (lookup label [(fieldName (unLoc (hfbLHS (unLoc f))), hfbRHS (unLoc f)) | f <- rec_flds fields])) labels
             unless (length actions == count) (Left "record construction field layout mismatch")
-            pure (lazyArguments argumentPrefix actions (returnConstructor con))
+            pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (returnConstructor con))
         _ -> unsupported
     HsRecSel _ field -> case resolve env (fieldName field) of
         Just (Function fn _) -> Right (O.ret (O.v fn))
         _ -> unsupported
     HsCase _ scrutinee matches -> do
         action <- emitExpr env scrutinee
-        let n = freshThunk "caseThunk" env
+        let n = actionName env "caseThunk" (getLocA located)
         body <- emitMatches env [n] (unLoc (mg_alts matches))
         pure (O.doE [O.bind n (O.call "M.lazy" [action])] body)
     ExplicitList _ elements -> list (0 :: Int) elements
@@ -554,7 +621,7 @@ emitExpr env located = case unLoc located of
             Just (Constructor con count _) | length args == count -> construct con args
             _ | Just (fn,count) <- functionResolver env (unLoc name), length args <= count -> do
                 actions <- mapM (emitExpr env) args
-                pure (lazyArguments argumentPrefix actions (\names -> let invocation = O.app fn names in
+                pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (\names -> let invocation = O.app fn names in
                     if length args == count then invocation else O.ret invocation))
             _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported call " ++ getOccString (unLoc name) ++ " from " ++ maybe "local scope" (moduleNameString . moduleName) (nameModule_maybe (unLoc name)))
         _ -> callable
@@ -570,26 +637,240 @@ emitExpr env located = case unLoc located of
     annotate allowFree code = case Map.lookup (showSDocUnsafe (ppr (getLocA located))) (inferredExpressions env) of
         Just (free,ty) | allowFree || not free -> O.ann code (O.tc "M.MemoristM" [ty])
         _ -> code
-    callable = emitCallable (functionResolver env) (emitExpr env) located
-    argumentPrefix = actionName "argument" (getLocA located)
+    callable = emitCallable (partialName env) (functionResolver env) (emitExpr env) located
+    argumentKey = actionKey "argument" (getLocA located)
     apply fn args = do
         actions <- mapM (emitExpr env) args
-        pure (lazyArguments argumentPrefix actions (O.app fn))
+        pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (O.app fn))
     construct con args = do
         actions <- mapM (emitExpr env) args
-        pure (lazyArguments argumentPrefix actions (returnConstructor con))
+        pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (returnConstructor con))
     returnConstructor con names = O.ret (O.call con names)
     list _ [] = Right (O.ret (O.v "L.NilT"))
     list depth (x:xs) = do
         h <- emitExpr env x
         t <- list (depth + 1) xs
-        pure (lazyArguments (argumentPrefix ++ "_list" ++ show depth) [h,t] (returnConstructor "L.ConsT"))
+        let key = argumentKey ++ "_list" ++ show depth
+        pure (lazyArguments (argumentNames env key 2) [h,t] (returnConstructor "L.ConsT"))
     unsupported = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported expression " ++ showSDocUnsafe (ppr located))
 
-lazyArguments :: String -> [O.Expr] -> ([O.Expr] -> O.Expr) -> O.Expr
-lazyArguments prefix actions finish = O.doE [O.bind name (O.call "M.lazy" [action]) | (name,action) <- zip names actions]
+lazyArguments :: [String] -> [O.Expr] -> ([O.Expr] -> O.Expr) -> O.Expr
+lazyArguments names actions finish = O.doE [O.bind name (O.call "M.lazy" [action]) | (name,action) <- zip names actions]
     (finish (map O.v names))
-  where names = [prefix ++ "_" ++ show i | i <- [0 :: Int .. length actions - 1]]
+
+argumentNames :: Env -> String -> Int -> [String]
+argumentNames env key count = Map.findWithDefault
+    [key ++ "_" ++ show i | i <- [0 .. count - 1]] key (plannedArguments (namePlan env))
+
+planNames :: Data a => Set.Set String -> Map.Map Name [Name] -> a -> NamePlan
+planNames globalNames constructorLayouts syntax = NamePlan locals parameters arguments actions fields matchNames anchors
+  where
+    binds = collect syntax :: [LHsBind GhcRn]
+    binders = nub ([unLoc name | L _ (FunBind _ name _) <- binds] ++
+        [unLoc name | L _ (VarPat _ name) <- collect syntax :: [LPat GhcRn]] ++
+        [unLoc name | L _ (AsPat _ name _) <- collect syntax :: [LPat GhcRn]])
+    reserved = globalNames `Set.union` fixedReservedNames
+    (locals, afterLocals) = assignBinders reserved binders
+    functionParameters = concatMap parametersFor binds
+    (parameters, afterParameters) = assignParameters locals afterLocals functionParameters
+    argumentSites = concatMap expressionSites (expressions syntax)
+    (arguments, afterArguments) = assignArguments afterParameters argumentSites
+    actionKeys = nub (
+        concat [map (actionKey "nextEquation" . getLocA) (withoutLast (unLoc (mg_alts groupMatches))) |
+                groupMatches <- collect syntax :: [MatchGroup GhcRn (LHsExpr GhcRn)]] ++
+        [actionKey "nextGuard" (getLocA guard) | guard@(L _ (GRHS _ guards _)) <- collect syntax :: [LGRHS GhcRn (LHsExpr GhcRn)],
+                                                     not (null guards)] ++
+        [actionKey "caseThunk" (getLocA expression) | expression <- expressions syntax, HsCase {} <- [unLoc expression]] ++
+        [actionKey "guardThunk" (getLocA statement) | statement@(L _ BindStmt {}) <- collect syntax :: [GuardLStmt GhcRn]])
+    (actions, afterActions) = assignActions afterArguments Map.empty Map.empty actionKeys
+    roots = concat [[(pattern',patternRoot pattern' index) | (index,pattern') <- zip [0..] (m_pats match)] |
+                    L _ match <- collect syntax :: [LMatch GhcRn (LHsExpr GhcRn)]] ++
+        [(pattern',patternRoot pattern' 0) | L _ (BindStmt _ pattern' _) <- collect syntax :: [GuardLStmt GhcRn]]
+    fieldKeys = nub (concatMap (uncurry plannedFieldKeys) roots)
+    (fields, afterFields) = assignFields afterActions fieldKeys
+    matchKeys = nub (concatMap (uncurry plannedMatchKeys) roots)
+    (matchNames, afterMatches) = assignPrimed afterFields "matched" matchKeys
+    (anchors, _) = assignAnchors locals afterMatches [unLoc name | L _ (FunBind _ name _) <- binds]
+
+    parametersFor (L _ (FunBind _ name functionMatches)) =
+        [((unLoc name,i), patternName pattern') |
+         (i,pattern') <- zip [0..] (firstPatterns functionMatches)]
+    parametersFor _ = []
+    patternName (L _ (VarPat _ name)) = Just (unLoc name)
+    patternName (L _ (AsPat _ name _)) = Just (unLoc name)
+    patternName (L _ (ParPat _ pattern')) = patternName pattern'
+    patternName _ = Nothing
+
+    expressionSites expression = case unLoc expression of
+        HsApp {} -> [(key, length (snd (spine expression)))]
+        OpApp {} -> [(key, 2)]
+        ExplicitTuple _ arguments' _ -> [(key, length arguments')]
+        RecordCon _ name fields' -> [(key, maybe (length (rec_flds fields')) length
+            (Map.lookup (unLoc name) constructorLayouts))]
+        ExplicitList _ elements -> [(key ++ "_list" ++ show depth, 2) | depth <- [0 .. length elements - 1]]
+        _ -> []
+      where key = actionKey "argument" (getLocA expression)
+
+    plannedFieldKeys pattern' path = case unLoc pattern' of
+        ParPat _ nested -> plannedFieldKeys nested path
+        AsPat _ _ nested -> plannedFieldKeys nested path
+        TuplePat _ patterns' Boxed -> children patterns'
+        ListPat _ patterns' -> listChildren path patterns'
+        LitPat _ (HsString _ text) -> plannedFieldKeys (noLocA (ListPat noExtField
+            (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text)))) path
+        ConPat _ name details -> case details of
+            PrefixCon _ patterns' -> children patterns'
+            InfixCon left right -> children [left,right]
+            RecCon recordFields -> concat
+                [child (fieldPath path index) (hfbRHS field) |
+                 locatedField <- rec_flds recordFields, let field = unLoc locatedField,
+                 Just labels <- [Map.lookup (unLoc name) constructorLayouts],
+                 Just index <- [elemIndex (fieldName (unLoc (hfbLHS field))) labels]]
+        _ -> []
+      where
+        children patterns' = concat [child (fieldPath path index) nested |
+                                     (index,nested) <- zip [0..] patterns']
+        child childPath nested = [childPath | needsField nested] ++ plannedFieldKeys nested childPath
+    listChildren _ [] = []
+    listChildren path (pattern':patterns') = child (fieldPath path 0) pattern' ++
+        [fieldPath path 1 | not (null patterns')] ++ listChildren (fieldPath path 1) patterns'
+      where child childPath nested = [childPath | needsField nested] ++ plannedFieldKeys nested childPath
+    needsField pattern' = case unLoc pattern' of
+        VarPat {} -> False
+        AsPat {} -> False
+        ParPat _ nested -> needsField nested
+        WildPat {} -> False
+        _ -> True
+    plannedMatchKeys pattern' path = case unLoc pattern' of
+        VarPat {} -> []
+        WildPat {} -> []
+        ParPat _ nested -> plannedMatchKeys nested path
+        AsPat _ _ nested -> plannedMatchKeys nested path
+        LitPat _ (HsString _ text) -> plannedMatchKeys (noLocA (ListPat noExtField
+            (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text)))) path
+        TuplePat _ patterns' Boxed -> path : matchChildren patterns'
+        ListPat _ patterns' -> path : listMatches path patterns'
+        ConPat _ constructor details -> path : case details of
+            PrefixCon _ patterns' -> matchChildren patterns'
+            InfixCon left right -> matchChildren [left,right]
+            RecCon fields' -> concat [plannedMatchKeys (hfbRHS field) (fieldPath path index) |
+                locatedField <- rec_flds fields', let field = unLoc locatedField,
+                Just labels <- [Map.lookup (unLoc constructor) constructorLayouts],
+                Just index <- [elemIndex (fieldName (unLoc (hfbLHS field))) labels]]
+        _ -> [path]
+      where matchChildren patterns' = concat [plannedMatchKeys nested (fieldPath path index) |
+                                              (index,nested) <- zip [0..] patterns']
+    listMatches _ [] = []
+    listMatches path (pattern':patterns') = plannedMatchKeys pattern' (fieldPath path 0) ++
+        [fieldPath path 1 | not (null patterns')] ++ listMatches (fieldPath path 1) patterns'
+    withoutLast [] = []
+    withoutLast [_] = []
+    withoutLast (item:items) = item : withoutLast items
+
+firstPatterns :: MatchGroup GhcRn (LHsExpr GhcRn) -> [LPat GhcRn]
+firstPatterns matches = case unLoc (mg_alts matches) of
+    L _ match : _ -> m_pats match
+    [] -> []
+
+assignBinders :: Set.Set String -> [Name] -> (Map.Map Name String, Set.Set String)
+assignBinders = go Map.empty
+  where
+    go assigned used [] = (assigned, used)
+    go assigned used (name:names) = go (Map.insert name fresh assigned) (Set.insert fresh used) names
+      where
+        occurrence = getOccString name
+        base = if simpleIdentifier occurrence then occurrence else "local"
+        fresh = freshPrimed used base
+
+assignParameters :: Map.Map Name String -> Set.Set String -> [((Name,Int), Maybe Name)] -> (Map.Map (Name,Int) String, Set.Set String)
+assignParameters locals = go Map.empty 0
+  where
+    go assigned _ used [] = (assigned, used)
+    go assigned next used ((key,source):rest) = case source >>= (`Map.lookup` locals) of
+        Just name -> go (Map.insert key name assigned) next used rest
+        Nothing -> let (name,next') = freshNumbered used "arg" next in
+            go (Map.insert key name assigned) next' (Set.insert name used) rest
+
+assignArguments :: Set.Set String -> [(String, Int)] -> (Map.Map String [String], Set.Set String)
+assignArguments = go Map.empty 0
+  where
+    go assigned _ used [] = (assigned, used)
+    go assigned next used ((key,count):sites) = go (Map.insert key names assigned) next' used' sites
+      where
+        (names,next',used') = allocate count next used
+        allocate 0 number occupied = ([],number,occupied)
+        allocate remaining number occupied = let
+            (name,following) = freshNumbered occupied "arg" number
+            (more,final,occupied') = allocate (remaining - 1) following (Set.insert name occupied)
+            in (name:more,final,occupied')
+
+assignActions :: Set.Set String -> Map.Map String String -> Map.Map String Int -> [String] -> (Map.Map String String, Set.Set String)
+assignActions used assigned _ [] = (assigned, used)
+assignActions used assigned counters (key:keys) = assignActions (Set.insert name used)
+    (Map.insert key name assigned) (Map.insert prefix next counters) keys
+  where
+    prefix
+        | "nextEquation" `isPrefixOf` key = "nextEquation"
+        | "nextGuard" `isPrefixOf` key = "nextGuard"
+        | "caseThunk" `isPrefixOf` key = "caseThunk"
+        | otherwise = "guardThunk"
+    (name,next) = freshNumbered used prefix (Map.findWithDefault 0 prefix counters)
+
+assignFields :: Set.Set String -> [String] -> (Map.Map String String, Set.Set String)
+assignFields = go Map.empty 0
+  where
+    go assigned _ used [] = (assigned, used)
+    go assigned next used (key:keys) = go (Map.insert key name assigned) next' (Set.insert name used) keys
+      where (name,next') = freshNumbered used "field" next
+
+assignPrimed :: Set.Set String -> String -> [String] -> (Map.Map String String, Set.Set String)
+assignPrimed = go Map.empty
+  where
+    go assigned used _ [] = (assigned, used)
+    go assigned used base (key:keys) = go (Map.insert key name assigned) (Set.insert name used) base keys
+      where name = freshPrimed used base
+
+assignAnchors :: Map.Map Name String -> Set.Set String -> [Name] -> (Map.Map Name String, Set.Set String)
+assignAnchors locals = go Map.empty
+  where
+    go assigned used [] = (assigned, used)
+    go assigned used (source:sources) = go (Map.insert source name assigned) (Set.insert name used) sources
+      where name = freshPrimed used (Map.findWithDefault "local" source locals ++ "anchor")
+
+freshNumbered :: Set.Set String -> String -> Int -> (String, Int)
+freshNumbered used prefix number = (freshPrimed used (prefix ++ show number), number + 1)
+
+freshPrimed :: Set.Set String -> String -> String
+freshPrimed used base = choose (0 :: Int)
+  where
+    choose count = let candidate = base ++ replicate count '\'' in
+        if candidate `Set.member` used then choose (count + 1) else candidate
+
+simpleIdentifier :: String -> Bool
+simpleIdentifier (initial:rest) = (isAlpha initial || initial == '_') &&
+    all (\character -> isAlphaNum character || character `elem` "_'") rest
+simpleIdentifier [] = False
+
+fixedReservedNames :: Set.Set String
+fixedReservedNames = Set.fromList
+    [ "M", "L", "Source", "ML", "MI", "MN", "Reflection", "TypeLits", "NE", "QC"
+    , "error", "negate", "pure", "Proxy", "sharedAt", "sharedAtBy", "foldrT", "foldlT", "concatMapT"
+    , "operand", "condition", "guardResult", "matched"
+    , "a", "b", "f", "ta", "tb", "tf", "tx"
+    ]
+
+partialName :: Env -> Int -> String
+partialName env target = choose target (0 :: Int)
+  where
+    used = Set.fromList (Map.elems (plannedLocals plan) ++ Map.elems (plannedParameters plan) ++
+        concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
+        Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan))
+    plan = namePlan env
+    choose remaining count
+        | candidate `Set.member` used = choose remaining (count + 1)
+        | remaining == 0 = candidate
+        | otherwise = choose (remaining - 1) (count + 1)
+      where candidate = "partial" ++ replicate count '\''
 
 builtin :: Name -> String -> String -> Bool
 builtin name modName occurrence = getOccString name == occurrence &&
