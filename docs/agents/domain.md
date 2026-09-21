@@ -2,12 +2,12 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-**This repo uses the multi-context layout** — `CONTEXT-MAP.md` at the repo root points at one `CONTEXT.md` per context.
+**This repo uses the single-context layout** — one `CONTEXT.md` at the repo root holds the whole glossary, organized by area (Pipeline, Datatypes, Sharing, Validation, Codegen).
 
 ## Before exploring, read these
 
-- **`CONTEXT-MAP.md`** at the repo root — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in. In this multi-context repo, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- **`CONTEXT.md`** at the repo root — the glossary of the project's ubiquitous language, grouped per area.
+- **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
@@ -15,18 +15,12 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ```
 /
-├── CONTEXT-MAP.md
-├── docs/adr/                          ← system-wide decisions
-└── src/
-    ├── ordering/
-    │   ├── CONTEXT.md
-    │   └── docs/adr/                  ← context-specific decisions
-    └── billing/
-        ├── CONTEXT.md
-        └── docs/adr/
+├── CONTEXT.md
+├── docs/
+│   ├── adr/                           ← architectural decisions
+│   └── agents/                        ← this file and its siblings
+└── src/Cost/Translate/                ← all translator source code
 ```
-
-(The contexts above are illustrative. Fill in the real ones in `CONTEXT-MAP.md`.)
 
 ## Use the glossary's vocabulary
 
