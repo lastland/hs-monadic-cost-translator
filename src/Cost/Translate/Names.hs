@@ -1,3 +1,11 @@
+-- | Injective source-to-generated naming. Identifier occurrences take the
+-- @M@ / @T@ / @D@ suffix forms; operator occurrences are spelled out with
+-- a decimal encoding instead, keeping the namespaces disjoint even when a
+-- source identifier resembles an encoding (see the inline notes).
+-- 'generatedName' reserves @FoldableRepresentation@ as the fixed spelling
+-- for the @Foldable@ special case, 'demandHelperName' names the
+-- per-datatype generator/shrinker helpers, and 'sourceConstructor'
+-- qualifies source names for the generated module's @Source@ import.
 module Cost.Translate.Names (generatedName, demandHelperName, sourceConstructor) where
 
 import GHC.Types.Name (Name, getOccString)

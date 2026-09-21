@@ -1,3 +1,15 @@
+-- | The scalar-comparison gate over desugared Core.
+--
+-- 'validateComparisons' walks the Core program and requires every
+-- instantiated @Eq@ / @Ord@ constraint to have strict scalar operands. The
+-- reason: the runtime's @Eq@ / @Ord@ instances on thunked structures
+-- compare thunk metadata, not source elements, so structured operands are
+-- rejected before any candidate is generated. Desugared types are used for
+-- this validation only; instrumentation always uses renamed syntax.
+--
+-- 'scalarSupport' emits the generated @Scalar@ class and its instances,
+-- keeping polymorphic exported primitives in the supported domain even
+-- when a handwritten client instantiates them outside the source module.
 module Cost.Translate.Validation (validateComparisons, scalarSupport) where
 
 import qualified GHC.Core as Core

@@ -1,3 +1,20 @@
+-- | The single rendering pass from assembled @GhcPs@ syntax to output
+-- text. GHC syntax is already structural, so nothing is reparsed (see the
+-- inline note on 'prettyModule'); 'Section' banners
+-- (@-- ==== Common: ... ====@ and @-- ==== Module-specific: ... ====@) and
+-- blank-line separation are inserted around rendered declarations. Imports
+-- are grouped plain then qualified and each group sorted by module name;
+-- declarations are grouped so signatures stay with their bindings.
+--
+-- The exported extension tiers escalate with the module's needs —
+-- 'basicExtensions', 'polymorphicExtensions', 'reflectionExtensions', and
+-- 'requiredExtensions' (which adds @MagicHash@ only when the source used
+-- it) — and 'generatedOptions' emits the fixed warning suppressions
+-- (@-Wno-orphans -Wno-simplifiable-class-constraints@).
+--
+-- 'prettyModule' validates the output module name and fails with
+-- @GeneratedModuleNameInvalid@, carrying the candidate text, instead of
+-- publishing unrenderable output.
 module Cost.Translate.Pretty
     ( Section(..), prettyModule, generatedPragma, renderModule
     , basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions

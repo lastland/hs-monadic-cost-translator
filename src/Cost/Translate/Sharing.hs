@@ -1,3 +1,19 @@
+-- | Shared-thunk allocation for top-level and local value bindings.
+--
+-- 'constrainedVariables' selects the generalized variables occurring in
+-- dictionary predicates: only those distinguish instantiations, so
+-- unrelated polymorphic parameters keep sharing one runtime name.
+-- 'sharingPaths' projects those variables' positions as promoted paths
+-- through the inferred result type, so @Typeable@ evidence is required
+-- only for the selected types.
+--
+-- 'sharingSupport' emits the allocation primitives. @sharedAt@ reuses a
+-- single reserved name. @sharedAtBy@ keys on a structural
+-- @Reflection.SomeTypeRep@ encoding qualified constructors, kind arguments
+-- and applications; negative delimiters reserve a disjoint subtree of
+-- runtime names and keep keys prefix-free even for nested shared values.
+-- The reflection machinery is emitted only when dictionary-constrained
+-- values exist.
 module Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport) where
 
 import GHC

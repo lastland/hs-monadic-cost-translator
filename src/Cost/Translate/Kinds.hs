@@ -1,3 +1,26 @@
+-- | Kind-indexed representation/demand mappings and their constraint
+-- liftings, emitted as the output's kind-support section.
+--
+-- @RepOf@ and @DemOf@ are closed type families indexed by kind. At kind
+-- @Type@ they reuse the runtime @Rep@ / @Dem@ families; at constructor
+-- kinds they map lists, Maybe, pairs and the module's own datatypes —
+-- including partial applications — to their generated counterparts, with a
+-- recursion equation for applications.
+--
+-- The lifting layer packages the runtime classes as the @ReprK@ /
+-- @DemandK@ constraint synonyms plus the @ReprApp@ / @DemandApp@ witness
+-- classes, which carry the mapping equalities. Explicit witnesses are
+-- needed for recursive and nested applications, where GHC cannot infer an
+-- application dictionary from an equality wanted alone.
+--
+-- @GeneratedReq@ / @GeneratedK@ / @GeneratedF@ lift the bounded structural
+-- generator interface across kinds; @ShapeReq@ / @ShapeK@ / @ShapeF@ do
+-- the same for Eq/Show/Arbitrary dictionaries over demand values;
+-- @withConstraint@ discharges a quantified constraint trivially.
+--
+-- Standalone kind signatures are essential throughout: each mapping's
+-- result kind depends on its explicit kind argument, so the definitions
+-- are polymorphically recursive (see the inline note on 'kindSupport').
 module Cost.Translate.Kinds
     ( visibleArguments, visibleVariables, renderKind, renderBinder, kindSupport
     ) where

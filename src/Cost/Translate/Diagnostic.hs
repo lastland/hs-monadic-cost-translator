@@ -1,3 +1,7 @@
+-- | Phase-preserving diagnostics at the frontend/publication boundary:
+-- 'UnsupportedSource' is decided before any output is published, while
+-- 'GeneratedModuleNameInvalid' arises after rendering and carries the
+-- candidate text. Internal helpers keep ordinary source-located strings.
 module Cost.Translate.Diagnostic (Diagnostic(..), renderDiagnostic) where
 
 -- Preserve phase information at the frontend/publication boundary. Internal

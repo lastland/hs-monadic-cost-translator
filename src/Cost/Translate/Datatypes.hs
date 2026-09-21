@@ -1,3 +1,27 @@
+-- | Per-source-datatype emission: representation, demand, and conversion
+-- support.
+--
+-- For each source datatype, this module emits a @T@ representation and a
+-- @D@ demand datatype with every field thunked (@M.Th@ / @M.ThD@); the
+-- @Rep@, @Demand@, @LBoundDemand@, @DemandArb@ and representation-demand
+-- marker instances; and the @reprM@ / @abstract@ / @fullDemand@
+-- conversions, which refer back to the source module.
+--
+-- Demand generation (@GeneratedDemand@) matches the observed constructor
+-- and distributes a finite budget over its fields — @Skip@ on exhaustion,
+-- default 1:3 Skip:Need weighting — with shrinkers that stay compatible
+-- with the observed demand.
+--
+-- Boundary rules: 'checkConversionExports' rejects non-exported source
+-- constructors and types /before/ any candidate is generated or
+-- typechecked, with the @generated conversions require the source module
+-- to export ...@ diagnostic. Generated record selectors charge one entry
+-- tick. Char is handled by local identity conversions because the runtime
+-- has no Char instances.
+--
+-- 'renderType' renders source types under a suffix scheme: @\"T\"@ for
+-- representation types, @\"D\"@ for demand types, and @\"\"@ for the
+-- original source type (used in conversion evidence).
 module Cost.Translate.Datatypes (renderType, emitDatatypes, emitDatatypeSections, constructors, selectors, checkConversionExports) where
 
 import GHC
@@ -113,6 +137,9 @@ emitDatatypes types = do
     (common, support, declarations) <- emitDatatypeSections types
     pure (common ++ support ++ declarations)
 
+-- Returns (common support shared by every generated module, kind-indexed
+-- support, module-specific declarations) for the caller to order into the
+-- output's labeled sections.
 emitDatatypeSections :: [TyCon] -> Either String ([O.Decl], [O.Decl], [O.Decl])
 emitDatatypeSections types = do
     support <- kindSupport types

@@ -1,4 +1,37 @@
 {-# LANGUAGE LambdaCase #-}
+-- | The core translation pass: one GHC session turns one source module into
+-- the text of one instrumented module.
+--
+-- Session shape: 'generate' configures @backend = noBackend@ and
+-- @ghcLink = NoLink@, so no optimizer or linker runs before
+-- instrumentation. The pipeline is parse, typecheck, desugar; translation
+-- works on the /renamed/ syntax. The desugared Core is read in exactly two
+-- places, and never emitted from: type evidence via
+-- "Cost.Translate.Typed" ('Typed.expressionTypes') and the scalar
+-- comparison gate via "Cost.Translate.Validation"
+-- ('validateComparisons').
+--
+-- Whole-module discipline: any unsupported construct fails the entire
+-- translation with a source-located message rather than being skipped;
+-- imports are whitelisted to @Prelude@ and
+-- @Memorist.Example.NewtonRaphson@; library replacements match by resolved
+-- imported identity, not name spelling.
+--
+-- Assembly: 'emitModule' builds the common sections (sharing and scalar
+-- support, foldable support, datatype conversion and demand support) and
+-- the module-specific sections (source datatypes and conversions,
+-- translated bindings). When top-level value bindings exist, the output
+-- exports a @Bindings@ record and @initialize :: MemoristM Bindings@
+-- instead of standalone exported bindings.
+--
+-- Invariants carried through emission:
+--
+-- * The 'NamePlan' pre-pass allocates every fresh generated identifier up
+--   front, so emission never invents a name and collisions cannot occur.
+-- * Each translated binding ticks once on entry.
+-- * Pattern and guard failure continuations are let-bound actions, not
+--   thunks ('shareAction'), so only the selected branch runs them and the
+--   binding adds neither allocation nor ticks.
 module Cost.Translate.Frontend (generate) where
 
 import GHC
@@ -176,6 +209,9 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     reservedNames = Set.fromList ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- topLevelBinds] ++
         map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
+    -- Bindings whose sharing is dictionary-sensitive: zero-arity bindings
+    -- with constrained inferred types, closed under use by other bindings.
+    -- These alone gain Typeable evidence and sharedAtBy allocation.
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
     closure known = let next = known `Set.union` Set.fromList

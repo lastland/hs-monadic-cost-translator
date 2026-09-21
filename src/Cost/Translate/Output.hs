@@ -1,5 +1,12 @@
--- | Small constructors for GHC's parsed output syntax. No source fragments or
--- parser calls live here: callers exchange GHC expressions, types and declarations.
+-- | The only module constructing @GhcPs@ syntax for the generated output.
+--
+-- Small structural builders; no source fragments or parser calls live
+-- here: callers exchange GHC expressions, types and declarations. Every
+-- name argument is a single identifier — 'v', 'p', 't', qualified with an
+-- optional uppercase module prefix split off by 'nameParts' — never a
+-- Haskell expression string. Application and operator construction handle
+-- precedence centrally via @parenthesizeHsExpr@ (and the corresponding
+-- type/pattern combinators), so callers pass unparenthesized pieces.
 module Cost.Translate.Output where
 
 import GHC hiding (Pat, Stmt)

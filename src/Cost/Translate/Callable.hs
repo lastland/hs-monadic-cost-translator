@@ -1,3 +1,16 @@
+-- | Application and composition translation.
+--
+-- 'spine' flattens an application into head and arguments, 'view'
+-- classifies the head as a named callable or a composition, and
+-- 'callArity' validates supplied argument counts against resolved calling
+-- conventions — rejecting function aliases and computed function results
+-- without a validated convention.
+--
+-- 'emitCallable' suspends captured arguments as thunks exactly once, and
+-- specializes a composition when its first argument arrives, so the right
+-- operand's application (for example @g x@) is computed once even when the
+-- result is reused as a callback (see the inline notes on 'emitCallable').
+-- Adapters built here add no ticks; invoked functions keep their own.
 module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine) where
 
 import GHC

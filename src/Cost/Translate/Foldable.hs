@@ -1,3 +1,11 @@
+-- | The fixed @FoldableT@ class emitted as common support for inferred
+-- @Foldable@ constraints over the translated representations. @foldrT@ and
+-- @foldlT@ consume callbacks over thunked containers; the generic
+-- @concatMapT@ default charges one entry tick and is built on direct
+-- @foldrT@ plus the runtime's @appendM@, so no container is ever converted
+-- to an artificial list. The list instance delegates unchanged to the
+-- runtime implementations; the Maybe and pair instances match constructors
+-- directly. See the inline note for tick placement.
 module Cost.Translate.Foldable (foldableSupport) where
 
 import qualified Cost.Translate.Output as O
