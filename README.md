@@ -1,58 +1,84 @@
-# Haskell cost-monadic translator
+# Haskell Cost-Monadic Translator
 
-A proof-of-concept CLI translator from one pure Haskell module into a separate readable Haskell
-module for the external Memorist runtime (the GHC package `MemoristANT`): explicit named thunks
-(`Th`), the cost monad (`MemoristM`), one tick per source-function invocation, and structural
-demand values for QuickCheck cost testing. The translator is built on the GHC API, does not
-depend on the runtime, and typechecks every generated candidate with an external `ghc` before
-publishing it.
+The cost-monadic translator translates a single pure Haskell module into an instrumented module targeting the Memorist cost-semantics runtime (`MemoristANT`). The translated module makes sharing and evaluation explicit: every ordinary datatype field and shared value becomes a named thunk (`Th`), execution runs inside the cost monad (`MemoristM`), and every source-function invocation charges one tick. The translator also generates representation types, demand types, conversion instances, and QuickCheck generators for property-based cost testing. The translator operates through the GHC API, maintains zero build-time dependencies on the external runtime, and verifies every generated candidate through an external GHC typechecking pass before publication.
 
-## Installation and use
+## Installation and Use Guide
 
-Prerequisites: Stack with the pinned resolver (**LTS 24.22 / GHC 9.10.3**, in `stack.yaml`),
-and a locally supplied checkout of the external runtime at `hs-pbt/` (git-ignored; the
-repository neither bundles nor downloads it). The root Stack project registers that checkout
-and QuickCheck 2.17.1.0 (pinned as an extra-dep) so GHC's environment under `stack run` can
-typecheck generated candidates; the checkout must exist locally for these commands.
+### Prerequisites
+
+The translator requires:
+
+- **Stack with pinned resolver**: Stack configured with **LTS 24.22** running **GHC 9.10.3** (specified in `stack.yaml`).
+- **External runtime checkout**: A local checkout of the `MemoristANT` runtime package placed at `hs-pbt/` in the repository root. This path is git-ignored; the repository neither bundles nor clones it automatically.
+- **QuickCheck dependency**: `QuickCheck-2.17.1.0`, pinned as an `extra-dep` in `stack.yaml` to match the external runtime's dependencies.
+
+The root `stack.yaml` registers both `.` and `hs-pbt/` as packages so that GHC environments invoked under `stack run` and `stack test` can locate `MemoristANT` and `QuickCheck`.
+
+### Compiling and Running the Translator
+
+Build the project with Stack:
 
 ```sh
 stack build
+```
+
+Translate a source module by supplying the source path and the desired output path:
+
+```sh
 stack run cost-translate -- SOURCE.hs OUTPUT.hs
 ```
 
-The output basename must be an uppercase Haskell module name, such as `Generated.hs`.
-Ready-to-try sources live in [`examples/`](examples/); [`examples/README.md`](examples/README.md)
-has per-file walkthroughs with verified values and costs.
+The command-line interface accepts exactly two arguments. The output filename must specify an uppercase Haskell module name (such as `Target.hs`, producing `module Target where`). If the filename is lowercase or malformed, the translator aborts with a diagnostic before generating code. Ready-to-try source files reside in [`examples/`](examples/), and [`examples/README.md`](examples/README.md) provides per-file walkthroughs with verified values and costs.
 
-The tool writes `OUTPUT.hs.log`: source-located resolved function identities, syntactic
-arities, supplied argument counts, adapters, and compiler diagnostics. A failed translation
-retains its log. A failed candidate never replaces the output file, so an older successful
-output can remain after a later failure — check the command's exit status and the log.
-Diagnostics distinguish source syntax/type errors, unsupported source, missing target-package
-setup, generated-code type errors, and an invalid output module name; the generated-code
-categories indicate a translator defect or unhandled implementation case, not a successful
-translation.
+The translator writes a companion log file, `OUTPUT.hs.log`, next to the output path. The log records source-located function identities, syntactic arities, supplied argument counts, adapter selections, and compiler diagnostics. If translation fails, the translator appends the failure reason to the log.
 
-### Using the generated code
+To prevent incomplete or invalid outputs, the translator compiles candidates in isolation. It writes candidate source text to a temporary directory (`.cost-translate-XXXXXX/`) and typechecks that file with an external GHC command:
 
-The output imports the source module (qualified as `Source`) for conversions, so both must
-remain compilable together. Compile with `ghc` — invoked from `PATH`, so use the same pinned
-compiler — exposing `MemoristANT` and `QuickCheck`. A handwritten driver checks the generated
-value against the source and measures the demanded cost:
-
-```haskell
-correct (fromPure1 sharedM (5 :: Int)) (20 :: Int)
-
-infcost (fromPure1 sharedM (5 :: Int)) fullDemand
--- Cost 2: one shared invocation, one double invocation
+```sh
+ghc -v0 -fno-code -fforce-recomp -i<sourceDir> -package MemoristANT -package QuickCheck candidate.hs
 ```
 
-Costs are source-level costs: a demanded failure is still a failure, and no cost is promised
-for it.
+If typechecking succeeds, the translator atomically renames the candidate to `OUTPUT.hs`. If typechecking fails, the translator appends GHC's error messages and the rejected candidate source text to `OUTPUT.hs.log` and exits with an error. The destination file `OUTPUT.hs` remains untouched, ensuring that a failed translation never clobbers a previously valid output. Always inspect the exit status and log file after running the tool.
 
-If the source has top-level value bindings, the output exports a `Bindings` record and
-`initialize :: MemoristM Bindings`. Initialize once per evaluation and reuse its fields across
-calls to keep top-level thunks shared:
+### Using the Generated Code
+
+The generated module imports the original source module qualified as `Source` (`import qualified <SourceModule> as Source`) to construct conversion instances between pure source types and monadic representation types. Downstream builds must therefore keep both modules accessible on GHC's search path.
+
+Compile client programs with `ghc` (using the pinned GHC 9.10.3 compiler), exposing `MemoristANT`, `QuickCheck`, and the directory containing the source module (`-i<sourceDir>`).
+
+Handwritten driver programs test generated functions against the pure source and verify demanded costs using the runtime's verification combinators:
+
+- `correct :: MemoristM (Rep a) -> a -> Bool`: verifies that the monadic computation yields a value structurally equivalent to the pure source result.
+- `infcost :: MemoristM a -> (a -> MemoristM (Dem a)) -> Cost`: evaluates the computation under a structural demand function and returns the total accrued ticks. Passing `fullDemand` forces the result completely.
+- `fromPure1`, `fromPure2`, etc.: adapt pure arguments into the monadic calling conventions expected by translated functions.
+
+The following driver verifies value correctness and measures exact tick costs for a generated function `doubleM`:
+
+```haskell
+module Main where
+
+import Generated
+import qualified Double as Source
+import Memorist.Memorist hiding (toInteger)
+import qualified Memorist.Base.Thunk as MT
+
+main :: IO ()
+main = do
+    -- Verify value correctness against pure source
+    print (correct (fromPure1 doubleM (5 :: Int)) (10 :: Int))
+
+    -- Measure exact ticks under full demand
+    let cost = infcost (fromPure1 doubleM (5 :: Int)) fullDemand
+    print (MT.toInteger cost)
+```
+
+If the source module defines zero-arity top-level value bindings (such as `seed = double 5`), the generated module cannot export them as pure constants because thunk allocation requires monadic effects. Instead, the translator emits a `Bindings` record containing all initialized thunks and functions, alongside an initialization action:
+
+```haskell
+initialize :: MemoristM Bindings
+```
+
+A client driver executes `initialize` once and reuses the resulting record fields across subsequent calls to preserve sharing across distinct computations:
 
 ```haskell
 do bindings <- initialize
@@ -61,254 +87,198 @@ do bindings <- initialize
    pure (a + b)
 ```
 
-### Running the tests
+Reusing the record preserves top-level thunk identity, ensuring that shared thunks evaluate at most once across separate function calls.
 
-The integration project is a development/test environment, not a translator dependency, and
-assumes the external runtime already exists:
+### Running the Test Suite
+
+The repository contains two test suites:
+
+- **Root test suite**: Run `stack test` to execute `cost-translate-test` (`test/Main.hs`). This suite tests whole-module translation across the supported language subset, validates CLI failure modes, checks arity logging, and verifies that generated modules typecheck and evaluate to expected values and costs.
+  
+  To run specific test cases, pass test names through `--test-arguments`:
+
+  ```sh
+  stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
+  stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
+  ```
+
+- **Integration test suite**: Run `stack --stack-yaml integration/stack.yaml test` to execute the dedicated integration project (`integration/cost-translate-integration.cabal`). This project tests generated modules and handwritten probes directly against `MemoristANT` and QuickCheck:
+  - `cost-translate-integration`: runs Tasty, HUnit, and QuickCheck test suites (P1–P7) verifying exact tick formulas, value equivalence, and composition chains.
+  - `runtime-scanl`: verifies the demand-laziness regression fix for `scanlM` (delaying input-spine and callback forcing).
+  - `runtime-polymorphic-sharing`: verifies that unconstrained polymorphic thunks share a single runtime name across distinct type instantiations.
+  - `runtime-higher-kinded`: verifies higher-kinded datatype conversions, demand generation, and compatible shrinks.
+
+To check code style and lint rules across both projects, run:
 
 ```sh
-stack --stack-yaml integration/stack.yaml test
-
-# Focused cases:
-stack --stack-yaml integration/stack.yaml test cost-translate --test-arguments=scanl-unused-input
-stack --stack-yaml integration/stack.yaml test cost-translate --test-arguments='diagnostics explicit-constructor-exports'
-
 hlint src app test integration/probes integration/test-integration
 ```
 
-The runtime's `scanlM` must include the demand-laziness correction (delayed input-spine forcing
-and delayed callback forcing); the runtime regression suites verify it. Tests deliberately
-retain temporary fixtures and logs for diagnosis.
-
 ## Features
 
-### Pipeline
+### Pipeline and Compilation Model
 
-GHC parses the source, resolves names, and infers types; translation instruments the renamed
-syntax before optimization. Every emitter constructs GHC `GhcPs` syntax through
-`Cost.Translate.Output`, and `Pretty` renders the completed module once — there is no reparse
-of assembled source.
+The translation pipeline converts a pure Haskell source module into a verified, instrumented module through distinct stages:
 
-### Cost policy
+1. **GHC API session**: `Cost.Translate.Frontend.generate` configures an in-process GHC session with `backend = noBackend` and `ghcLink = NoLink`. GHC parses, renames, and typechecks the source module without running the optimizer, simplifier, or linker. This preserves the original source structure and prevents optimizations from shifting tick boundaries.
+2. **Renamed syntax instrumentation**: The translator inspects and transforms the renamed syntax tree (`HsGroup GhcRn`). In this tree, GHC has resolved all unqualified names, constructor references, and variable bindings to unambiguous global or local identities (`Name`), while preserving the original pattern matching, guards, and call sites.
+3. **Targeted desugaring for type evidence**: The translator never emits code from GHC's desugared Core. However, emitting accurate signatures and typeclass dictionaries requires exact types at variable occurrences. `Cost.Translate.Typed.expressionTypes` runs a targeted desugaring pass (`initDs` and `dsLExpr`) solely on selected `HsVar` and `ExprWithTySig` nodes from `tm_typechecked_source`. It reads `Core.Utils.exprType` to obtain the precise instantiated type of each expression, recovering dictionary evidence without re-implementing GHC's type inference rules.
+4. **Candidate generation and NamePlan**: Before constructing syntax trees, a pre-pass computes a `NamePlan`. The plan pre-allocates collision-free variable names for parameters, continuation actions, and thunk anchors across all bindings. Emitters in `Cost.Translate.Output` construct abstract syntax trees directly as `GhcPs` nodes. Combinators automatically manage operator precedence and parenthesization (`parenthesizeHsExpr`), eliminating string concatenation and reparsing.
+5. **External typechecking gate**: `Cost.Translate.Pretty.prettyModule` formats the completed `HsModule GhcPs` into target text in a single pretty-printing pass. `Cost.Translate.translateFile` writes this text to a temporary candidate file and invokes an external `ghc` process with `-fno-code -package MemoristANT -package QuickCheck`. Only when the external compiler confirms that the candidate typechecks does the translator rename the file to the final destination path.
 
-Each translated source function invocation costs one tick, including trivial wrappers and local
-helpers. Generated record selectors also charge one tick. Value bindings and constructor
-construction do not tick. Scalar primitives retain the costs of their operands without adding
-entry ticks. Composition and partial application do not tick, but invoked functions do.
+### Cost Policy
 
-Handwritten runtime replacements keep their own instrumentation. `concatMapM` delegates to
-instrumented `foldrM` and `appendM`; it is not a single-tick primitive. `repeatlyM` has no
-entry tick, so its producer cells do not add ticks; demanded callbacks retain their own ticks.
-The corrected `scanlM` ticks once per demanded scan invocation, including the seed cell. Each
-direct Maybe/pair fold method charges one entry tick, then retains the callback's ticks when
-invoked; a Nothing fold therefore costs its entry tick without forcing the callback. The
-generic `concatMapT` method charges one entry tick and uses direct `foldrT` plus the
-handwritten `appendM`.
+The translator enforces a precise cost model aligned with the source-level semantics of the Memorist paper:
 
-### Language subset
+- **1 tick per source function call**: Every translated function executes `M.tick` immediately upon entry. This rule applies uniformly to top-level functions, local helper functions, and trivial wrappers.
+- **0 ticks for constructor allocation**: Constructing data values (such as `Just x`, `x : xs`, or `Tree l r`) allocates value cells in `MemoristM` without emitting ticks.
+- **0 ticks for scalar primitives**: Primitive arithmetic operators (`+`, `-`, `*`, `div`), relational operators (`==`, `/=`, `<`, `<=`, `>`, `>=`), and short-circuit booleans (`&&`, `||`) add no entry ticks. If their operands evaluate computations, those operands contribute ticks when forced.
+- **0 ticks for composition and partial-application adapters**: Composing functions with `(.)` or partially applying arguments creates unticked functional adapters. Only the underlying functions charge ticks when called.
+- **0 ticks for conversion methods**: Datatype conversions (`reprM`, `abstract`, and `fullDemand`) convert between source values and thunked representations without charging ticks.
+- **1 tick for generated record selectors**: Generated record field selectors act as single-argument accessor functions and charge one entry tick.
+- **1 tick for direct container folds**: Direct `FoldableT` methods (`foldrT`, `foldlT` on `MaybeT` and `PairT`, and `concatMapT`) charge one entry tick, retaining any ticks accrued by the supplied callback.
 
-The end-to-end tests exercise:
+### Supported Language Subset
 
-- Inferred polymorphic function signatures and shared polymorphic values.
-- Named recursive functions, mutually recursive local helpers, captured values, non-recursive
-  `let`/`where` values, and top-level shared initialization.
-- Ordered equations, constructor/list/literal/as/wildcard/variable patterns, `case`, Boolean
-  guards, pattern guards and `let` guards. Literal patterns include numbers, characters and
-  strings; a string literal pattern decomposes into its character sequence on the
-  representation, forcing cell by cell and stopping at the first mismatch like the source
-  comparison.
-- Record fields are extracted by their declaration positions, but supplied record subpatterns
-  are tested in source order. A mismatch can therefore skip a later failing field even when
-  that field was declared earlier.
-- Arithmetic and comparisons on scalar values, and short-circuit `&&`/`||`. `Char` is a
-  scalar primitive throughout: fields, conversion, demands and `Eq`/`Ord` comparisons. The
-  external runtime has no Char instances, so each generated module carries local identity
-  conversions (`Rep Char = Char` and the demand counterparts) instead of changing the
-  runtime.
-- Suspended `undefined`, literal-message `error`, and demanded match failures.
-- Named function arguments, captured local callbacks, composition, and direct partial
-  application at multiple argument counts, including four-argument functions. Adapters do not
-  add ticks.
-- Prefix `(.)`, applied compositions and partial applications of compositions. Captured
-  operands and intermediate thunks are shared across repeated uses of the resulting callback,
-  including nested compositions. The right operand may have any positive arity: `(map . add)
-  x` supplies the partially applied `add x` as the mapped callback, with `add` ticking once
-  per demanded element and no tick for the partial application itself.
-- Lazy algebraic datatype representations, records, selectors, infix constructors, lists,
-  pairs and `Maybe`. Every ordinary field is thunked, including scalar fields.
-- Nested recursive parameters such as `Nested [a]` and `Nested (a,a)`; there is no blanket
-  regular-recursion restriction.
-- Higher-kinded fields (`Higher f a`), recursive constructor parameters (`Fix f`), and
-  inferred kind polymorphism.
+The translator supports a rich subset of pure Haskell:
 
-### Library replacements
+- **Data declarations**: Algebraic datatypes with multiple constructors, nullary constructors, parameterized types, recursive datatypes, and nested recursion (such as `data Nested a = End a | More (Nested (a, a))`). It also supports higher-kinded parameters (e.g., `data Higher f a = Higher (f a)`), recursive constructor parameters (`data Fix f = In (f (Fix f))`), infix constructors (e.g., `a :*: b`), and record declarations with named fields.
+- **Pattern matching**: Ordered equations, variable patterns, wildcard patterns (`_`), constructor patterns, list patterns (`[]`, `:`), tuple patterns, and as-patterns (`x@pat`). Literal patterns include integers, floating-point numbers, characters (`'a'`), and strings (`"abc"`). String literal patterns expand into character-by-character matches over the thunked list representation, stopping at the first mismatch. Record patterns extract fields by declaration position while matching supplied subpatterns in declaration order.
+- **Guards**: Boolean guards, pattern guards (`pat <- expr`), `let` guards (`let x = expr`), and comma-separated conjunctive guards. Branch and equation failure continuations are let-bound monadic actions (`shareAction`) that execute only when a pattern or guard fails, ensuring that skipped branches add neither thunk allocations nor ticks.
+- **Local bindings and control flow**: `let` and `where` expressions, named local functions, mutually recursive local functions, captured lexical variables, and non-recursive value bindings. Supported control flow includes `if-then-else`, `case-of`, suspended `undefined`, literal-message `error`, scalar arithmetic, and comparisons over strict scalars.
 
-| Source operation | External implementation |
-| --- | --- |
-| `map` | `Memorist.Example.List.mapMM` |
-| `foldr`, `foldl` | Direct `FoldableT.foldrT` / `foldlT`; list instances delegate to `foldrM` / `foldlM` |
-| `concatMap` | `FoldableT.concatMapT`; list instance delegates to `concatMapM` |
-| `filter` | `filterM` |
-| `zipWith` | `zipWithM` |
-| `scanl` | `Memorist.Example.ListInf.scanlM` |
-| `head`, `tail` | `headM`, `tailM` |
-| Imported `Memorist.Example.NewtonRaphson.repeatly` | `repeatlyM`, with an unticked callback adapter |
-| `(.)` | Generated unticked adapter |
+### Library Replacements
 
-Only resolved imported identities select replacements; same-named source definitions are
-translated normally. Implicit and explicit Prelude imports are supported for these operations
-and the implemented primitives. The only additional admitted import module is
-`Memorist.Example.NewtonRaphson`, for `repeatly` only; its other operations are not
-automatically supported. There is no user-module dependency traversal. An inferred source
-constraint `Foldable t` becomes `FoldableT t` over the translated representations; `foldrT` and
-`foldlT` operate directly on lists, `MaybeT`, and partially applied `PairT`, without converting
-Maybe and pairs to artificial lists. This is a fixed supported Prelude interface, not general
-source typeclass translation; user-written classes and instances remain outside the subset.
+The translator maps common Prelude functions and selected runtime helpers directly to instrumented implementations provided by `MemoristANT`:
 
-### Datatypes and demands
+| Source operation | External runtime replacement | Description |
+| :--- | :--- | :--- |
+| `map` | `Memorist.Example.List.mapMM` | Instrumented list map |
+| `foldr`, `foldl` | Direct `FoldableT.foldrT` / `foldlT` | Direct container fold; list instances delegate to `foldrM` / `foldlM` |
+| `concatMap` | `FoldableT.concatMapT` | Charges 1 entry tick; delegates list instances to `concatMapM` |
+| `filter` | `Memorist.Example.List.filterM` | Instrumented list filter |
+| `zipWith` | `Memorist.Example.List.zipWithM` | Instrumented list zipWith |
+| `scanl` | `Memorist.Example.ListInf.scanlM` | Instrumented scanl using the corrected demand-lazy implementation |
+| `head`, `tail` | `Memorist.Example.List.headM`, `tailM` | Instrumented list head and tail |
+| `repeatly` | `Memorist.Example.NewtonRaphson.repeatlyM` | Infinite producer with unticked callback adapter |
+| `(.)` | Generated unticked composition adapter | Evaluates captured arguments once and specializes on arrival of the first argument |
 
-For `Tree`, generation emits `TreeT`, `TreeD`, `Repr`, `Demand`, `LBoundDemand`, `DemandArb`
-and the representation-demand marker instances; conversion instances
-(`reprM`/`abstract`/`fullDemand`) refer to the original source module.
+The translator selects replacements strictly by resolved entity identity (`GHC.Types.Name`). If a source module defines its own function named `map` or `foldr`, the translator translates the local definition normally rather than replacing it. Supported external imports are restricted to `Prelude` and `Memorist.Example.NewtonRaphson` (for `repeatly` only).
 
-For an ordinary `Tree a`, the generated demand functions have the following normalized types
-(the emitted signatures use the equivalent kind-aware `GeneratedK` constraint and `DemOf`
-family):
+### Datatypes and Demands
 
-```haskell
-genTreeDemand    :: GeneratedDemand a => Int -> TreeT a -> Gen (TreeD (Dem a))
-shrinkTreeDemand :: GeneratedDemand a => TreeT a -> TreeD (Dem a) -> [TreeD (Dem a)]
-```
+For every source datatype, the translator generates representation types, demand types, conversion instances, and QuickCheck generators:
 
-`arbDemandFrom` uses QuickCheck's size. The generator matches the observed constructor and
-distributes a finite budget among fields: `Skip` on exhaustion, otherwise the default 1:3
-Skip:Need weighting, and no skipped field is evaluated. Budgets conservatively charge for both
-the demanded field and the observed structure; a finite budget bounds demand generation, not
-the source program's time to satisfy that demand. Compatible shrinkers keep observed
-constructors and either skip fields or recursively shrink already demanded fields. For
-result-compatible testing, use the result-indexed functions rather than standalone `arbitrary`
-demands: `forAllShrink (genTreeDemand 20 result) (shrinkTreeDemand result) property`. Custom
-generators and shrinkers can be supplied directly to `forAllShrink`. Standalone demand
-`Arbitrary` instances exist for the external class superclasses and have no default shrinks;
-they are not a substitute. The translator generates representation and demand support, not user
-cost specifications.
+- **Representation types (`T` suffix)**: For each source datatype `Tree a`, the translator generates `data TreeT a = ...` where every constructor field is wrapped in a named thunk `M.Th (Rep a)`.
+- **Demand types (`D` suffix)**: The translator generates `data TreeD a = ...` where every constructor field is wrapped in a demand thunk `M.ThD (Dem a)`.
+- **Typeclass instances**: The translator emits `Repr (Tree a)` (with `Rep`, `reprM`, and `abstract`), `Demand (Tree a)` (with `Dem` and `fullDemand`), `LBoundDemand`, `DemandArb`, and structural representation-demand marker instances.
+- **Demand generation and compatible shrinking**: The translator generates `genTreeDemand` and `shrinkTreeDemand` helpers for property testing:
+  ```haskell
+  genTreeDemand    :: GeneratedDemand a => Int -> TreeT a -> Gen (TreeD (Dem a))
+  shrinkTreeDemand :: GeneratedDemand a => TreeT a -> TreeD (Dem a) -> [TreeD (Dem a)]
+  ```
+  The generator inspects the observed constructor of the runtime representation value and distributes a finite integer budget (derived from QuickCheck's `size`) across the fields. When the budget reaches zero, it emits `M.Skip`. When positive, it chooses between `M.Skip` and `M.Need` with a 1:3 ratio. Skipped fields leave the underlying thunks unforced (`M.Skip`), ensuring tests never evaluate undemanded components. Shrinkers preserve the observed constructor, either replacing demanded fields with `M.Skip` or recursively shrinking sub-demands. QuickCheck properties test results using `forAllShrink`:
+  ```haskell
+  forAllShrink (genTreeDemand 20 result) (shrinkTreeDemand result) property
+  ```
 
-### Higher-kinded datatypes
+### Higher-Kinded Datatypes
 
-The declarations `data Higher f a = Higher (f a)`, `data Fix f = In (f (Fix f))`, and `data
-Mixed f a = Leaf a | Branch (f (Mixed f [a]))` need no translator-specific annotation. The
-output generates kind-indexed representation/demand mappings: at kind `Type`, `RepOf` and
-`DemOf` use the existing runtime `Rep` and `Dem` families; at constructor kinds, they map
-lists, Maybe, pairs and the selected module's datatypes to their generated
-representations/demands, including partial applications. Invisible kind arguments are
-distinguished from visible datatype parameters; inferred kinds are retained in binders and
-signatures. Literal and promoted indices are preserved at their index kinds.
+Datatypes with higher-kinded parameters (e.g. `data Higher f a = Higher (f a)`, `data Fix f = In (f (Fix f))`, `data Mixed f a = Leaf a | Branch (f (Mixed f [a]))`) require kind-aware mappings:
 
-Quantified application constraints lift the runtime interfaces through type application.
-Explicit dictionary witnesses make the mapping equalities available inside recursive
-conversion/demand methods. `GeneratedK` lifts the bounded structural generator interface;
-`ShapeK` supplies Eq/Show/Arbitrary dictionaries for demand values. These are generated
-adapters over the external interfaces, not new source typeclass support or changes to the
-runtime API. `ReprK` and `DemandK` are constraint synonyms; the application-witness classes
-remain where quantified constraint heads require them. Conversion adds no ticks, and every lazy
-field remains a thunk.
+- **Kind-indexed type families**: The translator generates closed type families indexed by kind, annotated with standalone kind signatures (`StandaloneKindSignatures`):
+  - `RepOf (k :: Type) (a :: k) :: RepOfKind k`
+  - `DemOf (k :: Type) (a :: k) :: DemOfKind k`
+  At kind `Type`, `RepOf` and `DemOf` map to runtime families `Rep` and `Dem`. At constructor kinds (`Type -> Type`), they map standard containers (`[]` to `ListT`, `Maybe` to `MaybeT`, `(,)` to `PairT`) and user datatypes (`Tree` to `TreeT`). A recursive equation resolves type applications:
+  ```haskell
+  RepOf (k1 -> k2) (f a) = (RepOf (k1 -> k2) f) (RepOf k1 a)
+  ```
+- **Quantified constraints and witness classes**: `ReprK` and `DemandK` constraint synonyms lift runtime representation and demand contracts across type applications. Explicit witness classes `ReprApp` and `DemandApp` provide equality evidence (`Rep (f a) ~ RepOf (k1 -> k2) f (RepOf k1 a)`) required by GHC to resolve dictionaries in recursive structures. `GeneratedK` and `GeneratedReq` lift budget-bounded demand generation across kinds, while `ShapeK` and `ShapeReq` supply `Eq`, `Show`, and `Arbitrary` dictionaries for demand values across kinds.
 
-### Top-level sharing
+### Top-Level and Polymorphic Sharing
 
-Unconstrained polymorphic values reserve one runtime name and retain sharing across type
-instantiations. Dictionary-constrained values instead use a stable subtree per instantiation of
-the generalized variables occurring in their constraints. Repeated uses of the same constrained
-instantiation share; variables absent from the constraints do not split that sharing. For
-example, `Num a => (a,[b])` shares across changes to `b` while distinguishing different `a`
-dictionaries.
+In Haskell, shared value bindings evaluate once on first access. The translator preserves this call-by-need behavior using explicit thunks (`Th`):
 
-The generated code obtains the required `Typeable` evidence in affected value and caller
-signatures. Keys structurally encode qualified type constructors, kind arguments and
-applications, rather than hashing or printing short names. Reserved name delimiters isolate the
-instance subtrees from ordinary allocations and from each other, including nested shared
-bindings. GHC type evidence retains source annotations and defaulted instantiations; source
-annotations are not required solely for translation.
+- **Unconstrained polymorphic sharing (`sharedAt`)**: When a value binding has polymorphic type without typeclass constraints (such as `empty :: [a]`), the translator allocates a single thunk at a fixed reserved name using `sharedAt`. Invocations across distinct types (e.g. `[Int]` and `[Bool]`) share the exact same runtime thunk.
+- **Dictionary-constrained sharing (`sharedAtBy`)**: When a polymorphic value carries typeclass constraints (such as `shared :: (Num a, Eq a) => (a, [b])`), the computed value depends on the dictionary for `a`, but not on the unconstrained variable `b`. The translator identifies variables occurring in dictionary constraints (`constrainedVariables`). It computes a type-level path through the result type (`sharingPaths`) to project those variables using closed type families (`ShareProject`, `ShareKeys`). `sharedAtBy` queries `Type.Reflection.SomeTypeRep` for the projected dictionary types, converting them into a structural integer list key via `sharingTypeKey`.
+- **Negative delimiter names**: Allocator thunks use non-negative integer indices. To isolate structural type keys from ordinary thunk identifiers and prevent collisions between nested shared values, `sharedAtBy` encloses keys with negative delimiters `-1` and `-2`. This guarantees prefix-free thunk naming trees across all dictionary instantiations. Consequently, calls at `(Int, Bool)` and `(Int, Char)` share the same thunk, while calls at `(Integer, Bool)` allocate an independent thunk.
 
-### Paper terminology bridge
+### Repository Layout and Key Modules
 
-The generated code uses the runtime vocabulary from the semantics paper: the cost monad
-`MemoristM`; named thunks `Th`, allocated with `lazy` and evaluated with `eval`; ticks as the
-unit of cost; the `Rep`/`Dem` type families relating source and thunked representations; demand
-values that structurally describe how far to force a value; and
-`correct`/`infcost`/`fullDemand` for value and cost checks.
-
-### Repository layout
+The repository organizes its implementation, CLI, tests, and documentation as follows:
 
 | Path | Purpose |
-| --- | --- |
-| `app/Main.hs` | CLI entry point |
-| `src/Cost/Translate.hs` | Orchestration: generate, log, typecheck, publish by rename |
-| `src/Cost/Translate/Frontend.hs` | GHC session and whole-module translation |
-| `src/Cost/Translate/Output.hs` | Structural `GhcPs` builders |
-| `src/Cost/Translate/Pretty.hs` | Single rendering pass, sectioned output |
-| `src/Cost/Translate/Names.hs` | Generated-name scheme |
-| `src/Cost/Translate/Datatypes.hs` | Representation/demand types, conversions, generators |
-| `src/Cost/Translate/Kinds.hs` | Kind-indexed mappings and liftings |
-| `src/Cost/Translate/Sharing.hs` | Shared-thunk allocation, dictionary-keyed sharing |
-| `src/Cost/Translate/Callable.hs` | Application/composition spines and adapters |
-| `src/Cost/Translate/Foldable.hs` | Generated `FoldableT` |
-| `src/Cost/Translate/Validation.hs` | Scalar comparison gate |
-| `src/Cost/Translate/Typed.hs` | Inferred type evidence |
-| `src/Cost/Translate/Diagnostic.hs` | Diagnostic categories |
-| `docs/adr/0001`–`0004` | Architecture decision records: cost semantics, GHC API boundary, external runtime interface, explicit thunks |
-| `examples/` | Ready-to-try source modules with verified values and costs |
+| :--- | :--- |
+| `app/Main.hs` | CLI entry point; validates the two-argument command line and invokes translation. |
+| `src/Cost/Translate.hs` | Translation coordinator; generates candidate code, writes logs, executes the external GHC verification pass in a temporary directory, and atomically publishes outputs. |
+| `src/Cost/Translate/Frontend.hs` | GHC session driver; configures compiler session flags (`noBackend`, `NoLink`), coordinates parsing, typechecking, validation gates, AST emission, and `Bindings` generation. |
+| `src/Cost/Translate/Output.hs` | Structural `GhcPs` AST builder; constructs expressions, types, patterns, and declarations with automatic precedence management. |
+| `src/Cost/Translate/Pretty.hs` | Single-pass pretty printer; formats module preambles, language pragmas, sorted imports, and section banners. |
+| `src/Cost/Translate/Names.hs` | Injective naming scheme; mangles identifiers with `M`, `T`, `D` suffixes and encodes operators into decimal representations. |
+| `src/Cost/Translate/Datatypes.hs` | Emits representation types, demand types, conversion instances, and QuickCheck demand generators. |
+| `src/Cost/Translate/Kinds.hs` | Generates kind-indexed type families (`RepOf`/`DemOf`), kind signatures, and quantified witness classes (`ReprApp`, `DemandApp`). |
+| `src/Cost/Translate/Sharing.hs` | Implements call-by-need thunk allocation: `sharedAt` for unconstrained values and `sharedAtBy` with negative delimiters for dictionary-keyed values. |
+| `src/Cost/Translate/Callable.hs` | Validates function application and composition spines, checks arities, and constructs unticked adapters. |
+| `src/Cost/Translate/Foldable.hs` | Emits `FoldableT` and instances for lists, `MaybeT`, and `PairT`. |
+| `src/Cost/Translate/Validation.hs` | Traverses desugared Core to enforce the scalar comparison gate; emits the `Scalar` class and instances. |
+| `src/Cost/Translate/Typed.hs` | Runs targeted desugaring to recover GHC inferred types for variable expressions and annotations. |
+| `src/Cost/Translate/Diagnostic.hs` | Defines phase-preserving diagnostic types (`UnsupportedSource`, `GeneratedModuleNameInvalid`). |
+| `test/Main.hs` | Root end-to-end test suite (`cost-translate-test`). |
+| `test/RuntimeScanlCandidate.hs` | External runtime regression gate for demand-lazy `scanlM`. |
+| `test/RuntimePolymorphicSharingGate.hs` | External runtime regression gate for polymorphic thunk sharing. |
+| `test/RuntimeHigherKindedGate.hs` | External runtime regression gate for higher-kinded datatype conversions and demand generation. |
+| `integration/` | Independent Stack project verifying generated code against `MemoristANT` and QuickCheck (`cost-translate-integration.cabal`, `test-integration/Main.hs`, `probes/Probes.hs`). |
+| `docs/adr/` | Architecture decision records (0001–0004) documenting cost semantics, GHC API boundaries, external runtime interface, and explicit thunk sharing. |
+| `examples/` | Standalone source examples with step-by-step walkthroughs and verified values and costs. |
+
+### Bridge to the Memorist Paper
+
+The generated code directly reflects the operational semantics defined in the Memorist paper:
+
+| Paper Concept | Codebase Realization | Description |
+| :--- | :--- | :--- |
+| `MemoristM` | `Memorist.Memorist.MemoristM` | Cost monad tracking ticks and allocation state |
+| `Th a` | `Memorist.Base.Thunk.Th` | Explicit named thunk wrapping a suspended computation of type `a` |
+| `lazy` | `Memorist.Memorist.lazy` | Monadic action suspending a computation into a `Th` |
+| `eval` / `force` | `Memorist.Memorist.eval` / `force` | Forces a thunk, records ticks to execution trace, and caches the result |
+| `tick` | `Memorist.Memorist.tick` | Cost unit incrementing the execution cost counter |
+| `Rep a` / `Dem a` | `Repr` / `Demand` type families | Open type families associating source types with representation and demand types |
+| `fullDemand` | `fullDemand` | Structural demand function forcing every constructor and field |
+| `infcost` | `Memorist.Memorist.infcost` | Evaluates a computation under a demand function, returning total ticks |
+| `correct` | `Memorist.Memorist.correct` | Verifies value equivalence between monadic computation and pure source value |
+| `fromPure1`, `fromPure2` | `Memorist.Memorist.fromPure1` etc. | Adapts pure function arguments into monadic call conventions |
+
+In translating theoretical semantics into a working compiler, the implementation addresses three concrete realities:
+
+1. **Char identity instances**: The external `MemoristANT` package lacks `Repr` and `Demand` instances for `Char`. To avoid modifying the external runtime, each generated module emits local identity conversions (`Rep Char = Char`, `Dem Char = ()`), treating `Char` as a full scalar primitive.
+2. **`Bindings` record**: In the idealized paper, global values evaluate lazily in a persistent top-level heap. In compiled Haskell, top-level values cannot perform monadic side effects on module loading. The translator resolves this by packaging top-level zero-arity bindings into a `Bindings` record produced by `initialize :: MemoristM Bindings`, enabling test drivers to allocate and share top-level thunks across calls.
+3. **`FoldableT`**: Rather than translating general source typeclasses or converting containers to intermediate lists (which would distort tick costs), the translator provides a specialized `FoldableT` class with direct, one-tick pattern-matching implementations for `MaybeT` and `PairT`.
 
 ## Limitations
 
-### Excluded constructs
+### Excluded Constructs
 
-The translator rejects the following constructs; each fails whole-module translation with
-source-located diagnostics: anonymous lambdas; function aliases or computed function results
-without validated calling conventions; unrestricted higher-order source definitions; recursive
-value bindings; lazy pattern bindings; explicit irrefutable patterns; strict fields/patterns;
-`Strict`/`StrictData` (and `RebindableSyntax`); `seq`; strict application; `newtype`; source
-classes, instances and deriving; higher-rank types; polymorphic recursion; multi-module
-translation; record updates, comprehensions, operator sections and other unimplemented syntax;
-existential or constrained constructors; and imports beyond `Prelude` and
-`Memorist.Example.NewtonRaphson`. The rejected example `f x = (\y -> y) x` fails as an
-anonymous lambda.
+The translator rejects the following constructs, reporting source-located diagnostics:
 
-### Semantic constraints
+- Anonymous lambdas (`\x -> ...`).
+- `newtype` declarations.
+- User-defined type classes and instances.
+- `deriving` clauses on data declarations.
+- Strict field annotations (`!a`), strict patterns, and `Strict`/`StrictData` language pragmas.
+- Recursive value bindings (e.g., `let xs = 1 : xs`).
+- Multi-module source trees or user-module imports (only `Prelude` and `Memorist.Example.NewtonRaphson` are permitted).
+- Higher-rank types, polymorphic recursion, record updates, and list comprehensions.
 
-The source module must remain available and compilable next to the output, because the output
-imports it as `Source`. Generated conversions additionally require the source datatype and all
-its constructors to be exported. With an explicit export list, write:
+### Semantic Constraints
 
-```haskell
-module Example (Box(..), make, readBox) where
-data Box = Box Int
-make x = Box x
-readBox (Box x) = x
-```
+- **Explicit constructor exports**: Generated conversion instances (`reprM`, `abstract`) must construct and pattern-match on source values. When a source module specifies an explicit export list, all constructors of datatypes used in generated conversions must be exported (e.g. `data Box = Box Int` requires `Box(..)`). If a constructor is hidden, the translator halts with a diagnostic before generating code.
+- **Comparisons restricted to scalar types**: Runtime `Eq` and `Ord` instances on thunked structures compare thunk metadata rather than structural elements. To prevent misleading equality checks, the translator inspects desugared Core and restricts comparison operands to verified scalar types (`Int`, `Integer`, `Float`, `Double`, `Bool`, `Char`, `()`). Structural comparisons on lists or custom datatypes are rejected.
 
-`module Example (Box, make, readBox) where` hides the constructor. The translator rejects it at
-the constructor's source location with the diagnostic `generated conversions require the source
-module to export constructor Box`; partially exported constructor sets and wholly private
-datatypes are detected the same way, before generating/typechecking a candidate. Source exports
-are not modified.
+### Environment Constraints
 
-The runtime's `Eq`/`Ord` instances on thunked structures compare thunk metadata, not source
-structural equality. Primitive comparisons are therefore validated against a strict scalar
-domain before generation, and generated polymorphic Eq/Ord signatures carry a `Scalar`
-constraint. Desugared types are inspected for this validation only; all instrumentation uses
-renamed syntax. Structural list/datatype comparison is rejected explicitly.
+- **Single-module boundary**: The translator processes exactly one source module at a time and does not traverse project dependencies.
+- **Local runtime requirement**: The translator does not bundle `MemoristANT`. Verification and compilation require an external GHC environment where `MemoristANT` and `QuickCheck` are available (provided via `hs-pbt/`).
 
-These are source-level costs, not GHC-optimized execution costs. A demanded failure remains a
-failure, and no cost result is promised for a failing computation.
+## AI Usage Declaration
 
-### Environment constraints
-
-Translation stops at the single-module boundary: there is no user-module dependency traversal.
-The CLI installs nothing and accepts no custom runtime path. Generated code requires a GHC
-environment already exposing `MemoristANT` and `QuickCheck`.
-
-## AI usage declaration
-
-This repository's code, tests, and documentation were developed with assistance from generative
-AI tools within the OpenCode agent environment, under human direction and review. All code and
-documentation were compiled and verified against the repository's automated test suites.
+This repository's code, tests, and documentation were developed with assistance from generative AI tools within the OpenCode agent environment, under human direction and review. All code and documentation were compiled and verified against the repository's automated test suites.
