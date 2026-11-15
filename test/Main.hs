@@ -23,6 +23,39 @@ main = do
     checkThunkSharing
     checkThunkMatchingSharing
     checkAnfProperties
+    let scopedAlias = unlines
+          [ "{-# LANGUAGE ScopedTypeVariables #-}"
+          , "module Example where"
+          , "ignore :: t -> Int"
+          , "ignore _ = 1"
+          , "observed :: forall a. a -> Int"
+          ]
+    runAction "scoped-case-alias-shadow"
+        (scopedAlias ++ "observed x = case (x :: a) of y -> let inner :: forall a. a -> Int; inner z = ignore y in inner True\n")
+        "Source.observed (undefined :: Int)"
+        "fromPure1 observedM (undefined :: Int)" 1 3
+    runAction "scoped-guard-alias-shadow"
+        (scopedAlias ++ "observed x | y <- (x :: a) = let inner :: forall a. a -> Int; inner z = ignore y in inner True\n")
+        "Source.observed (undefined :: Int)"
+        "fromPure1 observedM (undefined :: Int)" 1 3
+    let scopedFactory = unlines
+          [ "{-# LANGUAGE ScopedTypeVariables #-}"
+          , "module Example where"
+          , "work n | n == 0 = n+1 | otherwise = work (n-n)+1"
+          , "shared :: (Num a, Eq a) => a"
+          , "shared = work 18446744073709551616"
+          , "observed :: forall a. (Num a, Eq a) => a -> Int"
+          ]
+    mapM_ (\(label, body) -> do
+        runAction (label ++ "-int") (scopedFactory ++ body)
+            "Source.observed (0::Int)"
+            "do { b <- initialize; fromPure1 (observedM b) (0::Int) }" 1 3
+        runAction (label ++ "-integer") (scopedFactory ++ body)
+            "Source.observed (0::Integer)"
+            "do { b <- initialize; fromPure1 (observedM b) (0::Integer) }" 2 4)
+        [ ("scoped-factory-case-shadow", "observed x = case (shared :: a) of y -> let inner :: forall a. a -> Int; inner z = if y == 1 then 1 else 2 in inner True\n")
+        , ("scoped-factory-guard-shadow", "observed x | y <- (shared :: a) = let inner :: forall a. a -> Int; inner z = if y == 1 then 1 else 2 in inner True\n")
+        ]
     runExample "double"
         "double :: Int -> Int\ndouble x = x + x\n"
         "doubleM" 10 1

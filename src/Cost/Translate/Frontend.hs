@@ -68,7 +68,7 @@ import Data.List (elemIndex, isPrefixOf, nub)
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (maybeToList, isJust)
-import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.Name.Occurrence (occNameString, isTvOcc)
 import GHC.Types.Name.Reader (rdrNameOcc)
 import GHC.Types.SourceText (SourceText(NoSourceText))
 import GHC.Data.FastString (unpackFS)
@@ -412,9 +412,8 @@ emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
         pure (O.doE [O.bind "guardResult" condition] (O.ifE (O.v "guardResult") remaining next))
     go scope (statement@(L _ (BindStmt _ pat expr)) : gs) next = do
         let n = actionName scope "guardThunk" (getLocA statement)
-        (statements, reference) <- emitThunk scope n expr
-        remaining <- matchPatterns scope [(reference, pat)] (\scope' -> go scope' gs next) next
-        pure (O.doE statements remaining)
+        withMatchThunk scope n expr $ \reference ->
+            matchPatterns scope [(reference, pat)] (\scope' -> go scope' gs next) next
     go scope (L _ (LetStmt _ locals) : gs) next = withLocals scope locals (\scope' -> go scope' gs next)
     go _ _ _ = Left "unsupported guard statement"
 
@@ -646,9 +645,8 @@ emitExpr env located = case unLoc located of
         _ -> unsupported
     HsCase _ scrutinee matches -> do
         let n = actionName env "caseThunk" (getLocA located)
-        (statements, reference) <- emitThunk env n scrutinee
-        body <- emitMatches env [reference] (unLoc (mg_alts matches))
-        pure (O.doE statements body)
+        withMatchThunk env n scrutinee $ \reference ->
+            emitMatches env [reference] (unLoc (mg_alts matches))
     ExplicitList _ elements -> list (0 :: Int) elements
     HsApp {} -> let (fun, args) = spine located in case unLoc fun of
         HsVar _ name | isComposition (unLoc name) -> callable
@@ -707,6 +705,30 @@ emitThunk env name located = case reuse located of
         ExprWithTySig _ nested signature ->
             annotateExpression env "M.Th" (not (hasFreshAnnotationVariables signature)) expression <$> reuse nested
         _ -> Nothing
+
+-- Keep reused scoped annotations at the matching boundary so a nested forall
+-- with the same spelling cannot capture their type variables. A plain let binds
+-- the existing reference without M.lazy, M.force or ticks; ordinary references
+-- and computed subjects keep their existing paths. Protect both matching
+-- boundaries before storing aliases in Thunk entries; other Thunk entries are
+-- unannotated names or factory references.
+withMatchThunk :: Env -> String -> LHsExpr GhcRn -> (O.Expr -> Either String O.Expr) -> Either String O.Expr
+withMatchThunk env name located finish = do
+    (statements, reference) <- emitThunk env name located
+    if null statements && scopedAnnotation located
+        then O.letE [O.val name [] reference] <$> finish (O.v name)
+        else O.doE statements <$> finish reference
+  where
+    scopedAnnotation expression = case unLoc expression of
+        HsPar _ nested -> scopedAnnotation nested
+        ExprWithTySig _ nested signature ->
+            (not (hasFreshAnnotationVariables signature) && scopedEvidence expression) || scopedAnnotation nested
+        _ -> False
+    scopedEvidence expression = case Map.lookup (showSDocUnsafe (ppr (getLocA expression))) (inferredExpressions env) of
+        -- renderType emits no type binders. Exclude free source kind variables
+        -- that disappear when invisible arguments are omitted in the target.
+        Just (True, ty) -> any (isTvOcc . rdrNameOcc) (collect ty :: [RdrName])
+        _ -> False
 
 annotateExpression :: Env -> String -> Bool -> LHsExpr GhcRn -> O.Expr -> O.Expr
 annotateExpression env wrapper allowFree located code =

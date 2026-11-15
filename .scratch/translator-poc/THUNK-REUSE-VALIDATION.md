@@ -76,6 +76,37 @@ fail for the both-fields demand. Restoring normal forcing made the expanded
 property group pass. These checks establish sensitivity to the listed defects,
 not an exhaustive mutation score or a correctness proof.
 
+## Scoped-annotation review follow-up
+
+Independent review of `625b2e9` found a further scoped-type regression despite
+the passing suite. A case/guard alias can carry `(x :: M.Th a)` into a local
+function whose `forall a` shadows the annotation's original type variable.
+The source typechecks, but the generated candidate then fails with
+`Expected: M.Th a1; Actual: M.Th a`.
+
+The `scoped-case-alias-shadow` and `scoped-guard-alias-shadow` end-to-end
+regressions reproduce that error. Temporarily restoring the old case and guard
+preparation makes each exact regression pass with value 1 and three ticks; those
+control changes were removed. Additional dictionary-factory regressions distinguish Int
+and Integer behavior, so discarding the annotation and defaulting its type
+cannot silently pass the value checks.
+
+The user approved a scoped-only plain-`let` exception to alias avoidance on
+2026-11-15. Both matching boundaries keep the same annotated reference in its
+original lexical scope, then store the plain name in pattern aliases. The binding
+adds no `M.lazy`, force, tick, or Memorist thunk allocation. Ordinary references,
+closed annotations, and computed subjects retain their existing paths. The gate
+checks both GHC's free-variable evidence and the emitted type, excluding source
+kind variables erased from the target. It also retains the existing policy for
+fresh annotation variables. See `README.md` and `CONVENTIONS.md` for the explicit
+rule and rationale.
+
+With the retained repair, all six shadowing selectors pass: direct case/guard
+aliases return 1 in three ticks; dictionary-factory aliases return 1 in three
+ticks at Int and 2 in four ticks at Integer. The ordinary case/guard identity and
+allocator checks, matching-sharing checks, deterministic ANF demand tests, and
+seeded/randomized ANF properties also pass in the same focused run.
+
 ## Interpretation limits
 
 - `tname` equality checks reference identity, not physical host-language

@@ -14,9 +14,20 @@ higher-kinded audit regressions now pass.
   identifiers. Log resolved source identities and arity/adaptation decisions.
 - Function parameters are thunks; calls return `MemoristM`. One entry tick per
   translated source function, including local helpers and record selectors.
-- Suspend argument and constructor-field actions. Never sequence a lazy value's
-  body merely to allocate its binding.
-- Use source-ordered pattern/guard failure continuations. Fresh case/guard thunk
+- Reuse resolved thunk references at argument, field, case, and pattern-guard
+  boundaries. Suspend computed expressions; preparing a reference adds no
+  forwarding thunk or force.
+- Scoped-annotation exception (user-approved): when a reused case/guard reference
+  carries a supported annotation with free type variables in the emitted type,
+  bind that same annotated reference with a plain target `let` at the match site,
+  before storing pattern aliases. This keeps its type variables in their original
+  scope when a nested `forall` shadows their spelling. Retain the annotation and
+  factory application, preserving dictionary specialization. The plain binding
+  preserves `tname` and adds no Memorist thunk allocation, force, or tick.
+  Ordinary references and closed annotations stay inline; computed subjects keep
+  their suspensions. A source kind variable erased from the emitted type does not
+  justify an alias. Explicit source value bindings retain their separate anchors.
+- Use source-ordered pattern/guard failure continuations. Planned case/guard
   names must avoid all retained source bindings, including field names.
 - Share failure continuations with ordinary let-bound monadic actions, never
   by duplicating their syntax trees or allocating/ticking a thunk for them.

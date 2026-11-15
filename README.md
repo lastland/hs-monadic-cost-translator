@@ -218,6 +218,31 @@ In Haskell, shared value bindings evaluate once on first access. The translator 
 - **Dictionary-constrained sharing (`sharedAtBy`)**: When a polymorphic value carries typeclass constraints (such as `shared :: (Num a, Eq a) => (a, [b])`), the computed value depends on the dictionary for `a`, but not on the unconstrained variable `b`. The translator identifies variables occurring in dictionary constraints (`constrainedVariables`). It computes a type-level path through the result type (`sharingPaths`) to project those variables using closed type families (`ShareProject`, `ShareKeys`). `sharedAtBy` queries `Type.Reflection.SomeTypeRep` for the projected dictionary types, converting them into a structural integer list key via `sharingTypeKey`.
 - **Negative delimiter names**: Allocator thunks use non-negative integer indices. To isolate structural type keys from ordinary thunk identifiers and prevent collisions between nested shared values, `sharedAtBy` encloses keys with negative delimiters `-1` and `-2`. This guarantees prefix-free thunk naming trees across all dictionary instantiations. Consequently, calls at `(Int, Bool)` and `(Int, Char)` share the same thunk, while calls at `(Integer, Bool)` allocate an independent thunk.
 
+#### Scoped annotations: the exception to alias avoidance
+
+For a reused case or pattern-guard subject, the translator retains a plain `let`
+when its type annotation contains free target type variables. The binding keeps
+the annotation in its original scope: a nested `forall a` must not capture an
+outer function's `a`. For example, inside `fM :: forall a. M.Th a -> M.MemoristM Int`,
+the relevant generated bindings can be:
+
+```haskell
+let caseThunk0 = (x :: M.Th a)  -- fM's a, before g's signature
+    g :: forall a. M.Th a -> M.MemoristM Int
+    g _ = do
+      M.tick
+      ignoreM caseThunk0
+```
+
+`caseThunk0` names the existing thunk; it is not `M.lazy (M.force x)`. The binding
+preserves `tname`, adds no Memorist thunk allocation, force, or tick, and leaves
+unused failures suspended. Keeping the annotation also preserves dictionary
+specialization rather than allowing a factory to default to another type.
+Ordinary references and closed annotations stay inline; computed subjects still
+receive suspensions. This exception does not remove explicit source-binding
+anchors. The precise rule is recorded in
+[`CONVENTIONS.md`](.scratch/translator-poc/CONVENTIONS.md).
+
 ### Repository Layout and Key Modules
 
 The repository organizes its implementation, CLI, tests, and documentation as follows:
