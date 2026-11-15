@@ -6,7 +6,7 @@
 -- conventions — rejecting function aliases and computed function results
 -- without a validated convention.
 --
--- 'emitCallable' suspends captured arguments as thunks exactly once, and
+-- 'emitCallable' prepares captured argument thunks once, and
 -- specializes a composition when its first argument arrives, so the right
 -- operand's application (for example @g x@) is computed once even when the
 -- result is reused as a callback (see the inline notes on 'emitCallable').
@@ -16,7 +16,7 @@ module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine) w
 import GHC
 import GHC.Types.Name (getOccString, nameModule_maybe)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
-import Control.Monad (unless, replicateM)
+import Control.Monad (unless, replicateM, zipWithM)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import qualified Cost.Translate.Output as O
@@ -61,11 +61,12 @@ callArity resolve expr = do
     unless (length args <= count) (failure expr "application exceeds the validated argument count")
     pure (count - length args)
 
--- Prepare captured arguments once, then specialize a composition when its
--- first argument arrives. Flattening it into a lambda and only allocating the
--- intermediate at saturation would charge g x twice in map ((f . g) x) ys.
-emitCallable :: (Int -> String) -> Resolver -> (LHsExpr GhcRn -> Either String O.Expr) -> LHsExpr GhcRn -> Either String O.Expr
-emitCallable freshName resolve render expr = do
+-- Prepare captured arguments once, reusing existing thunks, then specialize a
+-- composition when its first argument arrives. Flattening it into a lambda and
+-- only allocating the intermediate at saturation would charge g x twice in
+-- map ((f . g) x) ys.
+emitCallable :: (Int -> String) -> Resolver -> (String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)) -> LHsExpr GhcRn -> Either String O.Expr
+emitCallable freshName resolve renderThunk expr = do
     _ <- callArity resolve expr
     evalStateT (do (prefix,fun) <- prepare expr; result <- finish fun; pure (O.doE prefix result)) 0
   where
@@ -79,10 +80,10 @@ emitCallable freshName resolve render expr = do
                 (pf,cf) <- prepare f
                 (pg,cg) <- prepare g
                 pure (pf ++ pg, Compose cf cg)
-        actions <- lift (mapM render args)
         names <- replicateM (length args) (fresh freshName)
-        (more,applied) <- specialize fun (map O.v names)
-        pure (prefix ++ zipWith suspend names actions ++ more, applied)
+        arguments <- lift (zipWithM renderThunk names args)
+        (more,applied) <- specialize fun (map snd arguments)
+        pure (prefix ++ concatMap fst arguments ++ more, applied)
     specialize (Call name n captured) args = pure ([], Call name (n-length args) (captured ++ args))
     specialize composed@(Compose _ _) [] = pure ([], composed)
     -- The first input flows through the right operand once. A unary right

@@ -15,12 +15,19 @@ import System.Environment (getArgs)
 -- Deliberately retain fixtures and logs on failure for diagnosis.
 main :: IO ()
 main = do
+    checkThunkForwarding
+    checkThunkFields
+    checkThunkCaptures
+    checkThunkSharing
     runExample "double"
         "double :: Int -> Int\ndouble x = x + x\n"
         "doubleM" 10 1
     runExample "shared-local"
         "double x = x + x\nshared x = let y = double x in y + y\n"
         "sharedM" 20 2
+    runExample "shared-forwarded-arguments"
+        "work x = x + x\nadd a b = a + b\nshared x = let y = work x in add y y\n"
+        "sharedM" 20 3
     runExample "unused-failing-control-flow"
         "keep x = let unused = if (undefined :: Bool) then x else x in x\n"
         "keepM" 5 1
@@ -281,6 +288,184 @@ main = do
         "add a b = a+b\nobserved x = head (head (map ((map . add) x) [[x]]))\n"
         "observedM" 10 6
 
+checkThunkForwarding :: IO ()
+checkThunkForwarding = do
+    selected <- getArgs
+    when (null selected || "thunk-forwarding" `elem` selected) $ do
+      tmp <- getTemporaryDirectory
+      root <- createTempDirectory tmp "cost-translate-thunk-forwarding-"
+      putStrLn ("Thunk-forwarding fixtures and logs: " ++ root)
+      writeFile (root </> "Example.hs") $ unlines
+          [ "{-# LANGUAGE ScopedTypeVariables #-}"
+          , "module Example where"
+          , "f :: a -> Int"
+          , "f x = 42"
+          , "g :: a -> Int"
+          , "g x = f x"
+          , "parenthesized x = f ((x))"
+          , "annotated :: forall a. a -> Int"
+          , "annotated x = f (x :: a)"
+          , "bad :: a -> Int"
+          , "bad x = error \"computed argument evaluated\""
+          , "computed x = f (bad x)"
+          ]
+      translated <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
+      either fail pure translated
+      writeFile (root </> "Main.hs") $ unlines
+          [ "module Main where"
+          , "import Generated"
+          , "import qualified Example as Source"
+          , "import qualified Memorist.Memorist as M"
+          , "import qualified Memorist.Base.Thunk as MT"
+          , "import Control.Monad (unless)"
+          , "check :: String -> M.ThName -> (M.Th Int -> M.MemoristM Int) -> IO ()"
+          , "check label expected forward = do"
+          , "  let program = do { x <- M.lazy (error \"unused argument evaluated\" :: M.MemoristM Int); forward x }"
+          , "      (result, next) = M.runM program M.nzero"
+          , "  unless (M.value result == 42) (fail (label ++ \": forwarding changed the result\"))"
+          , "  unless (MT.toInteger (M.costAnnot result) == 2) (fail (label ++ \": forwarding changed entry ticks\"))"
+          , "  unless (next == expected) (fail (label ++ \": wrong thunk allocation: \" ++ show next))"
+          , "main = do"
+          , "  unless (Source.g (undefined :: Int) == 42 && Source.computed (undefined :: Int) == 42) (fail \"source oracle failed\")"
+          , "  let oneInput = M.nnext M.nzero"
+          , "  check \"plain\" oneInput gM"
+          , "  check \"parenthesized\" oneInput parenthesizedM"
+          , "  check \"annotated\" oneInput annotatedM"
+          , "  check \"computed\" (M.nnext oneInput) computedM"
+          ]
+      _ <- compileAndRun root
+      putStrLn "PASS: thunk-forwarding / unused argument / two ticks / no forwarding allocation"
+
+checkThunkFields :: IO ()
+checkThunkFields = do
+    selected <- getArgs
+    when (null selected || "thunk-fields" `elem` selected) $ do
+      tmp <- getTemporaryDirectory
+      root <- createTempDirectory tmp "cost-translate-thunk-fields-"
+      putStrLn ("Thunk-field fixtures and logs: " ++ root)
+      writeFile (root </> "Example.hs") $ unlines
+          [ "module Example where"
+          , "data Box a = Box { first :: a, second :: a }"
+          , "constructor x = Box x x"
+          , "record x = Box { second = (x), first = x }"
+          , "tuple x = (x,x)"
+          , "list x = [x,x]"
+          , "cons x xs = x : xs"
+          , "bad :: a -> a"
+          , "bad x = error \"computed field evaluated\""
+          , "mixed x = Box x (bad x)"
+          ]
+      translated <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
+      either fail pure translated
+      writeFile (root </> "Main.hs") $ unlines
+          [ "module Main where"
+          , "import Generated"
+          , "import qualified Memorist.Memorist as M"
+          , "import qualified Memorist.Data.List as L"
+          , "import qualified Memorist.Base.Thunk as MT"
+          , "import Control.Monad (unless)"
+          , "observe :: (M.Th Int -> M.MemoristM a) -> (M.ThName, a)"
+          , "observe make = M.value (M.eval1 (do { x <- M.lazy (error \"unused field evaluated\" :: M.MemoristM Int); result <- make x; pure (M.tname x, result) }))"
+          , "same label expected fields = unless (all ((== expected) . M.tname) fields) (fail (label ++ \": field thunk identity changed\"))"
+          , "checkBox label make = let (name, BoxT a b) = observe make in same label name [a,b]"
+          , "main = do"
+          , "  checkBox \"constructor\" constructorM"
+          , "  checkBox \"record\" recordM"
+          , "  let (pairName, M.PairT a b) = observe tupleM"
+          , "  same \"tuple\" pairName [a,b]"
+          , "  let (listName, L.ConsT h t) = observe listM"
+          , "      L.ConsT h2 _ = M.tval t"
+          , "  same \"list\" listName [h,h2]"
+          , "  let consProgram = do { x <- M.lazy (error \"unused head evaluated\" :: M.MemoristM Int); xs <- M.lazy (error \"unused tail evaluated\" :: M.MemoristM (L.ListT Int)); result <- consM x xs; pure (M.tname x, M.tname xs, result) }"
+          , "      (headName, tailName, L.ConsT ch ct) = M.value (M.eval1 consProgram)"
+          , "  same \"cons head\" headName [ch]"
+          , "  same \"cons tail\" tailName [ct]"
+          , "  let (mixedName, BoxT reused computed) = observe mixedM"
+          , "  same \"mixed existing field\" mixedName [reused]"
+          , "  unless (M.tname computed /= mixedName) (fail \"computed field did not receive a fresh thunk\")"
+          , "  unless (MT.toInteger (M.infcost' (M.fromPure1 mixedM (5::Int)) (BoxD M.Skip M.Skip)) == 1) (fail \"computed field was evaluated before demand\")"
+          ]
+      _ <- compileAndRun root
+      putStrLn "PASS: thunk-fields / constructor, record, tuple, list identities / suspended computed fields"
+
+checkThunkCaptures :: IO ()
+checkThunkCaptures = do
+    selected <- getArgs
+    when (null selected || "thunk-captures" `elem` selected) $ do
+      tmp <- getTemporaryDirectory
+      root <- createTempDirectory tmp "cost-translate-thunk-captures-"
+      putStrLn ("Thunk-capture fixtures and logs: " ++ root)
+      writeFile (root </> "Example.hs") $ unlines
+          [ "module Example where"
+          , "pair a b = (a,b)"
+          , "keep x = x"
+          , "partial x xs = map (pair x) xs"
+          , "composed x xs = map (pair x . keep) xs"
+          ]
+      translated <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
+      either fail pure translated
+      writeFile (root </> "Main.hs") $ unlines
+          [ "module Main where"
+          , "import Generated"
+          , "import qualified Memorist.Memorist as M"
+          , "import qualified Memorist.Data.List as L"
+          , "import Control.Monad (unless)"
+          , "observe :: (M.Th Int -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT Int Int))) -> (M.ThName, L.ListT (M.PairT Int Int))"
+          , "observe make = M.value (M.eval1 (do { x <- M.lazy (error \"unused captured argument evaluated\" :: M.MemoristM Int); nil <- M.lazy (pure L.NilT); xs <- M.lazy (pure (L.ConsT x nil)); result <- make x xs; pure (M.tname x, result) }))"
+          , "check label make intermediate = do"
+          , "  let (name, L.ConsT first _) = observe make"
+          , "      M.PairT captured supplied = M.tval first"
+          , "  unless (M.tname captured == name) (fail (label ++ \": captured argument was re-thunked\"))"
+          , "  unless ((M.tname supplied /= name) == intermediate) (fail (label ++ \": wrong supplied/intermediate thunk identity\"))"
+          , "main = do"
+          , "  check \"partial\" partialM False"
+          , "  check \"composition\" composedM True"
+          ]
+      _ <- compileAndRun root
+      putStrLn "PASS: thunk-captures / partial and composition captures / retained composition intermediate"
+
+checkThunkSharing :: IO ()
+checkThunkSharing = do
+    selected <- getArgs
+    when (null selected || "thunk-sharing" `elem` selected) $ do
+      tmp <- getTemporaryDirectory
+      root <- createTempDirectory tmp "cost-translate-thunk-sharing-"
+      putStrLn ("Thunk-sharing fixtures and logs: " ++ root)
+      writeFile (root </> "Example.hs") $ unlines
+          [ "module Example where"
+          , "work n = n+n"
+          , "shared :: Num a => a"
+          , "shared = work 5"
+          , "same u = (shared :: Int, shared :: Int)"
+          , "different u = (shared :: Int, shared :: Integer)"
+          , "local x = let y = work x in (y,y)"
+          ]
+      translated <- translateFile (root </> "Example.hs") (root </> "Generated.hs")
+      either fail pure translated
+      writeFile (root </> "Main.hs") $ unlines
+          [ "module Main where"
+          , "import Generated"
+          , "import qualified Example as Source"
+          , "import qualified Memorist.Memorist as M"
+          , "import qualified Memorist.Base.Thunk as MT"
+          , "import Control.Monad (unless)"
+          , "observeShared = do { bindings <- initialize; u <- M.lazy (pure ()); a <- sameM bindings u; b <- differentM bindings u; pure (a,b) }"
+          , "observeLocal = do { bindings <- initialize; M.fromPure1 (localM bindings) (5::Int) }"
+          , "demanded = do { (M.PairT a b, M.PairT c d) <- observeShared; a' <- M.force a; b' <- M.force b; c' <- M.force c; d' <- M.force d; pure (a'+b'+c'+fromInteger d') }"
+          , "demandedLocal = do { M.PairT a b <- observeLocal; a' <- M.force a; b' <- M.force b; pure (a'+b') }"
+          , "main = do"
+          , "  unless (Source.same () == (10,10) && Source.different () == (10,10)) (fail \"source oracle failed\")"
+          , "  let (M.PairT a b, M.PairT c d) = M.value (M.eval1 observeShared)"
+          , "  unless (M.tname a == M.tname b && M.tname a == M.tname c) (fail \"same dictionary specialization was re-thunked\")"
+          , "  unless (M.tname c /= M.tname d) (fail \"different dictionary specializations share a name\")"
+          , "  let M.PairT l r = M.value (M.eval1 observeLocal)"
+          , "  unless (M.tname l == M.tname r) (fail \"local shared binding was re-thunked\")"
+          , "  unless (M.correct demanded (40::Int) && MT.toInteger (M.infcost demanded M.fullDemand) == 4) (fail \"dictionary-sensitive sharing changed values or ticks\")"
+          , "  unless (M.correct demandedLocal (20::Int) && MT.toInteger (M.infcost demandedLocal M.fullDemand) == 2) (fail \"local sharing changed values or ticks\")"
+          ]
+      _ <- compileAndRun root
+      putStrLn "PASS: thunk-sharing / local and dictionary-sensitive thunk identities / at-most-once ticks"
+
 checkGeneratedModuleNameDiagnostic :: IO ()
 checkGeneratedModuleNameDiagnostic = do
     selected <- getArgs
@@ -331,7 +516,7 @@ checkGeneratedWarnings = do
       minimal <- readFile (root </> "MinimalGenerated.hs")
       checkGeneratedLayout "Generated.hs" generated
       checkGeneratedLayout "MinimalGenerated.hs" minimal
-      unless (all (`isInfixOf` generated) ["capturedM x", "add z", "chooseM arg0", "nextEquation0", "partial' <-"]) $
+      unless (all (`isInfixOf` generated) ["capturedM x", "add z", "chooseM arg0", "nextEquation0", "partial'' <-"]) $
           fail "generated local names do not preserve readable source names"
       when (any (`isInfixOf` generated) ["_arg", "argument_", "partial0", "arg0'"]) $
           fail "generated output contains opaque local names"

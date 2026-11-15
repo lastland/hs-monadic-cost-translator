@@ -35,7 +35,7 @@
 module Cost.Translate.Frontend (generate) where
 
 import GHC
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, zipWithM)
 import Control.Monad.IO.Class (liftIO)
 import GHC.Data.Bag (bagToList)
 import GHC.Paths (libdir)
@@ -635,9 +635,11 @@ emitExpr env located = case unLoc located of
     ExplicitTuple _ [Present _ a, Present _ b] Boxed -> construct "M.PairT" [a,b]
     RecordCon _ name fields -> case lookupEnv (unLoc name) env of
         Just (Constructor con count labels) -> do
-            actions <- mapM (\label -> maybe (Right (O.ret (failureExpr "source missing record field"))) (emitExpr env) (lookup label [(fieldName (unLoc (hfbLHS (unLoc f))), hfbRHS (unLoc f)) | f <- rec_flds fields])) labels
-            unless (length actions == count) (Left "record construction field layout mismatch")
-            pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (returnConstructor con))
+            thunks <- sequence [maybe (Right (suspendArgument n (O.ret (failureExpr "source missing record field")))) (emitThunk env n)
+                (lookup label [(fieldName (unLoc (hfbLHS (unLoc f))), hfbRHS (unLoc f)) | f <- rec_flds fields]) |
+                (label,n) <- zip labels (argumentNames env argumentKey (length labels))]
+            unless (length thunks == count) (Left "record construction field layout mismatch")
+            pure (lazyArguments thunks (returnConstructor con))
         _ -> unsupported
     HsRecSel _ field -> case resolve env (fieldName field) of
         Just (Function fn _) -> Right (O.ret (O.v fn))
@@ -656,8 +658,8 @@ emitExpr env located = case unLoc located of
         HsVar _ name -> case resolve env (unLoc name) of
             Just (Constructor con count _) | length args == count -> construct con args
             _ | Just (fn,count) <- functionResolver env (unLoc name), length args <= count -> do
-                actions <- mapM (emitExpr env) args
-                pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (\names -> let invocation = O.app fn names in
+                thunks <- arguments args
+                pure (lazyArguments thunks (\names -> let invocation = O.app fn names in
                     if length args == count then invocation else O.ret invocation))
             _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported call " ++ getOccString (unLoc name) ++ " from " ++ maybe "local scope" (moduleNameString . moduleName) (nameModule_maybe (unLoc name)))
         _ -> callable
@@ -670,29 +672,53 @@ emitExpr env located = case unLoc located of
         _ -> unsupported
     _ -> unsupported
   where
-    annotate allowFree code = case Map.lookup (showSDocUnsafe (ppr (getLocA located))) (inferredExpressions env) of
-        Just (free,ty) | allowFree || not free -> O.ann code (O.tc "M.MemoristM" [ty])
-        _ -> code
-    callable = emitCallable (partialName env) (functionResolver env) (emitExpr env) located
+    annotate allowFree = annotateExpression env "M.MemoristM" allowFree located
+    callable = emitCallable (partialName env) (functionResolver env) (emitThunk env) located
     argumentKey = actionKey "argument" (getLocA located)
+    arguments args = zipWithM (emitThunk env) (argumentNames env argumentKey (length args)) args
     apply fn args = do
-        actions <- mapM (emitExpr env) args
-        pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (O.app fn))
+        thunks <- arguments args
+        pure (lazyArguments thunks (O.app fn))
     construct con args = do
-        actions <- mapM (emitExpr env) args
-        pure (lazyArguments (argumentNames env argumentKey (length actions)) actions (returnConstructor con))
+        thunks <- arguments args
+        pure (lazyArguments thunks (returnConstructor con))
     returnConstructor con names = O.ret (O.call con names)
     list _ [] = Right (O.ret (O.v "L.NilT"))
     list depth (x:xs) = do
-        h <- emitExpr env x
-        t <- list (depth + 1) xs
         let key = argumentKey ++ "_list" ++ show depth
-        pure (lazyArguments (argumentNames env key 2) [h,t] (returnConstructor "L.ConsT"))
+            names = argumentNames env key 2
+        h <- zipWithM (emitThunk env) names [x]
+        t <- list (depth + 1) xs
+        pure (lazyArguments (h ++ zipWith suspendArgument (drop 1 names) [t]) (returnConstructor "L.ConsT"))
     unsupported = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported expression " ++ showSDocUnsafe (ppr located))
 
-lazyArguments :: [String] -> [O.Expr] -> ([O.Expr] -> O.Expr) -> O.Expr
-lazyArguments names actions finish = O.doE [O.bind name (O.call "M.lazy" [action]) | (name,action) <- zip names actions]
-    (finish (map O.v names))
+-- Reuse source bindings at argument and field boundaries, without changing the
+-- forcing behavior of emitExpr. A thunk reference can also be a shared factory
+-- application rather than a variable in the generated syntax.
+emitThunk :: Env -> String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)
+emitThunk env name located = case reuse located of
+    Just thunk -> Right ([], thunk)
+    Nothing -> suspendArgument name <$> emitExpr env located
+  where
+    reuse expression = case unLoc expression of
+        HsVar _ sourceName | Just (Thunk thunk) <- resolve env (unLoc sourceName) ->
+            Just (annotateExpression env "M.Th" False expression thunk)
+        HsPar _ nested -> reuse nested
+        ExprWithTySig _ nested signature ->
+            annotateExpression env "M.Th" (not (hasFreshAnnotationVariables signature)) expression <$> reuse nested
+        _ -> Nothing
+
+annotateExpression :: Env -> String -> Bool -> LHsExpr GhcRn -> O.Expr -> O.Expr
+annotateExpression env wrapper allowFree located code =
+    case Map.lookup (showSDocUnsafe (ppr (getLocA located))) (inferredExpressions env) of
+        Just (free,ty) | allowFree || not free -> O.ann code (O.tc wrapper [ty])
+        _ -> code
+
+suspendArgument :: String -> O.Expr -> ([O.Stmt], O.Expr)
+suspendArgument name action = ([O.bind name (O.call "M.lazy" [action])], O.v name)
+
+lazyArguments :: [([O.Stmt], O.Expr)] -> ([O.Expr] -> O.Expr) -> O.Expr
+lazyArguments arguments finish = O.doE (concatMap fst arguments) (finish (map snd arguments))
 
 argumentNames :: Env -> String -> Int -> [String]
 argumentNames env key count = Map.findWithDefault
