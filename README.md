@@ -98,9 +98,23 @@ The repository contains two test suites:
   To run specific test cases, pass test names through `--test-arguments`:
 
   ```sh
-  stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
-  stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
-  ```
+   stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
+   stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
+   stack test cost-translate:test:cost-translate-test --test-arguments="thunk-case thunk-guards"
+   stack test cost-translate:test:cost-translate-test --test-arguments="anf-demand thunk-matching-sharing anf-properties"
+   ```
+
+  The thunk tests check runtime reference identity and fresh-name progression as
+  well as values, laziness, and entry ticks. Test names are exact matches; check
+  the `PASS` output to confirm that the requested groups ran.
+
+  `anf-demand` checks computed suspensions, explicit source-binding anchors,
+  pattern/guard order, and scalar/Boolean demand. `thunk-matching-sharing` checks
+  polymorphic and dictionary-sensitive references through matching, including
+  scoped and defaulted uses. `anf-properties` translates its fixture once and
+  checks all four pair-demand masks with bounded inputs, repeated demands, and
+  multi-output captures/compositions. It runs both seeded and randomized cases;
+  failures retain shrunk counterexamples and seed information in the driver log.
 
 - **Integration test suite**: Run `stack --stack-yaml integration/stack.yaml test` to execute the dedicated integration project (`integration/cost-translate-integration.cabal`). This project tests generated modules and handwritten probes directly against `MemoristANT` and QuickCheck:
   - `cost-translate-integration`: runs Tasty, HUnit, and QuickCheck test suites (P1–P7) verifying exact tick formulas, value equivalence, and composition chains.
@@ -143,7 +157,7 @@ The translator enforces a precise cost model aligned with the source-level seman
 The translator supports a rich subset of pure Haskell:
 
 - **Data declarations**: Algebraic datatypes with multiple constructors, nullary constructors, parameterized types, recursive datatypes, and nested recursion (such as `data Nested a = End a | More (Nested (a, a))`). It also supports higher-kinded parameters (e.g., `data Higher f a = Higher (f a)`), recursive constructor parameters (`data Fix f = In (f (Fix f))`), infix constructors (e.g., `a :*: b`), and record declarations with named fields.
-- **Pattern matching**: Ordered equations, variable patterns, wildcard patterns (`_`), constructor patterns, list patterns (`[]`, `:`), tuple patterns, and as-patterns (`x@pat`). Literal patterns include integers, floating-point numbers, characters (`'a'`), and strings (`"abc"`). String literal patterns expand into character-by-character matches over the thunked list representation, stopping at the first mismatch. Record patterns extract fields by declaration position while matching supplied subpatterns in declaration order.
+- **Pattern matching**: Ordered equations, variable patterns, wildcard patterns (`_`), constructor patterns, list patterns (`[]`, `:`), tuple patterns, and as-patterns (`x@pat`). Literal patterns include integers, floating-point numbers, characters (`'a'`), and strings (`"abc"`). String literal patterns expand into character-by-character matches over the thunked list representation, stopping at the first mismatch. Record patterns extract fields by declaration position while matching supplied subpatterns in source order.
 - **Guards**: Boolean guards, pattern guards (`pat <- expr`), `let` guards (`let x = expr`), and comma-separated conjunctive guards. Branch and equation failure continuations are let-bound monadic actions (`shareAction`) that execute only when a pattern or guard fails, ensuring that skipped branches add neither thunk allocations nor ticks.
 - **Local bindings and control flow**: `let` and `where` expressions, named local functions, mutually recursive local functions, captured lexical variables, and non-recursive value bindings. Supported control flow includes `if-then-else`, `case-of`, suspended `undefined`, literal-message `error`, scalar arithmetic, and comparisons over strict scalars.
 
@@ -199,7 +213,7 @@ Datatypes with higher-kinded parameters (e.g. `data Higher f a = Higher (f a)`, 
 
 In Haskell, shared value bindings evaluate once on first access. The translator preserves this call-by-need behavior using explicit thunks (`Th`):
 
-- **Argument and field reuse**: When an argument or constructor field refers to an existing thunk, the translator passes that thunk directly, including through parentheses and type annotations. Other expressions receive a thunk so that evaluation remains demand-driven. Reuse avoids forwarding allocations and bookkeeping; it does not remove source-function entry ticks.
+- **Thunk reference reuse**: When an argument, constructor field, case subject, or pattern-guard subject refers to an existing thunk, the translator passes that thunk directly, including through parentheses and type annotations. Variable and wildcard patterns do not force it; constructor and literal patterns inspect it only when reached. Other expressions receive a fresh suspension so that evaluation remains demand-driven. Reuse avoids forwarding allocations and bookkeeping; it does not remove explicit source bindings or source-function entry ticks.
 - **Unconstrained polymorphic sharing (`sharedAt`)**: When a value binding has polymorphic type without typeclass constraints (such as `empty :: [a]`), the translator allocates a single thunk at a fixed reserved name using `sharedAt`. Invocations across distinct types (e.g. `[Int]` and `[Bool]`) share the exact same runtime thunk.
 - **Dictionary-constrained sharing (`sharedAtBy`)**: When a polymorphic value carries typeclass constraints (such as `shared :: (Num a, Eq a) => (a, [b])`), the computed value depends on the dictionary for `a`, but not on the unconstrained variable `b`. The translator identifies variables occurring in dictionary constraints (`constrainedVariables`). It computes a type-level path through the result type (`sharingPaths`) to project those variables using closed type families (`ShareProject`, `ShareKeys`). `sharedAtBy` queries `Type.Reflection.SomeTypeRep` for the projected dictionary types, converting them into a structural integer list key via `sharingTypeKey`.
 - **Negative delimiter names**: Allocator thunks use non-negative integer indices. To isolate structural type keys from ordinary thunk identifiers and prevent collisions between nested shared values, `sharedAtBy` encloses keys with negative delimiters `-1` and `-2`. This guarantees prefix-free thunk naming trees across all dictionary instantiations. Consequently, calls at `(Int, Bool)` and `(Int, Char)` share the same thunk, while calls at `(Integer, Bool)` allocate an independent thunk.

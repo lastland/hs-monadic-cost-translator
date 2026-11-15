@@ -375,7 +375,7 @@ emitBind outer binding = case unLoc binding of
         unless (arity matches > 0) $
             Left (showSDocUnsafe (ppr (getLocA binding)) ++ ": top-level shared value initialization not implemented yet")
         let params = parameterNames outer (unLoc name) matches
-        body <- emitMatches outer params (unLoc (mg_alts matches))
+        body <- emitMatches outer (map O.v params) (unLoc (mg_alts matches))
         fname <- case lookupEnv (unLoc name) outer of
             Just (Function n _) -> Right n
             _ -> Left "expected function binding"
@@ -384,7 +384,7 @@ emitBind outer binding = case unLoc binding of
 
 -- A failure continuation per equation preserves the order even when variable
 -- and constructor patterns occur in the same column. No column regrouping.
-emitMatches :: Env -> [String] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
+emitMatches :: Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
 emitMatches _ _ [] = Right (failureExpr "source pattern match failure")
 emitMatches env args (located@(L _ match) : rest) = do
     fallback <- emitMatches env args rest
@@ -411,10 +411,10 @@ emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
         remaining <- go scope gs next
         pure (O.doE [O.bind "guardResult" condition] (O.ifE (O.v "guardResult") remaining next))
     go scope (statement@(L _ (BindStmt _ pat expr)) : gs) next = do
-        action <- emitExpr scope expr
         let n = actionName scope "guardThunk" (getLocA statement)
-        remaining <- matchPatterns scope [(n, pat)] (\scope' -> go scope' gs next) next
-        pure (O.doE [O.bind n (O.call "M.lazy" [action])] remaining)
+        (statements, reference) <- emitThunk scope n expr
+        remaining <- matchPatterns scope [(reference, pat)] (\scope' -> go scope' gs next) next
+        pure (O.doE statements remaining)
     go scope (L _ (LetStmt _ locals) : gs) next = withLocals scope locals (\scope' -> go scope' gs next)
     go _ _ _ = Left "unsupported guard statement"
 
@@ -440,17 +440,17 @@ actionName env prefix = plannedAction env . actionKey prefix
 plannedAction :: Env -> String -> String
 plannedAction env key = Map.findWithDefault key key (plannedActions (namePlan env))
 
-matchPatterns :: Env -> [(String, LPat GhcRn)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
+matchPatterns :: Env -> [(O.Expr, LPat GhcRn)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
 matchPatterns env patterns = matchPatternsAt env
     [(thunk,pattern',patternRoot pattern' index) | (index,(thunk,pattern')) <- zip [0 :: Int ..] patterns]
 
-matchPatternsAt :: Env -> [(String, LPat GhcRn, String)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
+matchPatternsAt :: Env -> [(O.Expr, LPat GhcRn, String)] -> (Env -> Either String O.Expr) -> O.Expr -> Either String O.Expr
 matchPatternsAt env [] success _ = success env
 matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc located of
-    VarPat _ name -> continue (insertEnv (unLoc name) (Thunk (O.v thunk)) env)
+    VarPat _ name -> continue (insertEnv (unLoc name) (Thunk thunk) env)
     WildPat _ -> continue env
     ParPat _ pat -> matchPatternsAt env ((thunk, pat, path) : rest) success failure
-    AsPat _ name pat -> matchPatternsAt (insertEnv (unLoc name) (Thunk (O.v thunk)) env) ((thunk, pat, path) : rest) success failure
+    AsPat _ name pat -> matchPatternsAt (insertEnv (unLoc name) (Thunk thunk) env) ((thunk, pat, path) : rest) success failure
     TuplePat _ [a,b] Boxed -> constructor "M.PairT" [a,b]
     ListPat _ [] -> constructor "L.NilT" []
     ListPat ext (p:ps) -> constructor "L.ConsT" [p, L (getLoc located) (ListPat ext ps)]
@@ -490,25 +490,25 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
                     (slot,index) <- maybe (Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unknown record pattern field")) Right
                         (lookup (fieldName (unLoc (hfbLHS field))) (zip labels (zip slots [0..])))
                     pure (slot, hfbRHS field, fieldPath path index)) (rec_flds fields)
-                body <- matchPatternsAt env (ordered ++ rest) success failure
+                body <- matchPatternsAt env ([(O.v slot, pat, field) | (slot, pat, field) <- ordered] ++ rest) success failure
                 let used = [slot | (slot, pat, _) <- ordered, not (wildcard pat)]
                 pure (constructorCase con [if slot `elem` used then slot else "_" | slot <- slots] body)
             _ -> Left "unsupported record pattern"
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": pattern not implemented yet")
   where
     continue scope = matchPatternsAt scope rest success failure
-    literalCase value body = O.doE [O.bind matchName (O.call "M.force" [O.v thunk])]
+    literalCase value body = O.doE [O.bind matchName (O.call "M.force" [thunk])]
         (O.ifE (O.op "==" (O.v matchName) value) body failure)
     constructor con pats = do
         let paths = [fieldPath path i | i <- [0 .. length pats - 1]]
             fields = zipWith (fieldSlot env) paths pats
-        body <- matchPatternsAt env (zip3 fields pats paths ++ rest) success failure
+        body <- matchPatternsAt env (zip3 (map O.v fields) pats paths ++ rest) success failure
         pure (constructorCase con fields body)
     wildcard pat = case unLoc pat of
         WildPat _ -> True
         ParPat _ nested -> wildcard nested
         _ -> False
-    constructorCase con fields body = O.doE [O.bind matchName (O.call "M.force" [O.v thunk])] $
+    constructorCase con fields body = O.doE [O.bind matchName (O.call "M.force" [thunk])] $
         O.caseE (O.v matchName) ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
     matchName = Map.findWithDefault "matched" path (plannedMatches (namePlan env))
 
@@ -645,10 +645,10 @@ emitExpr env located = case unLoc located of
         Just (Function fn _) -> Right (O.ret (O.v fn))
         _ -> unsupported
     HsCase _ scrutinee matches -> do
-        action <- emitExpr env scrutinee
         let n = actionName env "caseThunk" (getLocA located)
-        body <- emitMatches env [n] (unLoc (mg_alts matches))
-        pure (O.doE [O.bind n (O.call "M.lazy" [action])] body)
+        (statements, reference) <- emitThunk env n scrutinee
+        body <- emitMatches env [reference] (unLoc (mg_alts matches))
+        pure (O.doE statements body)
     ExplicitList _ elements -> list (0 :: Int) elements
     HsApp {} -> let (fun, args) = spine located in case unLoc fun of
         HsVar _ name | isComposition (unLoc name) -> callable
@@ -692,9 +692,9 @@ emitExpr env located = case unLoc located of
         pure (lazyArguments (h ++ zipWith suspendArgument (drop 1 names) [t]) (returnConstructor "L.ConsT"))
     unsupported = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported expression " ++ showSDocUnsafe (ppr located))
 
--- Reuse source bindings at argument and field boundaries, without changing the
--- forcing behavior of emitExpr. A thunk reference can also be a shared factory
--- application rather than a variable in the generated syntax.
+-- Reuse source bindings at argument, field and matching boundaries, without
+-- changing the forcing behavior of emitExpr. A thunk reference can also be a
+-- shared factory application rather than a variable in the generated syntax.
 emitThunk :: Env -> String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)
 emitThunk env name located = case reuse located of
     Just thunk -> Right ([], thunk)
