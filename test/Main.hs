@@ -3,119 +3,200 @@ module Main (main) where
 import Cost.Translate (translateFile)
 import Control.Monad (unless, when)
 import Control.Exception (SomeException, displayException, try)
-import System.Directory (copyFile, getTemporaryDirectory, doesFileExist, findExecutable)
-import Data.List (isInfixOf, isPrefixOf, sort)
+import System.Directory (copyFile, getTemporaryDirectory, doesFileExist, findExecutable, listDirectory)
+import Data.List (intercalate, isInfixOf, isPrefixOf, nub, sort)
 import Data.Char (isSpace)
+import FixturePolicy (checkFixturePolicy)
 import Paths_cost_translate (getDataFileName)
-import System.Exit (ExitCode(..))
+import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>))
-import System.IO.Temp (createTempDirectory)
-import System.Process (readProcessWithExitCode)
-import System.Environment (getArgs)
+import System.IO (hPutStrLn, stderr)
+import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
+import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
+import System.Environment (getArgs, getEnvironment, getExecutablePath)
 
 -- Deliberately retain fixtures and logs on failure for diagnosis.
 main :: IO ()
 main = do
-    checkThunkForwarding
-    checkThunkMatching
-    checkAnfDemand
-    checkThunkFields
-    checkThunkCaptures
-    checkThunkSharing
-    checkThunkMatchingSharing
-    checkAnfProperties
-    runExample "scoped-case-alias-shadow" 1 3
-    runExample "scoped-guard-alias-shadow" 1 3
-    mapM_ (\label -> do
-        runAction (label ++ "-int") (label </> "Example.hs") 1 3
-        runAction (label ++ "-integer") (label </> "Example.hs") 2 4)
-        ["scoped-factory-case-shadow", "scoped-factory-guard-shadow"]
-    runExample "double" 10 1
-    runExample "shared-local" 20 2
-    runExample "shared-forwarded-arguments" 20 3
-    runExample "unused-failing-control-flow" 5 1
-    runExample "captured-local-function" 30 4
-    runExample "readable-name-argument-collision" 5 2
-    runExample "readable-name-global-collision" 12 3
-    runExample "readable-name-field-collision" 8 2
-    runExample "readable-name-anchor-collision" 6 1
-    runExample "readable-name-case-thunk-collision" 6 2
-    runExample "readable-name-continuation-collisions" 5 2
-    runExample "readable-name-guard-thunk-collision" 5 1
-    runExample "readable-parenthesized-parameter" 5 1
-    checkWholeModuleFailure
-    runExample "handwritten-filter-lazy-tail" 5 4
-    runExample "ordered-equations-and-conjunctive-guards" 5 2
-    runExample "finite-observation-of-recursive-producer" 6 4
-    runExample "ternary-partials-capture-and-composition" 25 6
-    runExample "shared-top-level-across-exported-calls" 30 3
-    runExample "scanl-unused-input" 5 3
-    runExample "lazy-datatype-primitive-field" 5 3
-    checkDemands
-    runExample "foldr-arity-four-partial" 30 6
-    runExample "foldl-named" 10 6
-    runExample "zipWith-named" 10 4
-    runExample "concatMap-named" 5 6
-    runExample "repeatly-external-identity" 10 4
-    runExample "mutually-recursive-captured-helpers" 5 6
-    runExample "case-pattern-and-let-guards" 10 1
-    runExample "literal-pattern-fallback" 5 2
-    runExample "char-scalar-field" 5 2
-    runExample "literal-pattern-char-string" 14 4
-    runExample "direct-composition-application" 20 3
-    runExample "polymorphic-shared-top-level-value" 5 3
-    runExample "polymorphic-local-value" 10 4
-    runExample "resolved-user-map" 10 2
-    runExample "unused-error-and-short-circuit" 5 1
-    runExample "record-lazy-fields-and-selectors" 10 3
-    runExample "nested-pair-and-maybe-fields" 5 3
-    runExample "nested-case-retains-outer-binding" 15 1
-    runExample "named-source-operator" 10 2
-    runExample "infix-constructor" 5 2
-    checkDiagnostics
-    checkRuntimeFailures
-    checkGeneratedProperties
-    runExample "direct-foldr-maybe" (-5) 3
-    runExample "direct-foldl-pair-unused-first-field" 5 3
-    runExample "direct-foldr-nothing-unused-callback" 5 2
-    checkPatternScaling
-    runExample "scalar-division-and-negation" 6 1
-    runExample "direct-concatMap-maybe" 5 7
-    runExample "explicit-constructor-exports" 5 3
-    checkHigherKindedAudit
-    checkHigherKindedDemands
-    runExample "datatype-name-shadows-foldable-class" 5 2
-    runExample "constrained-sharing-different-dictionaries" 12 5
-    runAction "constrained-sharing-same-dictionary" "constrained-sharing-different-dictionaries/Example.hs" 2 3
-    runExample "constrained-sharing-unconstrained-parameter" 2 3
-    runExample "constrained-sharing-local" 5 6
-    runExample "constrained-sharing-generic-caller" 12 7
-    runExample "constrained-sharing-ignored-signature" 5 2
-    runExample "constrained-sharing-scoped-signature" 5 2
-    runExample "constrained-sharing-local-scoped-signature" 5 3
-    runExample "constrained-sharing-defaulted-use" 5 2
-    runExample "constrained-sharing-constructor-dictionaries" 12 4
-    runExample "constrained-sharing-all-dictionaries" 20 4
-    runExample "constrained-sharing-nested-allocations" 12 7
-    runExample "injective-value-names" 16 3
-    runExample "injective-constructor-names" 15 3
-    runExample "injective-type-and-helper-names" 10 3
-    runExample "identifier-escaping-magic-hash" 5 2
-    runExample "record-selector-prelude-collision" 5 2
-    runExample "record-pattern-source-order" 2 2
-    checkGeneratedWarnings
-    checkGeneratedModuleNameDiagnostic
-    runExample "composition-partial-map" 30 12
-    runExample "composition-prefix" 20 5
-    runExample "composition-generalized-partial" 40 7
-    runExample "composition-nested-partial-sharing" 50 13
-    runExample "composition-captured-operands" 70 16
-    runExample "composition-arity-two-right-operand" 10 6
+    selected <- getArgs
+    let names = concatMap groupNames testRegistry
+        unknown = nub (filter (`notElem` names) selected)
+    unless (null unknown) $ do
+        hPutStrLn stderr ("Unknown test selector(s): " ++ intercalate ", " (map show unknown))
+        hPutStrLn stderr "Usage: cost-translate-test [SELECTOR ...] (no selectors runs all groups)"
+        hPutStrLn stderr ("Available test selectors: " ++ intercalate ", " names)
+        exitFailure
+    mapM_ (runGroup (\name -> null selected || name `elem` selected)) testRegistry
+
+data TestGroup
+    = TestGroup String (IO ())
+    | TestAudit [(String, IO ())]
+
+groupNames :: TestGroup -> [String]
+groupNames (TestGroup name _) = [name]
+groupNames (TestAudit tests) = map fst tests
+
+runGroup :: (String -> Bool) -> TestGroup -> IO ()
+runGroup selected (TestGroup name action) = when (selected name) action
+runGroup selected (TestAudit tests) = checkHigherKindedAudit (filter (selected . fst) tests)
+
+-- Registration order is the full-suite order; names and actions stay together.
+testRegistry :: [TestGroup]
+testRegistry =
+    [ TestGroup "thunk-forwarding" checkThunkForwarding
+    , TestGroup "thunk-case" (checkThunkMatching "thunk-case")
+    , TestGroup "thunk-guards" (checkThunkMatching "thunk-guards")
+    , TestGroup "anf-demand" checkAnfDemand
+    , TestGroup "thunk-fields" checkThunkFields
+    , TestGroup "thunk-captures" checkThunkCaptures
+    , TestGroup "thunk-sharing" checkThunkSharing
+    , TestGroup "thunk-matching-sharing" checkThunkMatchingSharing
+    , TestGroup "anf-properties" checkAnfProperties
+    , example "scoped-case-alias-shadow" 1 3
+    , example "scoped-guard-alias-shadow" 1 3
+    , action "scoped-factory-case-shadow-int" "scoped-factory-case-shadow/Example.hs" 1 3
+    , action "scoped-factory-case-shadow-integer" "scoped-factory-case-shadow/Example.hs" 2 4
+    , action "scoped-factory-guard-shadow-int" "scoped-factory-guard-shadow/Example.hs" 1 3
+    , action "scoped-factory-guard-shadow-integer" "scoped-factory-guard-shadow/Example.hs" 2 4
+    , example "double" 10 1
+    , example "shared-local" 20 2
+    , example "shared-forwarded-arguments" 20 3
+    , example "unused-failing-control-flow" 5 1
+    , example "captured-local-function" 30 4
+    , example "readable-name-argument-collision" 5 2
+    , example "readable-name-global-collision" 12 3
+    , example "readable-name-field-collision" 8 2
+    , example "readable-name-anchor-collision" 6 1
+    , example "readable-name-case-thunk-collision" 6 2
+    , example "readable-name-continuation-collisions" 5 2
+    , example "readable-name-guard-thunk-collision" 5 1
+    , example "readable-parenthesized-parameter" 5 1
+    , TestGroup "whole-module-failure" checkWholeModuleFailure
+    , example "handwritten-filter-lazy-tail" 5 4
+    , example "ordered-equations-and-conjunctive-guards" 5 2
+    , example "finite-observation-of-recursive-producer" 6 4
+    , example "ternary-partials-capture-and-composition" 25 6
+    , example "shared-top-level-across-exported-calls" 30 3
+    , example "scanl-unused-input" 5 3
+    , example "lazy-datatype-primitive-field" 5 3
+    , TestGroup "datatypes-and-demands" checkDemands
+    , example "foldr-arity-four-partial" 30 6
+    , example "foldl-named" 10 6
+    , example "zipWith-named" 10 4
+    , example "concatMap-named" 5 6
+    , example "repeatly-external-identity" 10 4
+    , example "mutually-recursive-captured-helpers" 5 6
+    , example "case-pattern-and-let-guards" 10 1
+    , example "literal-pattern-fallback" 5 2
+    , example "char-scalar-field" 5 2
+    , example "literal-pattern-char-string" 14 4
+    , example "direct-composition-application" 20 3
+    , example "polymorphic-shared-top-level-value" 5 3
+    , example "polymorphic-local-value" 10 4
+    , example "resolved-user-map" 10 2
+    , example "unused-error-and-short-circuit" 5 1
+    , example "record-lazy-fields-and-selectors" 10 3
+    , example "nested-pair-and-maybe-fields" 5 3
+    , example "nested-case-retains-outer-binding" 15 1
+    , example "named-source-operator" 10 2
+    , example "infix-constructor" 5 2
+    , TestGroup "diagnostics" checkDiagnostics
+    , TestGroup "runtime-failures" checkRuntimeFailures
+    , TestGroup "generated-properties" checkGeneratedProperties
+    , example "direct-foldr-maybe" (-5) 3
+    , example "direct-foldl-pair-unused-first-field" 5 3
+    , example "direct-foldr-nothing-unused-callback" 5 2
+    , TestGroup "pattern-scaling" checkPatternScaling
+    , example "scalar-division-and-negation" 6 1
+    , example "direct-concatMap-maybe" 5 7
+    , example "explicit-constructor-exports" 5 3
+    , TestAudit
+        [ (label, runExample label 5 3)
+        | label <- ["higher-kinded-datatype-field", "higher-kinded-recursive-field", "higher-kinded-polykinded-field"]
+        ]
+    , TestGroup "higher-kinded-demands" checkHigherKindedDemands
+    , example "datatype-name-shadows-foldable-class" 5 2
+    , example "constrained-sharing-different-dictionaries" 12 5
+    , action "constrained-sharing-same-dictionary" "constrained-sharing-different-dictionaries/Example.hs" 2 3
+    , example "constrained-sharing-unconstrained-parameter" 2 3
+    , example "constrained-sharing-local" 5 6
+    , example "constrained-sharing-generic-caller" 12 7
+    , example "constrained-sharing-ignored-signature" 5 2
+    , example "constrained-sharing-scoped-signature" 5 2
+    , example "constrained-sharing-local-scoped-signature" 5 3
+    , example "constrained-sharing-defaulted-use" 5 2
+    , example "constrained-sharing-constructor-dictionaries" 12 4
+    , example "constrained-sharing-all-dictionaries" 20 4
+    , example "constrained-sharing-nested-allocations" 12 7
+    , example "injective-value-names" 16 3
+    , example "injective-constructor-names" 15 3
+    , example "injective-type-and-helper-names" 10 3
+    , example "identifier-escaping-magic-hash" 5 2
+    , example "record-selector-prelude-collision" 5 2
+    , example "record-pattern-source-order" 2 2
+    , TestGroup "generated-warnings" checkGeneratedWarnings
+    , TestGroup "generated-module-name-diagnostic" checkGeneratedModuleNameDiagnostic
+    , example "composition-partial-map" 30 12
+    , example "composition-prefix" 20 5
+    , example "composition-generalized-partial" 40 7
+    , example "composition-nested-partial-sharing" 50 13
+    , example "composition-captured-operands" 70 16
+    , example "composition-arity-two-right-operand" 10 6
+    , TestGroup "test-selection" checkTestSelection
+    , TestGroup "fixture-policy" checkFixturePolicy
+    ]
+  where
+    example label expected cost = TestGroup label (runExample label expected cost)
+    action label source expected cost = TestGroup label (runAction label source expected cost)
+
+checkTestSelection :: IO ()
+checkTestSelection = do
+    executable <- getExecutablePath
+    let unknown = "__retro_unknown_selector__"
+        anotherUnknown = "__retro_another_unknown_selector__"
+        wholeModulePass = "PASS: whole-module failure / no publication / retained arity log"
+        moduleNamePass = "PASS: invalid generated module names retain their category and candidate"
+    checkRejected executable [unknown] [unknown]
+    checkRejected executable
+        ["whole-module-failure", unknown, "generated-module-name-diagnostic", anotherUnknown]
+        [unknown, anotherUnknown]
+    checkAccepted executable ["whole-module-failure"] [wholeModulePass]
+    checkAccepted executable ["generated-module-name-diagnostic"] [moduleNamePass]
+    checkAccepted executable
+        ["generated-module-name-diagnostic", "whole-module-failure"]
+        [wholeModulePass, moduleNamePass]
+    checkAccepted executable
+        ["generated-module-name-diagnostic", "whole-module-failure", "generated-module-name-diagnostic", "whole-module-failure"]
+        [wholeModulePass, moduleNamePass]
+    putStrLn "PASS: test-selection / unknown and mixed selectors rejected / requested groups run once in registry order / no unrelated groups"
+  where
+    checkRejected executable selectors unknowns =
+      withSystemTempDirectory "cost-translate-test-selection-" $ \tmp -> do
+        environment <- getEnvironment
+        let child = (proc executable selectors)
+                { env = Just (("TMPDIR", tmp) : filter ((/= "TMPDIR") . fst) environment) }
+        (status, out, err) <- readCreateProcessWithExitCode child ""
+        unless (status /= ExitSuccess && null out &&
+                "Unknown test selector(s):" `isPrefixOf` err && all (`isInfixOf` err) unknowns &&
+                "Usage: cost-translate-test" `isInfixOf` err && "Available test selectors:" `isInfixOf` err) $
+            fail ("unknown selectors must fail before running groups\n" ++ childResult selectors status out err)
+        retained <- listDirectory tmp
+        unless (null retained) $
+            fail ("unknown selectors created retained test files: " ++ show (selectors, retained))
+    checkAccepted executable selectors expectedPasses = do
+        (status, out, err) <- readProcessWithExitCode executable selectors ""
+        unless (status == ExitSuccess && filter ("PASS: " `isPrefixOf`) (lines out) == expectedPasses) $
+            fail ("requested groups did not run exactly once in registry order\n" ++
+                  "expected PASS lines: " ++ show expectedPasses ++ "\n" ++ childResult selectors status out err)
+    childResult selectors status out err = unlines
+        [ "selectors: " ++ show selectors
+        , "exit status: " ++ show status
+        , "stdout: " ++ show out
+        , "stderr: " ++ show err
+        ]
 
 checkThunkForwarding :: IO ()
 checkThunkForwarding = do
-    selected <- getArgs
-    when (null selected || "thunk-forwarding" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-thunk-forwarding-"
       putStrLn ("Thunk-forwarding fixtures and logs: " ++ root)
@@ -126,13 +207,8 @@ checkThunkForwarding = do
       _ <- compileAndRun root
       putStrLn "PASS: thunk-forwarding / unused argument / two ticks / no forwarding allocation"
 
-checkThunkMatching :: IO ()
-checkThunkMatching = do
-    selected <- getArgs
-    mapM_ (check selected)
-        ["thunk-case", "thunk-guards"]
-  where
-    check selected label = when (null selected || label `elem` selected) $ do
+checkThunkMatching :: String -> IO ()
+checkThunkMatching label = do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp ("cost-translate-" ++ label ++ "-")
       putStrLn ("Thunk-matching fixtures and logs: " ++ root)
@@ -145,8 +221,6 @@ checkThunkMatching = do
 
 checkAnfDemand :: IO ()
 checkAnfDemand = do
-    selected <- getArgs
-    when (null selected || "anf-demand" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-anf-demand-"
       putStrLn ("ANF-demand fixtures and logs: " ++ root)
@@ -159,8 +233,6 @@ checkAnfDemand = do
 
 checkThunkFields :: IO ()
 checkThunkFields = do
-    selected <- getArgs
-    when (null selected || "thunk-fields" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-thunk-fields-"
       putStrLn ("Thunk-field fixtures and logs: " ++ root)
@@ -173,8 +245,6 @@ checkThunkFields = do
 
 checkThunkCaptures :: IO ()
 checkThunkCaptures = do
-    selected <- getArgs
-    when (null selected || "thunk-captures" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-thunk-captures-"
       putStrLn ("Thunk-capture fixtures and logs: " ++ root)
@@ -187,8 +257,6 @@ checkThunkCaptures = do
 
 checkThunkSharing :: IO ()
 checkThunkSharing = do
-    selected <- getArgs
-    when (null selected || "thunk-sharing" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-thunk-sharing-"
       putStrLn ("Thunk-sharing fixtures and logs: " ++ root)
@@ -201,8 +269,6 @@ checkThunkSharing = do
 
 checkGeneratedModuleNameDiagnostic :: IO ()
 checkGeneratedModuleNameDiagnostic = do
-    selected <- getArgs
-    when (null selected || "generated-module-name-diagnostic" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-generated-parse-"
       let source = root </> "Example.hs"; output = root </> "bad-name.hs"
@@ -218,8 +284,6 @@ checkGeneratedModuleNameDiagnostic = do
 
 checkGeneratedWarnings :: IO ()
 checkGeneratedWarnings = do
-    selected <- getArgs
-    when (null selected || "generated-warnings" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-warnings-"
       copyFixture "generated-warnings/Example.hs" (root </> "Example.hs")
@@ -324,8 +388,6 @@ checkGeneratedLayout name source = do
 
 checkHigherKindedDemands :: IO ()
 checkHigherKindedDemands = do
-    selected <- getArgs
-    when (null selected || "higher-kinded-demands" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-higher-demands-"
       putStrLn ("Higher-kinded fixtures and logs: " ++ root)
@@ -337,23 +399,17 @@ checkHigherKindedDemands = do
       putStrLn "PASS: higher-kinded conversion, custom constructors, index kinds, infinite bounded demands and shrinking"
 
 -- Keep all three original regressions live; report every failure if they recur.
-checkHigherKindedAudit :: IO ()
-checkHigherKindedAudit = do
-    failures <- mapM check
-        ["higher-kinded-datatype-field"
-        , "higher-kinded-recursive-field"
-        , "higher-kinded-polykinded-field"
-        ]
+checkHigherKindedAudit :: [(String, IO ())] -> IO ()
+checkHigherKindedAudit tests = do
+    failures <- mapM check tests
     unless (all null failures) (fail (unlines (filter (not . null) failures)))
   where
-    check label = do
-        result <- try (runExample label 5 3) :: IO (Either SomeException ())
+    check (label, action) = do
+        result <- try action :: IO (Either SomeException ())
         pure (either (\e -> label ++ ": " ++ displayException e) (const "") result)
 
 checkPatternScaling :: IO ()
 checkPatternScaling = do
-    selected <- getArgs
-    when (null selected || "pattern-scaling" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-patterns-"
       copyFixture "pattern-scaling/Example.hs" (root </> "Example.hs")
@@ -385,8 +441,6 @@ compileAndRun root = do
 -- Every sample visits all four masks; shrinking preserves the finite input bounds.
 checkAnfProperties :: IO ()
 checkAnfProperties = do
-    selected <- getArgs
-    when (null selected || "anf-properties" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-anf-properties-"
       putStrLn ("ANF property fixtures and logs: " ++ root)
@@ -400,8 +454,6 @@ checkAnfProperties = do
 -- Keep type-specific assertions readable while exercising the same public seam.
 checkThunkMatchingSharing :: IO ()
 checkThunkMatchingSharing = do
-    selected <- getArgs
-    when (null selected || "thunk-matching-sharing" `elem` selected) $ do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-thunk-matching-sharing-"
       putStrLn ("Matching-sharing fixtures and logs: " ++ root)
@@ -414,8 +466,6 @@ checkThunkMatchingSharing = do
 
 checkGeneratedProperties :: IO ()
 checkGeneratedProperties = do
-    selected <- getArgs
-    if not (null selected || "generated-properties" `elem` selected) then pure () else do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-properties-"
       copyFixture "generated-properties/Example.hs" (root </> "Example.hs")
@@ -427,8 +477,6 @@ checkGeneratedProperties = do
 
 checkRuntimeFailures :: IO ()
 checkRuntimeFailures = do
-    selected <- getArgs
-    if not (null selected || "runtime-failures" `elem` selected) then pure () else do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-runtime-failures-"
       copyFixture "runtime-failures/Example.hs" (root </> "Example.hs")
@@ -440,8 +488,6 @@ checkRuntimeFailures = do
 
 checkDiagnostics :: IO ()
 checkDiagnostics = do
-    selected <- getArgs
-    if not (null selected || "diagnostics" `elem` selected) then pure () else do
       mapM_ (\(label, message) -> do
         tmp <- getTemporaryDirectory
         root <- createTempDirectory tmp "cost-translate-diagnostic-"
@@ -488,8 +534,6 @@ checkDiagnostics = do
 
 checkDemands :: IO ()
 checkDemands = do
-    selected <- getArgs
-    if not (null selected || "datatypes-and-demands" `elem` selected) then pure () else do
       tmp <- getTemporaryDirectory
       root <- createTempDirectory tmp "cost-translate-demands-"
       putStrLn ("Demand fixtures and logs: " ++ root)
@@ -520,10 +564,6 @@ runExample label = runAction label (label </> "Example.hs")
 
 runAction :: String -> FilePath -> Int -> Integer -> IO ()
 runAction label sourceFixture expected cost = do
-    selected <- getArgs
-    when (null selected || label `elem` selected) run
-  where
-   run = do
     tmp <- getTemporaryDirectory
     root <- createTempDirectory tmp "cost-translate-e2e-"
     putStrLn ("Fixtures and logs: " ++ root)

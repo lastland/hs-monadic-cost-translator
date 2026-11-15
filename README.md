@@ -105,8 +105,18 @@ The repository contains two test suites:
    ```
 
   The thunk tests check runtime reference identity and fresh-name progression as
-  well as values, laziness, and entry ticks. Test names are exact matches; check
-  the `PASS` output to confirm that the requested groups ran.
+  well as values, laziness, and entry ticks. Test names are exact matches. The
+  runner rejects unknown names before running any tests; no arguments runs the
+  full suite. `whole-module-failure` selects the whole-module rejection check.
+
+  The runtime-free `test-selection` group checks selector failures and requested
+  group execution through the runner's command line. `fixture-policy` parses the
+  runner source with GHC and checks that file writes use statically named `.log`
+  destinations. It also checks allowed and rejected examples from static fixtures.
+  This is a syntactic check of common file-writing/opening APIs, not general IO
+  analysis or name resolution.
+  The genuine AST-generation probe, `test/OutputAstProbe.hs`, is exempt because
+  generating Haskell is the behavior it tests.
 
   Fixed source modules and runtime drivers live in `test/cases/<case>/` as `.hs`
   files. The runner copies these packaged fixtures into an isolated temporary
@@ -139,9 +149,9 @@ hlint src app test/*.hs integration/probes integration/test-integration
 
 GitHub Actions runs independent lint and build/test jobs on pushes and pull
 requests, using GHC **9.10.3**, Cabal **3.16.1.0**, and HLint **3.10**. CI does not
-check out or provision `hs-pbt/`. It runs only the root suite's `diagnostics` and
-`generated-module-name-diagnostic` groups, plus the whole-module rejection check
-that the runner always executes.
+check out or provision `hs-pbt/`. It runs the root suite's runtime-free
+`diagnostics`, `generated-module-name-diagnostic`, `whole-module-failure`,
+`test-selection`, and `fixture-policy` groups.
 
 To reproduce these checks with the pinned tools:
 
@@ -151,7 +161,7 @@ cabal update
 cabal build exe:cost-translate test:cost-translate-test --ghc-options='-Wall -Werror'
 export PATH="$(dirname "$(cabal list-bin exe:cost-translate --ghc-options='-Wall -Werror')"):$PATH"
 cabal test cost-translate-test --ghc-options='-Wall -Werror' \
-  --test-options='diagnostics generated-module-name-diagnostic' \
+  --test-options='diagnostics generated-module-name-diagnostic whole-module-failure test-selection fixture-policy' \
   --test-show-details=direct
 ```
 
@@ -352,6 +362,11 @@ The translator rejects the following constructs, reporting source-located diagno
 
 - **Single-module boundary**: The translator processes exactly one source module at a time and does not traverse project dependencies.
 - **Local runtime requirement**: The translator does not bundle `MemoristANT`. Verification and compilation require an external GHC environment where `MemoristANT` and `QuickCheck` are available (provided via `hs-pbt/`).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). The external
+`hs-pbt/` checkout remains subject to its own license.
 
 ## AI Usage Declaration
 

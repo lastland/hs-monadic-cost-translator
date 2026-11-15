@@ -3,6 +3,8 @@ name:               cost-translate-integration
 version:            0.1.0.0
 synopsis:           External-runtime feasibility probes for cost-translate
 build-type:         Simple
+license:            MIT
+license-file:       LICENSE
 
 common settings
     default-language: GHC2021

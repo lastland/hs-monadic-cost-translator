@@ -3,7 +3,11 @@ name:               cost-translate
 version:            0.1.0.0
 synopsis:           Translate pure Haskell to a monadic cost interface (proof of concept)
 build-type:         Simple
+license:            MIT
+license-file:       LICENSE
 data-files:
+    test/Main.hs
+    test/OutputAstProbe.hs
     test/cases/**/*.hs
 extra-source-files:
     test/OutputAstProbe.hs
@@ -60,12 +64,15 @@ test-suite cost-translate-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
-    other-modules:    Paths_cost_translate
+    other-modules:    FixturePolicy
+                     Paths_cost_translate
     autogen-modules:  Paths_cost_translate
     build-depends:
         base,
         cost-translate,
         directory,
         filepath,
+        ghc,
+        ghc-paths,
         process,
         temporary

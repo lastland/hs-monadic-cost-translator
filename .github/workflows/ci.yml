@@ -54,5 +54,5 @@ jobs:
       - name: Run runtime-free root-suite checks
         run: >-
           cabal test cost-translate-test --ghc-options='-Wall -Werror'
-          --test-options='diagnostics generated-module-name-diagnostic'
+          --test-options='diagnostics generated-module-name-diagnostic whole-module-failure test-selection fixture-policy'
           --test-show-details=direct
