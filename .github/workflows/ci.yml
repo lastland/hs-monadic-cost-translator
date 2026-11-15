@@ -1,0 +1,58 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint translator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up HLint
+        uses: haskell-actions/hlint-setup@fe9cd1cd1af94a23900c06738e73f6ddb092966a # v2
+        with:
+          version: '3.10'
+      - name: Lint implementation (including suggestions)
+        run: hlint src app
+
+  build-and-test:
+    name: Build and runtime-free tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up GHC and Cabal
+        id: haskell
+        uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2
+        with:
+          ghc-version: '9.10.3'
+          cabal-version: '3.16.1.0'
+          cabal-update: 'false'
+      - name: Cache Cabal dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.haskell.outputs.cabal-store }}
+          key: cabal-${{ runner.os }}-${{ runner.arch }}-ghc-${{ steps.haskell.outputs.ghc-version }}-cabal-${{ steps.haskell.outputs.cabal-version }}-${{ hashFiles('cost-translate.cabal') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-${{ runner.arch }}-ghc-${{ steps.haskell.outputs.ghc-version }}-cabal-${{ steps.haskell.outputs.cabal-version }}-
+      - name: Update package index
+        run: cabal update
+      - name: Build translator and test runner with fatal warnings
+        run: cabal build exe:cost-translate test:cost-translate-test --ghc-options='-Wall -Werror'
+      - name: Add translator to PATH for CLI tests
+        run: |
+          translator=$(cabal list-bin exe:cost-translate --ghc-options='-Wall -Werror')
+          dirname "$translator" >> "$GITHUB_PATH"
+      - name: Run runtime-free root-suite checks
+        run: >-
+          cabal test cost-translate-test --ghc-options='-Wall -Werror'
+          --test-options='diagnostics generated-module-name-diagnostic'
+          --test-show-details=direct

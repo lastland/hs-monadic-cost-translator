@@ -135,6 +135,32 @@ To check code style and lint rules across both projects, run:
 hlint src app test/*.hs integration/probes integration/test-integration
 ```
 
+### Continuous Integration
+
+GitHub Actions runs independent lint and build/test jobs on pushes and pull
+requests, using GHC **9.10.3**, Cabal **3.16.1.0**, and HLint **3.10**. CI does not
+check out or provision `hs-pbt/`. It runs only the root suite's `diagnostics` and
+`generated-module-name-diagnostic` groups, plus the whole-module rejection check
+that the runner always executes.
+
+To reproduce these checks with the pinned tools:
+
+```sh
+hlint src app
+cabal update
+cabal build exe:cost-translate test:cost-translate-test --ghc-options='-Wall -Werror'
+export PATH="$(dirname "$(cabal list-bin exe:cost-translate --ghc-options='-Wall -Werror')"):$PATH"
+cabal test cost-translate-test --ghc-options='-Wall -Werror' \
+  --test-options='diagnostics generated-module-name-diagnostic' \
+  --test-show-details=direct
+```
+
+HLint findings (including suggestions) and compiler warnings fail CI. HLint
+checks only the translator implementation in `src/` and `app/`; the Cabal build
+checks the translator and test runner. CI excludes runtime-dependent tests, the
+integration project, and lint/warning checks on generated Haskell, fixtures, and
+examples. The full local suites described above remain available with `hs-pbt/`.
+
 ## Features
 
 ### Pipeline and Compilation Model
