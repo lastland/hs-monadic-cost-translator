@@ -3,6 +3,8 @@ name:               cost-translate
 version:            0.1.0.0
 synopsis:           Translate pure Haskell to a monadic cost interface (proof of concept)
 build-type:         Simple
+data-files:
+    test/cases/**/*.hs
 extra-source-files:
     test/OutputAstProbe.hs
     test/RuntimeFilterGate.hs
@@ -58,6 +60,8 @@ test-suite cost-translate-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
+    other-modules:    Paths_cost_translate
+    autogen-modules:  Paths_cost_translate
     build-depends:
         base,
         cost-translate,

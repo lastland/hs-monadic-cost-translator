@@ -108,6 +108,13 @@ The repository contains two test suites:
   well as values, laziness, and entry ticks. Test names are exact matches; check
   the `PASS` output to confirm that the requested groups ran.
 
+  Fixed source modules and runtime drivers live in `test/cases/<case>/` as `.hs`
+  files. The runner copies these packaged fixtures into an isolated temporary
+  directory, translates the source, then compiles and runs the driver there.
+  Generated modules and logs stay in that directory for diagnosis. Add fixed
+  Haskell programs as fixtures, not source strings in `test/Main.hs`; diagnostic
+  fixtures may intentionally contain invalid Haskell.
+
   `anf-demand` checks computed suspensions, explicit source-binding anchors,
   pattern/guard order, and scalar/Boolean demand. `thunk-matching-sharing` checks
   polymorphic and dictionary-sensitive references through matching, including
@@ -125,7 +132,7 @@ The repository contains two test suites:
 To check code style and lint rules across both projects, run:
 
 ```sh
-hlint src app test integration/probes integration/test-integration
+hlint src app test/*.hs integration/probes integration/test-integration
 ```
 
 ## Features
@@ -264,6 +271,7 @@ The repository organizes its implementation, CLI, tests, and documentation as fo
 | `src/Cost/Translate/Typed.hs` | Runs targeted desugaring to recover GHC inferred types for variable expressions and annotations. |
 | `src/Cost/Translate/Diagnostic.hs` | Defines phase-preserving diagnostic types (`UnsupportedSource`, `GeneratedModuleNameInvalid`). |
 | `test/Main.hs` | Root end-to-end test suite (`cost-translate-test`). |
+| `test/cases/` | Checked-in Haskell inputs and runtime drivers, including intentionally invalid diagnostic inputs. |
 | `test/RuntimeScanlCandidate.hs` | External runtime regression gate for demand-lazy `scanlM`. |
 | `test/RuntimePolymorphicSharingGate.hs` | External runtime regression gate for polymorphic thunk sharing. |
 | `test/RuntimeHigherKindedGate.hs` | External runtime regression gate for higher-kinded datatype conversions and demand generation. |
