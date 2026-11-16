@@ -18,6 +18,16 @@ is available directly. Run `python3 test/compiler_preflight.py` to check selecti
 and early rejection without a real compiler. The full semantic and integration
 suites still use the Stack commands below.
 
+## Translator Source Comments
+
+The translator implementation in `src/` and `app/` contains no ordinary comments
+or Haddock. `sh scripts/validate.sh` enforces this with GHC's lexer through
+`test/comment_policy.py`; the checker distinguishes comments from string literals
+and compiler pragmas, including nested block comments.
+
+This policy does not apply to tests, examples, or generated modules. Strings that
+the translator emits as generated comments remain unchanged.
+
 ## Execution Pipeline and Sandbox Isolation
 
 When `cost-translate-test` starts, `test/Main.hs` discovers all semantic fixtures (`discoverReferenceCases`) into a typed `Group` registry with no arbitrary `IO` callbacks and runs `validateReferenceCases` across the entire repository **before** executing any selected group. Even a single-case run fails immediately if any fixture directory, `Case.hs`, `Reference.hs`, or `.cabal` test-suite stanza violates policy.

@@ -161,7 +161,7 @@ _Avoid_: Type reconstruction, inference extraction
 
 ## Codegen
 
-The domain constructing parsed abstract syntax tree nodes directly, managing operator precedence structurally, rendering Haskell code, and maintaining layout invariants.
+The domain constructing parsed abstract syntax tree nodes directly, managing operator precedence structurally, rendering sectioned Haskell code, and maintaining layout invariants.
 
 ### Language
 
@@ -176,6 +176,10 @@ _Avoid_: Bracket insertion, precedence fixing
 **Pretty-Printing Pass**:
 The single-pass rendering of an assembled `HsModule GhcPs` into target Haskell source text via `Cost.Translate.Pretty.prettyModule`.
 _Avoid_: Code formatting, printing pipeline
+
+**Section Banner**:
+A standardized comment header inserted around declaration blocks in the rendered output to separate common runtime support from module-specific translations.
+_Avoid_: Divider, section header
 
 **Extension Tier**:
 A graduated set of language extension pragmas (`basicExtensions`, `polymorphicExtensions`, `reflectionExtensions`, `requiredExtensions`) enabled selectively according to module features.

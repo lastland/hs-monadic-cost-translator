@@ -1,27 +1,3 @@
--- | Per-source-datatype emission: representation, demand, and conversion
--- support.
---
--- For each source datatype, this module emits a @T@ representation and a
--- @D@ demand datatype with every field thunked (@M.Th@ / @M.ThD@); the
--- @Rep@, @Demand@, @LBoundDemand@, @DemandArb@ and representation-demand
--- marker instances; and the @reprM@ / @abstract@ / @fullDemand@
--- conversions, which refer back to the source module.
---
--- Demand generation (@GeneratedDemand@) matches the observed constructor
--- and distributes a finite budget over its fields — @Skip@ on exhaustion,
--- default 1:3 Skip:Need weighting — with shrinkers that stay compatible
--- with the observed demand.
---
--- Boundary rules: 'checkConversionExports' rejects non-exported source
--- constructors and types /before/ any candidate is generated or
--- typechecked, with the @generated conversions require the source module
--- to export ...@ diagnostic. Generated record selectors charge one entry
--- tick. Char is handled by local identity conversions because the runtime
--- has no Char instances.
---
--- 'renderType' renders source types under a suffix scheme: @\"T\"@ for
--- representation types, @\"D\"@ for demand types, and @\"\"@ for the
--- original source type (used in conversion evidence).
 module Cost.Translate.Datatypes (renderType, emitDatatypes, emitDatatypeSections, constructors, selectors, checkConversionExports) where
 
 import GHC
@@ -43,8 +19,6 @@ import Control.Monad (unless, when)
 import Data.List (nub, nubBy)
 import qualified Data.Set as Set
 
--- GHC exposes private declarations to the frontend, but conversion instances
--- in a separate generated module must obey the source's export boundary.
 checkConversionExports :: [Name] -> [TyCon] -> Either String ()
 checkConversionExports exported = mapM_ check
   where
@@ -58,8 +32,6 @@ checkConversionExports exported = mapM_ check
 renderType :: [TyCon] -> Type -> Either String O.Ty
 renderType = render "T"
 
--- An empty suffix denotes the original source type, used in conversion evidence.
--- Invisible kind arguments are never ordinary representation parameters.
 render :: String -> [TyCon] -> Type -> Either String O.Ty
 render suffix locals ty
     | Just v <- getTyVar_maybe ty = Right (O.t (getOccString v))
@@ -95,9 +67,6 @@ constructors types = [(getName c, generatedName "T" (getName c), length (dataCon
 selectors :: [TyCon] -> [(Name, String)]
 selectors types = [(flSelector f, generatedName "M" (flSelector f)) | t <- types, c <- tyConDataCons t, f <- dataConFieldLabels c]
 
--- The quantified application dictionaries include mapping equalities. Asking
--- for them explicitly also handles recursive/nested applications, where GHC
--- cannot infer an application dictionary from an equality wanted alone.
 applicationWitnesses :: String -> String -> [TyCon] -> [Type] -> Either String [O.Ty]
 applicationWitnesses cls suffix locals fields = mapM witness (nubBy same (concatMap applications fields))
   where
@@ -137,9 +106,6 @@ emitDatatypes types = do
     (common, support, declarations) <- emitDatatypeSections types
     pure (common ++ support ++ declarations)
 
--- Returns (common support shared by every generated module, kind-indexed
--- support, module-specific declarations) for the caller to order into the
--- output's labeled sections.
 emitDatatypeSections :: [TyCon] -> Either String ([O.Decl], [O.Decl], [O.Decl])
 emitDatatypeSections types = do
     support <- kindSupport types
@@ -266,10 +232,6 @@ selectorDefinitions types = concat <$> mapM forType types
         [] -> Nothing
     total tc name = all (elem name . map flSelector . dataConFieldLabels) (tyConDataCons tc)
 
--- The external runtime has no Char conversions. The generated module carries
--- the identity conversions locally rather than changing the runtime; Char
--- fields and comparisons stay plain Char values, like the runtime's own
--- Int/Bool scalars.
 charSupport :: [O.Decl]
 charSupport =
     [ O.instanceD (O.tc "M.Repr" [O.t "Char"])
@@ -285,7 +247,6 @@ charSupport =
         [O.val "arbDemandFrom" [] (O.v "pure")]
     ]
 
--- Local instances avoid replacing/orphaning the runtime's list-demand API.
 demandSupport :: [O.Decl]
 demandSupport =
     [ O.classD [O.tc "M.Demand" [a]] "GeneratedDemand" [O.b "a"]

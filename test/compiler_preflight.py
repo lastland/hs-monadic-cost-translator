@@ -96,6 +96,10 @@ class CompilerPreflightTests(unittest.TestCase):
             self.record("stack")
             + 'printf "%s\\n" "$STACK_COMPILER"\nexit "$STACK_STATUS"\n',
         )
+        self.write_tool(
+            self.tools / "python3",
+            self.record("python3") + 'exit "${POLICY_STATUS-0}"\n',
+        )
 
     @staticmethod
     def record(name):
@@ -159,6 +163,7 @@ class CompilerPreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(diagnostic, result.stderr)
         self.assertEqual(self.calls("cabal"), [])
+        self.assertEqual(self.calls("python3"), [])
 
     def assert_selected(self, result, compiler, build=True):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -166,7 +171,13 @@ class CompilerPreflightTests(unittest.TestCase):
         calls = self.calls("cabal")
         if not build:
             self.assertEqual(calls, [])
+            self.assertEqual(self.calls("python3"), [])
             return
+        self.assertEqual(
+            self.calls("python3"),
+            [[str(self.tools / "python3"), str(ROOT / "test" / "comment_policy.py"),
+              "--ghc", str(compiler), "--self-test", "--check"]],
+        )
         self.assertEqual([call[4] for call in calls], ["build", "list-bin", "test"])
         flags = [
             "--with-compiler=" + str(compiler),
@@ -323,8 +334,22 @@ class CompilerPreflightTests(unittest.TestCase):
         compiler = self.installation()
         self.env["GHC"] = str(compiler)
         (self.tools / "cabal").unlink()
+        (self.tools / "python3").unlink()
         self.assert_selected(self.run_script("--check-compiler"), compiler, build=False)
         self.assertEqual(self.calls("stack"), [])
+
+    def test_comment_policy_failure_stops_validation_before_cabal(self):
+        self.env["GHC"] = str(self.installation())
+        self.env["POLICY_STATUS"] = "19"
+        result = self.run_script()
+        self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
+        self.assertEqual(len(self.calls("python3")), 1)
+        self.assertEqual(self.calls("cabal"), [])
+
+    def test_full_validation_requires_python(self):
+        self.env["GHC"] = str(self.installation())
+        (self.tools / "python3").unlink()
+        self.assert_rejected(self.run_script(), "python3 is required for validation")
 
     def test_cabal_build_and_list_bin_failures_stop_validation(self):
         self.env["GHC"] = str(self.installation())

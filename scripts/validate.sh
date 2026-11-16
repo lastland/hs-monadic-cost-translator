@@ -78,7 +78,9 @@ printf 'Validating with GHC %s (%s)\n' "$version" "$compiler"
 [ "$#" -eq 0 ] || exit 0
 
 command -v cabal >/dev/null 2>&1 || die 'cabal is required for validation'
+command -v python3 >/dev/null 2>&1 || die 'python3 is required for validation'
 cd "$root"
+python3 "$root/test/comment_policy.py" --ghc "$compiler" --self-test --check
 cabal_with_ghc() {
     cabal "$@" --with-compiler="$compiler" --with-hc-pkg="$package_tool" --ghc-options='-Wall -Werror'
 }

@@ -1,19 +1,3 @@
--- | Shared-thunk allocation for top-level and local value bindings.
---
--- 'constrainedVariables' selects the generalized variables occurring in
--- dictionary predicates: only those distinguish instantiations, so
--- unrelated polymorphic parameters keep sharing one runtime name.
--- 'sharingPaths' projects those variables' positions as promoted paths
--- through the inferred result type, so @Typeable@ evidence is required
--- only for the selected types.
---
--- 'sharingSupport' emits the allocation primitives. @sharedAt@ reuses a
--- single reserved name. @sharedAtBy@ keys on a structural
--- @Reflection.SomeTypeRep@ encoding qualified constructors, kind arguments
--- and applications; negative delimiters reserve a disjoint subtree of
--- runtime names and keep keys prefix-free even for nested shared values.
--- The reflection machinery is emitted only when dictionary-constrained
--- values exist.
 module Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport) where
 
 import GHC
@@ -28,18 +12,12 @@ import Data.List (minimumBy)
 import Data.Ord (comparing)
 import qualified Cost.Translate.Output as O
 
--- Only generalized variables occurring in dictionary predicates distinguish
--- instantiations. Captured dictionaries already belong to this allocation;
--- unrelated polymorphic result parameters must keep sharing the same name.
 constrainedVariables :: Type -> [TyVar]
 constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predicates]
   where
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
 
--- Project dictionaries' type parameters from the inferred result. Projection
--- happens in a type family, so Typeable is needed only for the selected types,
--- not for unconstrained parameters elsewhere in the result.
 sharingPaths :: Type -> Either String (Maybe O.Ty)
 sharingPaths ty = case constrainedVariables ty of
     [] -> Right Nothing
@@ -80,8 +58,6 @@ sharingSupport reflected =
         (O.arrows [O.tc "Proxy" [O.t "paths"],m (th a),th (O.t "()")] (th a))))
     , O.val "sharedAtBy" (map O.p ["_","action","anchor"]) $ O.letE
         [O.val "key" [] (O.call "sharingTypeKey" [O.call "Reflection.someTypeRep" [O.ann (O.v "Proxy") (O.tc "Proxy" [keys])]]),
-    -- Allocator components are nonnegative. Negative delimiters reserve a
-    -- disjoint subtree and make keys prefix-free even for nested shared values.
          O.val "name" [] (O.caseE (O.call "M.tname" [O.v "anchor"])
             [(O.conP "M.ThName" [O.p "ancestry"], O.call "M.ThName" [O.op "NE.:|" (O.integer 0)
                 (O.op ":" (O.integer (-1)) (O.op "++" (O.v "key") (O.op ":" (O.integer (-2)) (O.call "NE.toList" [O.v "ancestry"]))))])])]

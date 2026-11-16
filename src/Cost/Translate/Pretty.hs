@@ -1,5 +1,5 @@
 module Cost.Translate.Pretty
-    ( prettyModule, generatedPragma, renderModule
+    ( Section(..), prettyModule, generatedPragma, renderModule
     , basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions
     ) where
 
@@ -17,15 +17,28 @@ import GHC
 import Data.Char (isUpper, isAlphaNum)
 import Data.List (intercalate, intersect, partition, sortOn)
 
-renderModule :: DynFlags -> HsModule GhcPs -> String
-renderModule flags = renderModuleWith flags generatedExtensions
+data Section = Section
+    { sectionCommon :: Bool
+    , sectionName :: String
+    , sectionDeclarations :: [Decl]
+    }
 
-renderModuleWith :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> String
-renderModuleWith flags extensions ast = renderPreamble extensions ++ showSDoc renderedFlags body ++ "\n"
+renderModule :: DynFlags -> HsModule GhcPs -> String
+renderModule flags ast = renderPreamble generatedExtensions ++ showSDoc renderedFlags body ++ "\n"
   where
     renderedFlags = foldl xopt_set flags generatedExtensions
     body = renderBody ast [renderDeclarations declarations | not (null declarations)]
     declarations = hsmodDecls ast
+
+renderSectionedModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> [Section] -> String
+renderSectionedModule flags extensions ast sections = renderPreamble extensions ++
+    showSDoc renderedFlags (renderBody ast [separated (map renderSection sections) | not (null sections)]) ++ "\n"
+  where
+    renderedFlags = foldl xopt_set flags generatedExtensions
+    renderSection (Section common name declarations) = separated (text banner : declarationBlock)
+      where
+        banner = "-- ==== " ++ (if common then "Common: " else "Module-specific: ") ++ name ++ " ===="
+        declarationBlock = [renderDeclarations declarations | not (null declarations)]
 
 renderBody :: HsModule GhcPs -> [SDoc] -> SDoc
 renderBody ast declarations = separated (moduleLine : imports ++ declarations)
@@ -71,10 +84,10 @@ declarationNames located = case unLoc located of
 renderPreamble :: [Extension.Extension] -> String
 renderPreamble extensions = intercalate "\n" (filter (not . null) [generatedPragma extensions, generatedOptions]) ++ "\n\n"
 
-prettyModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> Either Diagnostic String
-prettyModule flags extensions ast = if maybe False (validModule . moduleNameString . unLoc) (hsmodName ast)
+prettyModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> [Section] -> Either Diagnostic String
+prettyModule flags extensions ast sections = if maybe False (validModule . moduleNameString . unLoc) (hsmodName ast)
     then Right code else Left (GeneratedModuleNameInvalid code)
-  where code = renderModuleWith flags extensions ast
+  where code = renderSectionedModule flags extensions ast sections
 
 validModule :: String -> Bool
 validModule name = case break (== '.') name of
@@ -112,4 +125,5 @@ requiredExtensions :: Bool -> [Extension.Extension]
 requiredExtensions magicHash = if magicHash then generatedExtensions else filter (/= Extension.MagicHash) generatedExtensions
 
 generatedOptions :: String
-generatedOptions = "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"
+generatedOptions = "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints.\n" ++
+    "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"

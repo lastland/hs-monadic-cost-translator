@@ -1,37 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
--- | The core translation pass: one GHC session turns one source module into
--- the text of one instrumented module.
---
--- Session shape: 'generate' configures @backend = noBackend@ and
--- @ghcLink = NoLink@, so no optimizer or linker runs before
--- instrumentation. The pipeline is parse, typecheck, desugar; translation
--- works on the /renamed/ syntax. The desugared Core is read in exactly two
--- places, and never emitted from: type evidence via
--- "Cost.Translate.Typed" ('Typed.expressionTypes') and the scalar
--- comparison gate via "Cost.Translate.Validation"
--- ('validateComparisons').
---
--- Whole-module discipline: any unsupported construct fails the entire
--- translation with a source-located message rather than being skipped;
--- imports are whitelisted to @Prelude@ and
--- @Memorist.Example.NewtonRaphson@; library replacements match by resolved
--- imported identity, not name spelling.
---
--- Assembly: 'emitModule' builds the common sections (sharing and scalar
--- support, foldable support, datatype conversion and demand support) and
--- the module-specific sections (source datatypes and conversions,
--- translated bindings). When top-level value bindings exist, the output
--- exports a @Bindings@ record and @initialize :: MemoristM Bindings@
--- instead of standalone exported bindings.
---
--- Invariants carried through emission:
---
--- * The 'NamePlan' pre-pass allocates every fresh generated identifier up
---   front, so emission never invents a name and collisions cannot occur.
--- * Each translated binding ticks once on entry.
--- * Pattern and guard failure continuations are let-bound actions, not
---   thunks ('shareAction'), so only the selected branch runs them and the
---   binding adds neither allocation nor ticks.
 module Cost.Translate.Frontend (generate) where
 
 import GHC
@@ -49,7 +16,7 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Pretty
-    (prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
+    (Section(..), prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport)
@@ -74,8 +41,6 @@ import GHC.Types.SourceText (SourceText(NoSourceText))
 import GHC.Data.FastString (unpackFS)
 import System.FilePath (takeDirectory)
 
--- Work from the renamed syntax, after GHC has checked and inferred the source.
--- In particular, no simplifier or optimiser runs before instrumentation.
 generate :: FilePath -> String -> IO (Either Diagnostic String, String)
 generate file targetModule = runGhc (Just libdir) $ do
     flags <- getSessionDynFlags
@@ -113,8 +78,8 @@ generate file targetModule = runGhc (Just libdir) $ do
                             mapM_ checkDeclaration (hsmodDecls (unLoc (parsedSource checked)))
                             checkConversionExports (modInfoExports (tm_checked_module_info checked)) datatypes
                             validateComparisons (mg_binds (coreModule desugared))
-                    in (first UnsupportedSource (validation >> result) >>= \(ast, extensions) ->
-                        prettyModule flags extensions ast, logs)
+                    in (first UnsupportedSource (validation >> result) >>= \(ast, sections, extensions) ->
+                        prettyModule flags extensions ast sections, logs)
                 Nothing -> (Left (UnsupportedSource (file ++ ": GHC did not retain renamed source")), "")
         _ -> pure (Left (UnsupportedSource (file ++ ": expected one source module")), "")
 
@@ -122,8 +87,6 @@ checkImport :: LImportDecl GhcRn -> Either String ()
 checkImport located = unless (moduleNameString (unLoc (ideclName (unLoc located))) `elem` ["Prelude", "Memorist.Example.NewtonRaphson"]) $
     Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported import")
 
--- Fail rather than silently omitting any as-yet unimplemented declaration.
--- These are implementation gaps, not additional restrictions on the PRD.
 checkDeclaration :: LHsDecl GhcPs -> Either String ()
 checkDeclaration located = case unLoc located of
     ValD {} -> Right ()
@@ -132,7 +95,7 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Extension.Extension]), String)
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
 emitModule target source magicHash datatypes types literalTypes expressionTypes group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
@@ -168,12 +131,18 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++ enabled
-                outputDeclarations = sharingSupport hasReflection ++ scalarSupport ++ foldableSupport ++
-                    datatypeSupport ++ kindSupport ++ datatypeDeclarations ++ declarations
+                common = [ Section True "sharing and scalar support" (sharingSupport hasReflection ++ scalarSupport)
+                         , Section True "foldable support" foldableSupport
+                         , Section True "datatype conversion and demand support" datatypeSupport
+                         ]
+                specific = [ Section False ("source datatypes and conversions from " ++ source) (kindSupport ++ datatypeDeclarations)
+                           , Section False ("translated bindings from " ++ source) declarations
+                           ]
+                sections = common ++ specific
                 usedQualifiers = Set.fromList
-                    [moduleNameString qualifier | Qual qualifier _ <- collect outputDeclarations :: [RdrName]]
+                    [moduleNameString qualifier | Qual qualifier _ <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
                 usedUnqualified = Set.fromList
-                    [occNameString occurrence | Unqual occurrence <- collect outputDeclarations :: [RdrName]]
+                    [occNameString occurrence | Unqual occurrence <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
                 hidden = Set.toList (Set.filter isPreludeExport (Set.fromList
                     ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- binds] ++ map snd (selectors datatypes))))
                 qualifiedImport name alias = [O.importD name (Just alias) | alias `Set.member` usedQualifiers]
@@ -187,7 +156,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                            , qualifiedImport "Memorist.Example.ListInf" "MI"
                            , qualifiedImport "Memorist.Example.NewtonRaphson" "MN"
                            , qualifiedImport "Memorist.Data.List" "L" ]
-            pure (O.moduleD target imports outputDeclarations, extensions)
+            pure (O.moduleD target imports [], sections, extensions)
     in (result, logs)
   where
     isPreludeExport name = name `elem`
@@ -203,9 +172,6 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     reservedNames = Set.fromList ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- topLevelBinds] ++
         map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
-    -- Bindings whose sharing is dictionary-sensitive: zero-arity bindings
-    -- with constrained inferred types, closed under use by other bindings.
-    -- These alone gain Typeable evidence and sharedAtBy allocation.
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
     closure known = let next = known `Set.union` Set.fromList
@@ -231,15 +197,12 @@ bindingError located = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": " ++ d
             showSDocOneLine defaultSDocContext { sdocSuppressUniques = True } (ppr pat) ++ "; only named value bindings are supported"
         _ -> "unsupported binding form: " ++ showSDocUnsafe (ppr located)
 
--- Signature/demand diagnostics reach users through ADR-0002 locations.
 locatedAt :: SrcSpan -> Either String a -> Either String a
 locatedAt srcSpan = either (Left . ((showSDocUnsafe (ppr srcSpan) ++ ": ") ++)) Right
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)
 
--- Descend into application arguments and the head, never intermediate HsApp
--- nodes: f x y is one saturated call, not also a partial application of f x.
 expressions :: Data a => a -> [LHsExpr GhcRn]
 expressions value = case cast value of
     Just expr -> expr : case unLoc expr of
@@ -376,8 +339,6 @@ emitBind outer binding = case unLoc binding of
         pure (O.val fname (map O.p params) (O.doE [O.thenS tick] body))
     _ -> bindingError binding
 
--- Only adjacent unary equations with distinct outer constructors share an
--- inspection. Variable/wildcard equations and repeated heads remain barriers.
 emitMatches :: Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
 emitMatches _ _ [] = Right (failureExpr "source pattern match failure")
 emitMatches env [thunk] matches@(located@(L _ match) : _)
@@ -395,8 +356,6 @@ emitMatches env [thunk] matches@(located@(L _ match) : _)
             alternatives = [(O.conP con (map O.p fields), body) | (con,fields,body) <- branches] ++
                 [(O.p "_", failure) | not (exhaustiveConstructors env heads)]
             current = O.doE [O.bind matched (O.call "M.force" [thunk])] (O.caseE (O.v matched) alternatives)
-        -- Disjoint heads cannot match after a field/guard failure, so every
-        -- branch can use the same ordinary-action continuation after the group.
         pure (if any ((== next) . occNameString . rdrNameOcc) (collect current :: [RdrName])
               then shareAction next fallback current else current)
 emitMatches env args (located@(L _ match) : rest) = do
@@ -467,8 +426,6 @@ emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
     go scope (L _ (LetStmt _ locals) : gs) next = withLocals scope locals (\scope' -> go scope' gs next)
     go _ _ _ = Left "unsupported guard statement"
 
--- Bind a failure continuation as an action, not a thunk. Only the selected
--- branch executes it; the binding introduces neither allocation nor ticks.
 shareAction :: String -> O.Expr -> O.Expr -> O.Expr
 shareAction name action = O.letE [O.val name [] action]
 
@@ -508,9 +465,6 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
             value = if isJust negative then O.call "negate" [positive] else positive
         pure (literalCase value body)
     LitPat _ (HsChar _ c) -> continue env >>= \body -> pure (literalCase (O.char c) body)
-    -- A string literal pattern is its sequence of character literals: forcing
-    -- proceeds cell by cell and stops at the first mismatch, exactly like the
-    -- source comparison, instead of comparing thunk representations.
     LitPat _ (HsString _ text) ->
         matchPatternsAt env ((thunk, noLocA (ListPat noExtField
             (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text))), path) : rest) success failure
@@ -526,8 +480,6 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
             O.caseE (O.v matchName) ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
     matchName = Map.findWithDefault "matched" path (plannedMatches (namePlan env))
 
--- Extract representation fields once, then use the same source-ordered field
--- traversal for a standalone constructor test or an alternative in a group.
 constructorFields :: Env -> O.Expr -> LPat GhcRn -> String -> (Env -> Either String O.Expr) -> O.Expr -> Either String (String, [String], O.Expr)
 constructorFields env thunk located path success failure = case unLoc located of
     ParPat _ nested -> constructorFields env thunk nested path success failure
@@ -545,9 +497,6 @@ constructorFields env thunk located path success failure = case unLoc located of
                 let slots = [fieldSlot env (fieldPath path i) pattern' | (i,pattern') <- zip [0..]
                         [maybe (noLocA (WildPat noExtField)) (hfbRHS . unLoc) (lookup label
                             [(fieldName (unLoc (hfbLHS (unLoc f))), f) | f <- rec_flds fields]) | label <- labels]]
-                -- Extract in representation order, but perform each supplied
-                -- subpattern in source order. Reordering these tests can force
-                -- a bottom in a field that a preceding mismatch would skip.
                 ordered <- mapM (\f -> do
                     let field = unLoc f
                     (slot,index) <- maybe (Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unknown record pattern field")) Right
@@ -748,9 +697,6 @@ emitExpr env located = case unLoc located of
         pure (lazyArguments (h ++ zipWith suspendArgument (drop 1 names) [t]) (returnConstructor "L.ConsT"))
     unsupported = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported expression " ++ showSDocUnsafe (ppr located))
 
--- Reuse source bindings at argument, field and matching boundaries, without
--- changing the forcing behavior of emitExpr. A thunk reference can also be a
--- shared factory application rather than a variable in the generated syntax.
 emitThunk :: Env -> String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)
 emitThunk env name located = case reuse located of
     Just thunk -> Right ([], thunk)
@@ -764,12 +710,6 @@ emitThunk env name located = case reuse located of
             annotateExpression env "M.Th" (not (hasFreshAnnotationVariables signature)) expression <$> reuse nested
         _ -> Nothing
 
--- Keep reused scoped annotations at the matching boundary so a nested forall
--- with the same spelling cannot capture their type variables. A plain let binds
--- the existing reference without M.lazy, M.force or ticks; ordinary references
--- and computed subjects keep their existing paths. Protect both matching
--- boundaries before storing aliases in Thunk entries; other Thunk entries are
--- unannotated names or factory references.
 withMatchThunk :: Env -> String -> LHsExpr GhcRn -> (O.Expr -> Either String O.Expr) -> Either String O.Expr
 withMatchThunk env name located finish = do
     (statements, reference) <- emitThunk env name located
@@ -783,8 +723,6 @@ withMatchThunk env name located finish = do
             (not (hasFreshAnnotationVariables signature) && scopedEvidence expression) || scopedAnnotation nested
         _ -> False
     scopedEvidence expression = case Map.lookup (showSDocUnsafe (ppr (getLocA expression))) (inferredExpressions env) of
-        -- renderType emits no type binders. Exclude free source kind variables
-        -- that disappear when invisible arguments are omitted in the target.
         Just (True, ty) -> any (isTvOcc . rdrNameOcc) (collect ty :: [RdrName])
         _ -> False
 
@@ -1043,19 +981,16 @@ resolve env name = case lookupEnv name env of
 
 primitive :: Name -> Maybe Binding
 primitive name
-    | builtin name "GHC.Internal.Num" "negate" = Just (adapter ["ta"]
-        (O.doE [O.bind "a" (force "ta")] (O.ret (O.call "negate" [O.v "a"]))))
-    | any (\m -> builtin name m occurrence) modules = Just (binary
+    | any (\m -> builtin name m occurrence) modules = Just (adapter
         (O.doE [O.bind "a" (force "ta"), O.bind "b" (force "tb")] (O.ret (O.op occurrence (O.v "a") (O.v "b")))))
-    | any (\m -> builtin name m "&&") ["GHC.Classes","GHC.Internal.Classes"] = Just (binary
+    | any (\m -> builtin name m "&&") ["GHC.Classes","GHC.Internal.Classes"] = Just (adapter
         (O.doE [O.bind "a" (force "ta")] (O.ifE (O.v "a") (force "tb") (O.ret (O.v "False")))))
-    | any (\m -> builtin name m "||") ["GHC.Classes","GHC.Internal.Classes"] = Just (binary
+    | any (\m -> builtin name m "||") ["GHC.Classes","GHC.Internal.Classes"] = Just (adapter
         (O.doE [O.bind "a" (force "ta")] (O.ifE (O.v "a") (O.ret (O.v "True")) (force "tb"))))
     | otherwise = Nothing
   where
     occurrence = getOccString name
-    adapter arguments body = Adapter (O.lam (map O.p arguments) body) (length arguments)
-    binary = adapter ["ta","tb"]
+    adapter body = Adapter (O.lam (map O.p ["ta","tb"]) body) 2
     force n = O.call "M.force" [O.v n]
     modules
         | occurrence `elem` ["+","-","*"] = ["GHC.Internal.Num"]

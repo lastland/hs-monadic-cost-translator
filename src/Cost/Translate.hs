@@ -1,20 +1,3 @@
--- | Public lifecycle for one whole-module translation.
---
--- 'translateFile' runs, in order:
---
--- 1. Generate the translated module text (see "Cost.Translate.Frontend").
--- 2. Write @OUTPUT.hs.log@: resolved identities, arities, and diagnostics.
--- 3. Typecheck the candidate with an external
---    @ghc -fno-code -package MemoristANT -package QuickCheck@, from a
---    temporary directory next to the requested output.
--- 4. Publish by renaming the candidate over the output — on success only.
---
--- GHC failures are categorized as @setup error: target modules are
--- unavailable in GHC's environment@ (the target packages cannot be found)
--- or @generated-code type error@ (a translator defect); the failed
--- candidate's text is appended to the log. Failure never touches the output
--- file, so an older successful output is never clobbered — only the log
--- reveals what happened.
 module Cost.Translate (translateFile) where
 
 import Control.Exception (SomeException, displayException, try)

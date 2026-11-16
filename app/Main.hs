@@ -1,7 +1,3 @@
--- | Command-line shape: exactly two arguments, @SOURCE.hs OUTPUT.hs@; any
--- other argument count is a usage error. The executable is a thin wrapper
--- over 'Cost.Translate.translateFile', exiting nonzero on translation
--- failure.
 module Main (main) where
 
 import Cost.Translate (translateFile)

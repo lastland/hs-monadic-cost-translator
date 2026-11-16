@@ -1,0 +1,3 @@
+module Example where
+{- An explanation {- with nesting -} ends here. -}
+value = 1

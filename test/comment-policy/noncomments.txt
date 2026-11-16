@@ -1,0 +1,15 @@
+#!/usr/bin/env runghc
+{-# LANGUAGE CPP, MagicHash, TemplateHaskell #-}
+{-# OPTIONS_GHC -Wno-missing-signatures #-}
+module Example where
+#if 1
+text = "-- {- -} -- | {-|"
+characters = ['-', '{', '}', '\'']
+primitive = "--"#
+quoted = [| "{-" |]
+banner = "-- ==== " ++ "Common: " ++ "sharing" ++ " ===="
+generatedOptions = "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints.\n"
+{-# INLINE text #-}
+#else
+other = "#endif"
+#endif

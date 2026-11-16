@@ -1,12 +1,3 @@
--- | The only module constructing @GhcPs@ syntax for the generated output.
---
--- Small structural builders; no source fragments or parser calls live
--- here: callers exchange GHC expressions, types and declarations. Every
--- name argument is a single identifier — 'v', 'p', 't', qualified with an
--- optional uppercase module prefix split off by 'nameParts' — never a
--- Haskell expression string. Application and operator construction handle
--- precedence centrally via @parenthesizeHsExpr@ (and the corresponding
--- type/pattern combinators), so callers pass unparenthesized pieces.
 module Cost.Translate.Output where
 
 import GHC hiding (Pat, Stmt)
@@ -26,7 +17,6 @@ type Decl = LHsDecl GhcPs
 type Stmt = ExprLStmt GhcPs
 type Binder = LHsTyVarBndr () GhcPs
 
--- The strings accepted here are single names, never Haskell expressions.
 rdr :: NameSpace -> String -> RdrName
 rdr ns text = case nameParts text of
     (Just qualifier,occ) -> mkRdrQual qualifier (mkOccName ns occ)
@@ -93,8 +83,6 @@ thenS = noLocA . mkBodyStmt
 
 doE :: [Stmt] -> Expr -> Expr
 doE [] body = body
--- Splice only a directly exposed ordinary do, retaining its existing LastStmt.
--- Do not look through parentheses, annotations, lets or other do flavours.
 doE statements (L _ (HsDo _ (DoExpr Nothing) inner)) =
     noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ unLoc inner)))
 doE statements body = noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ [noLocA (mkLastStmt final)])))
@@ -102,8 +90,6 @@ doE statements body = noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ [no
 
 letE :: [Decl] -> Expr -> Expr
 letE [] body = body
--- Keep the declaration group's scope over the same body statements.
--- Only rewrite a bare ordinary do; wrappers and other do flavours stay intact.
 letE declarations (L _ (HsDo _ (DoExpr Nothing) statements)) =
     noLocA (mkHsDo (DoExpr Nothing) (noLocA
         (noLocA (LetStmt noAnn (locals declarations)) : unLoc statements)))

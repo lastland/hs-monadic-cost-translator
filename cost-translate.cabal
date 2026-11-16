@@ -30,6 +30,9 @@ extra-source-files:
     scripts/stack-compiler.yaml
     scripts/stack-test.sh
     scripts/validate.sh
+    test/comment_policy.py
+    test/comment-policy/*.txt
+    test/CommentPolicy.hs
     test/compiler_preflight.py
     test/stack_test.py
     test/OutputAstProbe.hs

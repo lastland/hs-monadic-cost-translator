@@ -1,16 +1,3 @@
--- | Application and composition translation.
---
--- 'spine' flattens an application into head and arguments, 'view'
--- classifies the head as a named callable or a composition, and
--- 'callArity' validates supplied argument counts against resolved calling
--- conventions — rejecting function aliases and computed function results
--- without a validated convention.
---
--- 'emitCallable' prepares captured argument thunks once, and
--- specializes a composition when its first argument arrives, so the right
--- operand's application (for example @g x@) is computed once even when the
--- result is reused as a callback (see the inline notes on 'emitCallable').
--- Adapters built here add no ticks; invoked functions keep their own.
 module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine) where
 
 import GHC
@@ -61,10 +48,6 @@ callArity resolve expr = do
     unless (length args <= count) (failure expr "application exceeds the validated argument count")
     pure (count - length args)
 
--- Prepare captured arguments once, reusing existing thunks, then specialize a
--- composition when its first argument arrives. Flattening it into a lambda and
--- only allocating the intermediate at saturation would charge g x twice in
--- map ((f . g) x) ys.
 emitCallable :: (Int -> String) -> Resolver -> (String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)) -> LHsExpr GhcRn -> Either String O.Expr
 emitCallable freshName resolve renderThunk expr = do
     _ <- callArity resolve expr
@@ -86,11 +69,6 @@ emitCallable freshName resolve renderThunk expr = do
         pure (prefix ++ concatMap fst arguments ++ more, applied)
     specialize (Call name n captured) args = pure ([], Call name (n-length args) (captured ++ args))
     specialize composed@(Compose _ _) [] = pure ([], composed)
-    -- The first input flows through the right operand once. A unary right
-    -- operand saturates and its data result is suspended as a thunk. A
-    -- multi-arity right operand stays partially applied: its function value
-    -- is suspended instead and consumed by the left operand's convention,
-    -- such as a mapped callback. Either way it is captured exactly once.
     specialize (Compose f g) (input:rest) = do
         (pg,cg) <- specialize g [input]
         gAction <- finish cg
