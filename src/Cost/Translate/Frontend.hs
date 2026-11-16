@@ -49,7 +49,7 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Pretty
-    (Section(..), prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
+    (prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport)
@@ -113,8 +113,8 @@ generate file targetModule = runGhc (Just libdir) $ do
                             mapM_ checkDeclaration (hsmodDecls (unLoc (parsedSource checked)))
                             checkConversionExports (modInfoExports (tm_checked_module_info checked)) datatypes
                             validateComparisons (mg_binds (coreModule desugared))
-                    in (first UnsupportedSource (validation >> result) >>= \(ast, sections, extensions) ->
-                        prettyModule flags extensions ast sections, logs)
+                    in (first UnsupportedSource (validation >> result) >>= \(ast, extensions) ->
+                        prettyModule flags extensions ast, logs)
                 Nothing -> (Left (UnsupportedSource (file ++ ": GHC did not retain renamed source")), "")
         _ -> pure (Left (UnsupportedSource (file ++ ": expected one source module")), "")
 
@@ -132,7 +132,7 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Extension.Extension]), String)
 emitModule target source magicHash datatypes types literalTypes expressionTypes group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
@@ -168,18 +168,12 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++ enabled
-                common = [ Section True "sharing and scalar support" (sharingSupport hasReflection ++ scalarSupport)
-                         , Section True "foldable support" foldableSupport
-                         , Section True "datatype conversion and demand support" datatypeSupport
-                         ]
-                specific = [ Section False ("source datatypes and conversions from " ++ source) (kindSupport ++ datatypeDeclarations)
-                           , Section False ("translated bindings from " ++ source) declarations
-                           ]
-                sections = common ++ specific
+                outputDeclarations = sharingSupport hasReflection ++ scalarSupport ++ foldableSupport ++
+                    datatypeSupport ++ kindSupport ++ datatypeDeclarations ++ declarations
                 usedQualifiers = Set.fromList
-                    [moduleNameString qualifier | Qual qualifier _ <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
+                    [moduleNameString qualifier | Qual qualifier _ <- collect outputDeclarations :: [RdrName]]
                 usedUnqualified = Set.fromList
-                    [occNameString occurrence | Unqual occurrence <- collect (concatMap sectionDeclarations sections) :: [RdrName]]
+                    [occNameString occurrence | Unqual occurrence <- collect outputDeclarations :: [RdrName]]
                 hidden = Set.toList (Set.filter isPreludeExport (Set.fromList
                     ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- binds] ++ map snd (selectors datatypes))))
                 qualifiedImport name alias = [O.importD name (Just alias) | alias `Set.member` usedQualifiers]
@@ -193,7 +187,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                            , qualifiedImport "Memorist.Example.ListInf" "MI"
                            , qualifiedImport "Memorist.Example.NewtonRaphson" "MN"
                            , qualifiedImport "Memorist.Data.List" "L" ]
-            pure (O.moduleD target imports [], sections, extensions)
+            pure (O.moduleD target imports outputDeclarations, extensions)
     in (result, logs)
   where
     isPreludeExport name = name `elem`

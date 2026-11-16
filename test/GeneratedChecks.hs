@@ -158,16 +158,9 @@ checkGeneratedWarnings root = do
         fail "generated local names do not preserve readable source names"
     when (any (`isInfixOf` generated) ["_arg", "argument_", "partial0", "arg0'"]) $
         fail "generated output contains opaque local names"
-    let banners = filter ("-- ==== " `isPrefixOf`) (lines generated)
-        expectedBanners =
-            [ "-- ==== Common: sharing and scalar support ===="
-            , "-- ==== Common: foldable support ===="
-            , "-- ==== Common: datatype conversion and demand support ===="
-            , "-- ==== Module-specific: source datatypes and conversions from Example ===="
-            , "-- ==== Module-specific: translated bindings from Example ===="
-            ]
-    unless (banners == expectedBanners) $
-        fail ("wrong generated section banners: " ++ show banners)
+    let comments = filter ("--" `isPrefixOf`) (lines generated)
+    unless (null comments) $
+        fail ("generated output contains ordinary comments: " ++ show comments)
     unless ("{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}" `isInfixOf` generated) $
         fail "generated warning suppressions are missing"
     checkWarningsAndHLint root "warnings.log"

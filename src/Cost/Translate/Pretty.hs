@@ -1,22 +1,5 @@
--- | The single rendering pass from assembled @GhcPs@ syntax to output
--- text. GHC syntax is already structural, so nothing is reparsed (see the
--- inline note on 'prettyModule'); 'Section' banners
--- (@-- ==== Common: ... ====@ and @-- ==== Module-specific: ... ====@) and
--- blank-line separation are inserted around rendered declarations. Imports
--- are grouped plain then qualified and each group sorted by module name;
--- declarations are grouped so signatures stay with their bindings.
---
--- The exported extension tiers escalate with the module's needs —
--- 'basicExtensions', 'polymorphicExtensions', 'reflectionExtensions', and
--- 'requiredExtensions' (which adds @MagicHash@ only when the source used
--- it) — and 'generatedOptions' emits the fixed warning suppressions
--- (@-Wno-orphans -Wno-simplifiable-class-constraints@).
---
--- 'prettyModule' validates the output module name and fails with
--- @GeneratedModuleNameInvalid@, carrying the candidate text, instead of
--- publishing unrenderable output.
 module Cost.Translate.Pretty
-    ( Section(..), prettyModule, generatedPragma, renderModule
+    ( prettyModule, generatedPragma, renderModule
     , basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions
     ) where
 
@@ -34,28 +17,15 @@ import GHC
 import Data.Char (isUpper, isAlphaNum)
 import Data.List (intercalate, intersect, partition, sortOn)
 
-data Section = Section
-    { sectionCommon :: Bool
-    , sectionName :: String
-    , sectionDeclarations :: [Decl]
-    }
-
 renderModule :: DynFlags -> HsModule GhcPs -> String
-renderModule flags ast = renderPreamble generatedExtensions ++ showSDoc renderedFlags body ++ "\n"
+renderModule flags = renderModuleWith flags generatedExtensions
+
+renderModuleWith :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> String
+renderModuleWith flags extensions ast = renderPreamble extensions ++ showSDoc renderedFlags body ++ "\n"
   where
     renderedFlags = foldl xopt_set flags generatedExtensions
     body = renderBody ast [renderDeclarations declarations | not (null declarations)]
     declarations = hsmodDecls ast
-
-renderSectionedModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> [Section] -> String
-renderSectionedModule flags extensions ast sections = renderPreamble extensions ++
-    showSDoc renderedFlags (renderBody ast [separated (map renderSection sections) | not (null sections)]) ++ "\n"
-  where
-    renderedFlags = foldl xopt_set flags generatedExtensions
-    renderSection (Section common name declarations) = separated (text banner : declarationBlock)
-      where
-        banner = "-- ==== " ++ (if common then "Common: " else "Module-specific: ") ++ name ++ " ===="
-        declarationBlock = [renderDeclarations declarations | not (null declarations)]
 
 renderBody :: HsModule GhcPs -> [SDoc] -> SDoc
 renderBody ast declarations = separated (moduleLine : imports ++ declarations)
@@ -101,13 +71,10 @@ declarationNames located = case unLoc located of
 renderPreamble :: [Extension.Extension] -> String
 renderPreamble extensions = intercalate "\n" (filter (not . null) [generatedPragma extensions, generatedOptions]) ++ "\n\n"
 
--- The only output rendering pass. GHC syntax is already structural; there is
--- no reparse of assembled source. ModuleName itself accepts arbitrary strings,
--- so validate that token before publication (including the CLI's bad-name case).
-prettyModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> [Section] -> Either Diagnostic String
-prettyModule flags extensions ast sections = if maybe False (validModule . moduleNameString . unLoc) (hsmodName ast)
+prettyModule :: DynFlags -> [Extension.Extension] -> HsModule GhcPs -> Either Diagnostic String
+prettyModule flags extensions ast = if maybe False (validModule . moduleNameString . unLoc) (hsmodName ast)
     then Right code else Left (GeneratedModuleNameInvalid code)
-  where code = renderSectionedModule flags extensions ast sections
+  where code = renderModuleWith flags extensions ast
 
 validModule :: String -> Bool
 validModule name = case break (== '.') name of
@@ -145,5 +112,4 @@ requiredExtensions :: Bool -> [Extension.Extension]
 requiredExtensions magicHash = if magicHash then generatedExtensions else filter (/= Extension.MagicHash) generatedExtensions
 
 generatedOptions :: String
-generatedOptions = "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints.\n" ++
-    "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"
+generatedOptions = "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"
