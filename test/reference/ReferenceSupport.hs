@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Werror #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}

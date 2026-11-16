@@ -27,31 +27,52 @@ import Paths_cost_translate (getDataFileName)
 import qualified ReferenceRunner
 import System.Directory (findExecutable)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeFileName)
 import System.Process (readProcessWithExitCode)
 
 -- These checks inspect the artifacts already compared with the handwritten
 -- reference. They neither translate again nor run fixture-specific drivers.
 checkGeneratedArtifacts :: String -> ReferenceRunner.Artifacts -> IO ()
-checkGeneratedArtifacts label artifacts = case label of
-    "generated-warnings" -> checkGeneratedWarnings root
-    "generated-warnings-minimal" -> checkMinimalWarnings root
-    "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
-    "anf-demand" -> checkTerminalDoBlocks output
-    "pattern-scaling" -> do
-        generated <- readFile output
-        unless (length generated < 40000) $
-            fail ("fallback duplication: " ++ show (length generated) ++ " bytes")
-    "foldr-arity-four-partial" -> do
-        logText <- readFile (output ++ ".log")
-        unless ("Example.add4: supplied 2 / arity 4; partial adapter" `isInfixOf` logText &&
-                not ("Example.add4: supplied 1" `isInfixOf` logText) &&
-                not ("foldr: supplied 1" `isInfixOf` logText)) $
-            fail "arity log must describe maximal applications, not intermediate AST spines"
-    _ -> pure ()
+checkGeneratedArtifacts label artifacts = do
+    when ("manual-" `isPrefixOf` label) (checkManualSourceWarnings artifacts)
+    case label of
+        "generated-warnings" -> checkGeneratedWarnings root
+        "generated-warnings-minimal" -> checkMinimalWarnings root
+        "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
+        "manual-constructor-equations" -> checkOuterListInspection output
+        "anf-demand" -> checkTerminalDoBlocks output
+        "manual-terminal-do" -> checkTerminalDoBlocks output
+        "pattern-scaling" -> do
+            generated <- readFile output
+            unless (length generated < 40000) $
+                fail ("fallback duplication: " ++ show (length generated) ++ " bytes")
+        "foldr-arity-four-partial" -> do
+            logText <- readFile (output ++ ".log")
+            unless ("Example.add4: supplied 2 / arity 4; partial adapter" `isInfixOf` logText &&
+                    not ("Example.add4: supplied 1" `isInfixOf` logText) &&
+                    not ("foldr: supplied 1" `isInfixOf` logText)) $
+                fail "arity log must describe maximal applications, not intermediate AST spines"
+        _ -> pure ()
   where
     root = ReferenceRunner.generatedDirectory artifacts
     output = root </> "Generated.hs"
+
+-- Check maintained example sources separately. Generated-output warning checks
+-- retain their existing, explicitly bounded generated-warnings* scope.
+checkManualSourceWarnings :: ReferenceRunner.Artifacts -> IO ()
+checkManualSourceWarnings artifacts = do
+    let root = ReferenceRunner.generatedDirectory artifacts
+        source = root </> takeFileName (ReferenceRunner.sourceFixture artifacts)
+    (compiled, out, err) <- readProcessWithExitCode "ghc"
+        ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
+         "-outputdir", root </> "source-objects", source] ""
+    writeFile (root </> "source-warnings.log") (out ++ err)
+    unless (compiled == ExitSuccess) (fail (out ++ err))
+    hlint <- findExecutable "hlint"
+    command <- maybe (fail "manual example lint requires hlint on PATH") pure hlint
+    (linted, lintOut, lintErr) <- readProcessWithExitCode command [source] ""
+    writeFile (root </> "source-hlint.log") (lintOut ++ lintErr)
+    unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
 
 checkOuterListInspection :: FilePath -> IO ()
 checkOuterListInspection output = do

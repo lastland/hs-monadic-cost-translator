@@ -63,11 +63,12 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
 
 stageSource :: FilePath -> FilePath -> IO ()
 stageSource fixture sandbox = do
-    copyCase fixture (sandbox </> "Example.hs")
+    source <- getDataFileName fixture
+    copyFile source (sandbox </> "Example.hs")
     -- Nonstandard fixture filenames can declare a different source module, e.g.
     -- Minimal. Keep that filename available to both identically compiled cases.
     when (takeFileName fixture /= "Example.hs") $
-        copyCase fixture (sandbox </> takeFileName fixture)
+        copyFile source (sandbox </> takeFileName fixture)
 
 copyCase :: FilePath -> FilePath -> IO ()
 copyCase fixture destination = do

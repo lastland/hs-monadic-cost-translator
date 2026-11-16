@@ -32,6 +32,35 @@ For each semantic fixture, `ReferenceRunner` creates two isolated sandboxes unde
 
 Compiling the two workers in separate sandboxes ensures that both sides can declare `module Generated` and define representation types (`*T`), demand types (`*D`), and typeclass instances (`Repr`, `Demand`, `FoldableT`) without symbol or orphan-instance collisions, while still executing the exact same `Case.hs`. Dynamic linking (`-dynamic`) keeps temporary executable disk usage modest and leaves the root library and `cost-translate-test` executable free of `MemoristANT` and `QuickCheck` Cabal build dependencies.
 
+## Manual Regression Examples
+
+The five `manual-*` cases use the actual sources in [`examples/`](../examples/README.md),
+not fixture copies. `ReferencePolicy.manualExamples` binds each original fix to
+its example and selector. The mandatory inventory gate rejects missing examples,
+missing reference cases, source substitutions, and missing fix/source/selector
+documentation. Its negative self-tests run under `fixture-policy` without the
+target runtime.
+
+Source paths returned by discovery are Cabal data-file paths. `ReferenceRunner`
+stages each source under its declared filename as well as `Example.hs`, retaining
+support for the original fixture aliases. The policy permits each manual case
+to import only its registered source module. Cabal packages the five explicit
+source paths; it does not collect generated outputs from `examples/`.
+
+After semantic comparison, these five maintained sources must compile with
+`-Wall -Werror` and pass HLint; HLint must be available. `ScopedAnnotations.hs`
+suppresses the intentional type-variable-shadowing warning, and inline HLint
+exceptions preserve the regression syntax. The generated-output warning checks
+remain bounded to `generated-warnings*`; the new constructor and terminal-`do`
+examples also run their respective structural AST checks. All five shared
+reference-support modules enable fatal warnings per module on every semantic
+run, without extending warning flags to the generated implementations.
+
+Existing static fixtures deliberately exercise partial `head`/`tail` calls and
+redundant guard equations. Their `-Wx-partial` and `-Woverlapping-patterns`
+warnings remain fixture exceptions; the maintained runner/support modules and
+the five new source examples do not share this exception.
+
 ## Probe Catalog API (`ReferenceSupport`)
 
 `Case.hs` exports a static catalog `probes :: [Probe]` built from constructors in `test/reference/ReferenceSupport.hs` (see `test/reference/Protocol.hs` for `Sample` fields and `test/reference/Compare.hs` for boundary inputs and seeds):

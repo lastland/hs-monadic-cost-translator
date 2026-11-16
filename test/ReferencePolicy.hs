@@ -45,7 +45,7 @@ import GHC.Types.SourceText (il_value)
 import GHC.Utils.Outputable (ppr)
 import Paths_cost_translate (getDataFileName)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
-import System.FilePath ((</>), splitDirectories, takeDirectory, takeExtension)
+import System.FilePath ((</>), makeRelative, splitDirectories, takeBaseName, takeDirectory, takeExtension, takeFileName)
 
 diagnosticFixtures :: [(String, String)]
 diagnosticFixtures =
@@ -88,6 +88,39 @@ sourceAliases =
 sourceOnlyDirectories :: [String]
 sourceOnlyDirectories =
     ["thunk-matching", "scoped-factory-case-shadow", "scoped-factory-guard-shadow"]
+
+-- These are the actual user-facing sources, not copies in test/cases. Keep one
+-- reference case per fix, and require its source and manual instructions even
+-- when a runtime-free selector is the only requested test.
+manualExamples :: [(String, String, FilePath)]
+manualExamples =
+    [("b5f21ad", "manual-thunk-arguments", "examples/ThunkArguments.hs")
+    ,("446f2c1", "manual-thunk-matching", "examples/ThunkMatching.hs")
+    ,("f615f65", "manual-scoped-annotations", "examples/ScopedAnnotations.hs")
+    ,("dcf55d1", "manual-constructor-equations", "examples/ConstructorEquations.hs")
+    ,("d892e2f", "manual-terminal-do", "examples/TerminalDo.hs")]
+
+manualExampleProblems :: [FilePath] -> [(String, [FilePath])] -> String -> [String]
+manualExampleProblems files cases instructions = concat
+    [[problem source "missing manual example" | source `notElem` files] ++
+     [problem source "manual example must be the registered semantic source"
+        | lookup label cases /= Just [source]] ++
+     [problem source "missing fix/source/selector row in examples/README.md"
+        | not (any (\line -> all (`isInfixOf` line) [commit, takeFileName source, label])
+                   (lines instructions))]
+    | (commit, label, source) <- manualExamples]
+
+checkManualExamples :: [(String, [FilePath])] -> IO [String]
+checkManualExamples cases = do
+    files <- fmap concat $ forM manualExamples $ \(_, _, source) -> do
+        path <- getDataFileName source
+        exists <- doesFileExist path
+        symbolic <- if exists then pathIsSymbolicLink path else pure False
+        pure [source | exists && not symbolic]
+    instructionsPath <- getDataFileName "examples/README.md"
+    exists <- doesFileExist instructionsPath
+    instructions <- if exists then readFile instructionsPath else pure ""
+    pure (manualExampleProblems files cases instructions)
 
 excludedFixtures :: [(String, [FilePath])]
 excludedFixtures = infrastructureFixtures ++
@@ -134,16 +167,22 @@ inventoryCases complete (Inventory directories files filesystemProblems) = (case
     labels = sort . nub $ [d | d <- topDirectories,
         d `notElem` fixed ++ sourceOnlyDirectories ++ unregistered] ++
         [label | complete, (label, _) <- sourceAliases]
-    sources label = sort (fromMaybe [label </> "Example.hs"] (lookup label sourceAliases))
+    sources label = case [source | (_, registered, source) <- manualExamples, registered == label] of
+        [] -> map ("test/cases" </>) . sort $
+            fromMaybe [label </> "Example.hs"] (lookup label sourceAliases)
+        examples -> examples
     cases = [(label, sources label) | label <- labels]
-    semanticFiles = concat [[label </> "Case.hs", label </> "Reference.hs"] ++ paths
+    semanticFiles = concat [[label </> "Case.hs", label </> "Reference.hs"] ++
+                           [makeRelative "test/cases" source | source <- paths,
+                            splitDirectories "test/cases" `isPrefixOf` splitDirectories source]
                            | (label, paths) <- cases]
     fixedFiles = [label </> file | (label, paths) <- excludedFixtures,
                                   complete || label `elem` topDirectories, file <- paths]
     providerFiles = [label </> "Example.hs" | label <- sourceOnlyDirectories,
                      complete || label `elem` topDirectories]
     expected = nub (semanticFiles ++ fixedFiles ++ providerFiles)
-    requiredDirs = [d | complete, d <- fixed ++ sourceOnlyDirectories ++ map fst sourceAliases]
+    requiredDirs = [d | complete, d <- fixed ++ sourceOnlyDirectories ++ map fst sourceAliases ++
+                                      [label | (_, label, _) <- manualExamples]]
     problems = filesystemProblems ++
         [problem d "unregistered diagnostic or infrastructure fixture" | d <- unregistered] ++
         [problem d "unaccounted nested fixture directory" | d <- directories,
@@ -175,7 +214,8 @@ discoverReferenceCases = do
                 checkModule fileFlags CaseFile generated (directory </> "Case.hs") ast)) caseModule
         pure (referenceProblems ++ caseProblems)
     registrationProblems <- checkRegistrations
-    failProblems (inventoryProblems ++ sourceProblems ++ registrationProblems)
+    exampleProblems <- checkManualExamples cases
+    failProblems (inventoryProblems ++ sourceProblems ++ registrationProblems ++ exampleProblems)
     pure cases
 
 validateReferenceCases :: IO ()
@@ -287,9 +327,11 @@ checkModule flags role generated file ast =
     names = map (moduleNameString . unLoc . ideclName) imports
     -- Minimal is the declared source of this one explicit source alias, not an
     -- arbitrary second local module. The paired ANF sources both declare Example.
-    sourceModule = if file `elem` ["test/cases/generated-warnings-minimal/Case.hs",
-                                  "test/cases/generated-warnings-minimal/Reference.hs"]
-                   then "Minimal" else "Example"
+    sourceModule = fromMaybe defaultSourceModule $ lookup (takeDirectory file)
+        [("test/cases" </> label, takeBaseName source) | (_, label, source) <- manualExamples]
+    defaultSourceModule = if file `elem` ["test/cases/generated-warnings-minimal/Case.hs",
+                                         "test/cases/generated-warnings-minimal/Reference.hs"]
+                          then "Minimal" else "Example"
     sourceQualifiers = [maybe sourceModule (moduleNameString . unLoc) (ideclAs declaration)
                        | declaration <- imports, moduleNameString (unLoc (ideclName declaration)) == sourceModule]
     requiredImports = if role == CaseFile then ["Generated", "ReferenceSupport"] else []
@@ -1003,6 +1045,20 @@ checkReferencePolicyTests = do
     mapM_ expectManifest manifestSpecimens
     mapM_ expectRegistrations
         [("registration-valid", []), ("registration-nested", ["unregistered Cabal manifest"])]
+    let exampleFiles = [source | (_, _, source) <- manualExamples]
+        exampleCases = [(label, [source]) | (_, label, source) <- manualExamples]
+        exampleInstructions = unlines [unwords [commit, label, source] | (commit, label, source) <- manualExamples]
+    expect "manual-examples/valid" [] (manualExampleProblems exampleFiles exampleCases exampleInstructions)
+    expect "manual-examples/missing-source" ["missing manual example"]
+        (manualExampleProblems [] exampleCases exampleInstructions)
+    expect "manual-examples/missing-case" ["registered semantic source"]
+        (manualExampleProblems exampleFiles [] exampleInstructions)
+    expect "manual-examples/copied-source" ["registered semantic source"]
+        (manualExampleProblems exampleFiles
+            [(label, ["test/cases/copied/Example.hs"]) | (_, label, _) <- manualExamples]
+            exampleInstructions)
+    expect "manual-examples/missing-instructions" ["missing fix/source/selector row"]
+        (manualExampleProblems exampleFiles exampleCases "")
     putStrLn "PASS: reference-policy / parsed static catalogs, isolated references, fail-closed inventory and test registrations"
   where
     expectSource flags (role, specimen, fragments) = do

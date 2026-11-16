@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Werror #-}
 module Observe (main) where
 
 import qualified Case

@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Werror #-}
 -- | The wire format is shared by both isolated observers and the comparator.
 module Protocol
     ( Sample(..), Result(..), Outcome(..), Plan(..), DemandBatch(..)

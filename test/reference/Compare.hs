@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Werror #-}
 module Compare (main) where
 
 import Control.Exception (bracket)
@@ -60,10 +61,11 @@ compareSample actual expected sample = do
 -- 25. The reference never draws: it replays the actual plans and complete shrink
 -- lists received from the generated worker.
 checkDemandBudgets :: Server -> Server -> IO ()
-checkDemandBudgets actual expected = do
-    let sample = head boundaries
-    initial <- draw actual 0 20261114 sample
-    unless (null initial) $ mapM_ (checkBudget sample) [0..25]
+checkDemandBudgets actual expected = case boundaries of
+    [] -> fail "comparison boundary schedule is empty"
+    sample:_ -> do
+        initial <- draw actual 0 20261114 sample
+        unless (null initial) $ mapM_ (checkBudget sample) [0..25]
   where
     checkBudget sample budget = do
         (_, generated, reference) <- observeAt actual expected budget (20261114 + budget) sample

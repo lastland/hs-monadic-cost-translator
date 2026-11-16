@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Werror #-}
 {-# LANGUAGE GADTs, TypeFamilies #-}
 -- | Generated demands are choices made by the generated worker, not by the
 -- reference. Capture those choices once and replay the exact finite plans in
