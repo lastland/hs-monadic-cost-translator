@@ -382,10 +382,29 @@ emitBind outer binding = case unLoc binding of
         pure (O.val fname (map O.p params) (O.doE [O.thenS tick] body))
     _ -> bindingError binding
 
--- A failure continuation per equation preserves the order even when variable
--- and constructor patterns occur in the same column. No column regrouping.
+-- Only adjacent unary equations with distinct outer constructors share an
+-- inspection. Variable/wildcard equations and repeated heads remain barriers.
 emitMatches :: Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
 emitMatches _ _ [] = Right (failureExpr "source pattern match failure")
+emitMatches env [thunk] matches@(located@(L _ match) : _)
+    | [pattern'] <- m_pats match,
+      (group@(_:_:_), rest) <- adjacentConstructors env matches = do
+        fallback <- emitMatches env [thunk] rest
+        let next = actionName env "nextEquation" (getLocA located)
+            failure = O.v next
+            matched = Map.findWithDefault "matched" (patternRoot pattern' 0) (plannedMatches (namePlan env))
+        branches <- sequence [constructorFields env thunk pat (patternRoot pat 0)
+            (\scope -> withLocals scope (grhssLocalBinds (m_grhss equation)) $ \scope' ->
+                emitGuards scope' (grhssGRHSs (m_grhss equation)) failure) failure |
+            L _ equation <- group, pat <- m_pats equation]
+        let heads = [con | (con,_,_) <- branches]
+            alternatives = [(O.conP con (map O.p fields), body) | (con,fields,body) <- branches] ++
+                [(O.p "_", failure) | not (exhaustiveConstructors env heads)]
+            current = O.doE [O.bind matched (O.call "M.force" [thunk])] (O.caseE (O.v matched) alternatives)
+        -- Disjoint heads cannot match after a field/guard failure, so every
+        -- branch can use the same ordinary-action continuation after the group.
+        pure (if any ((== next) . occNameString . rdrNameOcc) (collect current :: [RdrName])
+              then shareAction next fallback current else current)
 emitMatches env args (located@(L _ match) : rest) = do
     fallback <- emitMatches env args rest
     let next = actionName env "nextEquation" (getLocA located)
@@ -394,6 +413,43 @@ emitMatches env args (located@(L _ match) : rest) = do
         (\scope -> withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' ->
             emitGuards scope' (grhssGRHSs (m_grhss match)) failure) failure
     pure (if null rest then current else shareAction next fallback current)
+
+adjacentConstructors :: Env -> [LMatch GhcRn (LHsExpr GhcRn)] -> ([LMatch GhcRn (LHsExpr GhcRn)], [LMatch GhcRn (LHsExpr GhcRn)])
+adjacentConstructors env = go Set.empty
+  where
+    go seen (located@(L _ match) : rest)
+        | [pattern'] <- m_pats match, Just con <- patternConstructor env pattern', con `Set.notMember` seen =
+            let (group, remaining) = go (Set.insert con seen) rest in (located : group, remaining)
+    go _ rest = ([], rest)
+
+patternConstructor :: Env -> LPat GhcRn -> Maybe String
+patternConstructor env (L _ pattern') = case pattern' of
+    ParPat _ nested -> patternConstructor env nested
+    AsPat _ _ nested -> patternConstructor env nested
+    TuplePat _ [_,_] Boxed -> Just "M.PairT"
+    ListPat _ [] -> Just "L.NilT"
+    ListPat {} -> Just "L.ConsT"
+    ConPat _ name details -> case details of
+        PrefixCon {} -> resolvedConstructor env (unLoc name)
+        InfixCon {} -> resolvedConstructor env (unLoc name)
+        RecCon {} | Just Constructor {} <- lookupEnv (unLoc name) env -> resolvedConstructor env (unLoc name)
+        _ -> Nothing
+    _ -> Nothing
+
+resolvedConstructor :: Env -> Name -> Maybe String
+resolvedConstructor env name
+    | Just (Constructor con _ _) <- resolve env name = Just con
+    | builtin name "GHC.Types" ":" = Just "L.ConsT"
+    | builtin name "GHC.Types" "[]" = Just "L.NilT"
+    | builtin name "GHC.Types" "True" = Just "True"
+    | builtin name "GHC.Types" "False" = Just "False"
+    | otherwise = Nothing
+
+exhaustiveConstructors :: Env -> [String] -> Bool
+exhaustiveConstructors env heads = any (all (`elem` heads)) families
+  where
+    families = [["L.NilT", "L.ConsT"], ["M.NothingT", "M.JustT"], ["False", "True"]] ++
+        [cons | tycon <- sourceDatatypes env, let cons = [con | (_,con,_,_) <- constructors [tycon]], not (null cons)]
 
 emitGuards :: Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
 emitGuards _ [] fallback = Right fallback
@@ -450,9 +506,8 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
     WildPat _ -> continue env
     ParPat _ pat -> matchPatternsAt env ((thunk, pat, path) : rest) success failure
     AsPat _ name pat -> matchPatternsAt (insertEnv (unLoc name) (Thunk thunk) env) ((thunk, pat, path) : rest) success failure
-    TuplePat _ [a,b] Boxed -> constructor "M.PairT" [a,b]
-    ListPat _ [] -> constructor "L.NilT" []
-    ListPat ext (p:ps) -> constructor "L.ConsT" [p, L (getLoc located) (ListPat ext ps)]
+    TuplePat _ [_,_] Boxed -> constructorCase
+    ListPat {} -> constructorCase
     NPat _ literal negative _ -> do
         body <- continue env
         let positive = O.overLit (ol_val (unLoc literal))
@@ -465,15 +520,30 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
     LitPat _ (HsString _ text) ->
         matchPatternsAt env ((thunk, noLocA (ListPat noExtField
             (map (noLocA . LitPat noExtField . HsChar NoSourceText) (unpackFS text))), path) : rest) success failure
+    ConPat {} -> constructorCase
+    _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": pattern not implemented yet")
+  where
+    continue scope = matchPatternsAt scope rest success failure
+    literalCase value body = O.doE [O.bind matchName (O.call "M.force" [thunk])]
+        (O.ifE (O.op "==" (O.v matchName) value) body failure)
+    constructorCase = do
+        (con, fields, body) <- constructorFields env thunk located path continue failure
+        pure $ O.doE [O.bind matchName (O.call "M.force" [thunk])] $
+            O.caseE (O.v matchName) ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
+    matchName = Map.findWithDefault "matched" path (plannedMatches (namePlan env))
+
+-- Extract representation fields once, then use the same source-ordered field
+-- traversal for a standalone constructor test or an alternative in a group.
+constructorFields :: Env -> O.Expr -> LPat GhcRn -> String -> (Env -> Either String O.Expr) -> O.Expr -> Either String (String, [String], O.Expr)
+constructorFields env thunk located path success failure = case unLoc located of
+    ParPat _ nested -> constructorFields env thunk nested path success failure
+    AsPat _ name nested -> constructorFields (insertEnv (unLoc name) (Thunk thunk) env) thunk nested path success failure
+    TuplePat _ [a,b] Boxed -> constructor "M.PairT" [a,b]
+    ListPat _ [] -> constructor "L.NilT" []
+    ListPat ext (p:ps) -> constructor "L.ConsT" [p, L (getLoc located) (ListPat ext ps)]
     ConPat _ name details -> do
-        con <- case () of
-            _ | Just (Constructor c _ _) <- lookupEnv (unLoc name) env -> Right c
-            _ | builtin (unLoc name) "GHC.Types" ":" -> Right "L.ConsT"
-              | builtin (unLoc name) "GHC.Types" "[]" -> Right "L.NilT"
-              | builtin (unLoc name) "GHC.Types" "True" -> Right "True"
-              | builtin (unLoc name) "GHC.Types" "False" -> Right "False"
-              | Just (Constructor c _ _) <- resolve env (unLoc name) -> Right c
-              | otherwise -> Left (showSDocUnsafe (ppr (unLoc name)) ++ ": constructor pattern not implemented yet")
+        con <- maybe (Left (showSDocUnsafe (ppr (unLoc name)) ++ ": constructor pattern not implemented yet")) Right
+            (resolvedConstructor env (unLoc name))
         case details of
             PrefixCon _ pats -> constructor con pats
             InfixCon a b -> constructor con [a,b]
@@ -489,27 +559,21 @@ matchPatternsAt env ((thunk, located, path) : rest) success failure = case unLoc
                     (slot,index) <- maybe (Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unknown record pattern field")) Right
                         (lookup (fieldName (unLoc (hfbLHS field))) (zip labels (zip slots [0..])))
                     pure (slot, hfbRHS field, fieldPath path index)) (rec_flds fields)
-                body <- matchPatternsAt env ([(O.v slot, pat, field) | (slot, pat, field) <- ordered] ++ rest) success failure
+                body <- matchPatternsAt env [(O.v slot, pat, field) | (slot, pat, field) <- ordered] success failure
                 let used = [slot | (slot, pat, _) <- ordered, not (wildcard pat)]
-                pure (constructorCase con [if slot `elem` used then slot else "_" | slot <- slots] body)
+                pure (con, [if slot `elem` used then slot else "_" | slot <- slots], body)
             _ -> Left "unsupported record pattern"
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": pattern not implemented yet")
   where
-    continue scope = matchPatternsAt scope rest success failure
-    literalCase value body = O.doE [O.bind matchName (O.call "M.force" [thunk])]
-        (O.ifE (O.op "==" (O.v matchName) value) body failure)
     constructor con pats = do
         let paths = [fieldPath path i | i <- [0 .. length pats - 1]]
             fields = zipWith (fieldSlot env) paths pats
-        body <- matchPatternsAt env (zip3 (map O.v fields) pats paths ++ rest) success failure
-        pure (constructorCase con fields body)
+        body <- matchPatternsAt env (zip3 (map O.v fields) pats paths) success failure
+        pure (con, fields, body)
     wildcard pat = case unLoc pat of
         WildPat _ -> True
         ParPat _ nested -> wildcard nested
         _ -> False
-    constructorCase con fields body = O.doE [O.bind matchName (O.call "M.force" [thunk])] $
-        O.caseE (O.v matchName) ((O.conP con (map O.p fields), body) : [(O.p "_",failure) | con `Set.notMember` singleConstructors env])
-    matchName = Map.findWithDefault "matched" path (plannedMatches (namePlan env))
 
 patternRoot :: LPat GhcRn -> Int -> String
 patternRoot pattern' index = actionKey "pattern" (getLocA pattern') ++ "_" ++ show index

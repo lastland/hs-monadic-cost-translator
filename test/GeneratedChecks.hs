@@ -2,7 +2,26 @@ module GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources) whe
 
 import Control.Monad (unless, when)
 import Data.Char (isSpace)
+import Data.Data (Data, cast, gmapQ)
 import Data.List (isInfixOf, isPrefixOf, sort)
+import Data.Maybe (maybeToList)
+import GHC
+    ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), HsExpr(..), LHsExpr
+    , MatchGroup(..), Match(..), Pat(..), getSessionDynFlags, moduleNameString
+    , runGhc, unLoc
+    )
+import GHC.Data.FastString (mkFastString)
+import GHC.Data.StringBuffer (stringToStringBuffer)
+import GHC.Driver.Config.Parser (initParserOpts)
+import GHC.Driver.Session (parseDynamicFilePragma)
+import GHC.Paths (libdir)
+import qualified GHC.Parser as Parser
+import GHC.Parser.Header (getOptions)
+import GHC.Parser.Lexer (ParseResult(..), getPsErrorMessages, initParserState, unP)
+import GHC.Types.Error (isEmptyMessages)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.Name.Reader (RdrName(..), rdrNameOcc)
+import GHC.Types.SrcLoc (GenLocated(..), mkRealSrcLoc)
 import Paths_cost_translate (getDataFileName)
 import qualified ReferenceRunner
 import System.Directory (findExecutable)
@@ -16,6 +35,7 @@ checkGeneratedArtifacts :: String -> ReferenceRunner.Artifacts -> IO ()
 checkGeneratedArtifacts label artifacts = case label of
     "generated-warnings" -> checkGeneratedWarnings root
     "generated-warnings-minimal" -> checkMinimalWarnings root
+    "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
     "pattern-scaling" -> do
         generated <- readFile output
         unless (length generated < 40000) $
@@ -30,6 +50,58 @@ checkGeneratedArtifacts label artifacts = case label of
   where
     root = ReferenceRunner.generatedDirectory artifacts
     output = root </> "Generated.hs"
+
+checkOuterListInspection :: FilePath -> IO ()
+checkOuterListInspection output = do
+    binding <- parseGeneratedBinding output "chooseM"
+    parameter <- case m_pats binding of
+        [L _ (VarPat _ name)] -> pure (unLoc name)
+        _ -> fail "chooseM: expected one outer-list parameter"
+    let expressions = collectAst (m_grhss binding) :: [HsExpr GhcPs]
+        forces = [() | HsApp _ function argument <- expressions,
+            Just (Qual qualifier occurrence) <- [expressionVariable function],
+            moduleNameString qualifier == "M", occNameString occurrence == "force",
+            expressionVariable argument == Just parameter]
+        cases = [() | HsCase _ _ matches <- expressions,
+            let constructors = [occNameString (rdrNameOcc (unLoc name)) |
+                    L _ alternative <- unLoc (mg_alts matches),
+                    [L _ (ConPat _ name _)] <- [m_pats alternative]],
+            all (`elem` constructors) ["NilT", "ConsT"]]
+    unless (length forces == 1 && length cases == 1) $
+        fail ("chooseM: expected one outer-list force and one case containing NilT and ConsT; found " ++
+              show (length forces) ++ " forces and " ++ show (length cases) ++ " cases")
+
+-- Parse the published artifact, including its extension pragmas, without loading
+-- imports. Checks select a binding structurally, not by layout or fresh names.
+parseGeneratedBinding :: FilePath -> String -> IO (Match GhcPs (LHsExpr GhcPs))
+parseGeneratedBinding output target = do
+    source <- readFile output
+    flags <- runGhc (Just libdir) getSessionDynFlags
+    let buffer = stringToStringBuffer source
+        (headerErrors, options) = getOptions (initParserOpts flags) buffer output
+    unless (isEmptyMessages headerErrors) (fail (output ++ ": cannot parse generated pragmas"))
+    (fileFlags, leftovers, _) <- parseDynamicFilePragma flags options
+    unless (null leftovers) (fail (output ++ ": unrecognized generated file options"))
+    ast <- case unP Parser.parseModule (initParserState (initParserOpts fileFlags)
+                    buffer (mkRealSrcLoc (mkFastString output) 1 1)) of
+        POk state parsed | isEmptyMessages (getPsErrorMessages state) -> pure (unLoc parsed)
+        _ -> fail (output ++ ": cannot parse generated Haskell")
+    case [unLoc alternative | L _ (ValD _ (FunBind _ name matches)) <- hsmodDecls ast,
+            occNameString (rdrNameOcc (unLoc name)) == target,
+            alternative <- unLoc (mg_alts matches)] of
+        [binding] -> pure binding
+        bindings -> fail (output ++ ": expected one equation for " ++ target ++
+                          ", found " ++ show (length bindings))
+
+collectAst :: (Data a, Data b) => b -> [a]
+collectAst value = maybeToList (cast value) ++ concat (gmapQ collectAst value)
+
+expressionVariable :: LHsExpr GhcPs -> Maybe RdrName
+expressionVariable expression = case unLoc expression of
+    HsVar _ name -> Just (unLoc name)
+    HsPar _ nested -> expressionVariable nested
+    ExprWithTySig _ nested _ -> expressionVariable nested
+    _ -> Nothing
 
 checkGeneratedWarnings :: FilePath -> IO ()
 checkGeneratedWarnings root = do
