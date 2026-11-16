@@ -2,7 +2,7 @@ module Cost.Translate.Datatypes (renderType, emitDatatypes, emitDatatypeSections
 
 import GHC
 import GHC.Types.Basic (Boxity(..))
-import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon)
+import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon, unitTyCon)
 import GHC.Core.Type (getTyVar_maybe, splitTyConApp_maybe, splitAppTy_maybe, isNumLitTy, isStrLitTy, isCharLitTy)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCon (isPromotedDataCon)
@@ -42,11 +42,12 @@ render suffix locals ty
         rendered <- mapM (render suffix locals) (visibleArguments tc args)
         case () of
             _ | isPromotedDataCon tc -> pure (O.promoted (promoted tc) rendered)
+              | tc == unitTyCon -> pure (O.t "()")
               | tc == listTyCon -> pure (O.tc (builtin "[]" "L.List") rendered)
               | tc == maybeTyCon -> pure (O.tc (builtin "Maybe" "M.Maybe") rendered)
               | tc == tupleTyCon Boxed 2 -> pure (O.tc (builtin "(,)" "M.Pair") rendered)
               | tc `elem` locals -> pure (O.tc (if null suffix then sourceConstructor (getName tc) else generatedName suffix (getName tc)) rendered)
-              | null args, getOccString tc `elem` ["Int","Integer","Bool","Float","Double","Char","()"] -> pure (O.t (getOccString tc))
+              | null args, getOccString tc `elem` ["Int","Integer","Bool","Float","Double","Char"] -> pure (O.t (getOccString tc))
               | otherwise -> unsupported
     | Just (f,a) <- splitAppTy_maybe ty = O.tapp <$> render suffix locals f <*> ((:[]) <$> render suffix locals a)
     | otherwise = unsupported

@@ -4,6 +4,7 @@ module Cost.Translate.Frontend (generate) where
 import GHC
 import Control.Monad (unless, when, zipWithM)
 import Control.Monad.IO.Class (liftIO)
+import GHC.Builtin.Types (unitDataCon)
 import GHC.Data.Bag (bagToList)
 import GHC.Paths (libdir)
 import GHC.Driver.Session (xopt)
@@ -628,6 +629,7 @@ emitExpr env located = case unLoc located of
         Just (Adapter fn _) -> Right (O.ret fn)
         Just (Constructor con 0 _) -> Right (O.ret (O.v con))
         Just Constructor {} -> unsupported
+        Nothing | unLoc name == getName unitDataCon -> Right (O.ret (O.tuple []))
         Nothing | builtin (unLoc name) "GHC.Types" "True" -> Right (O.ret (O.v "True"))
         Nothing | builtin (unLoc name) "GHC.Internal.Base" "otherwise" -> Right (O.ret (O.v "True"))
         Nothing | builtin (unLoc name) "GHC.Types" "False" -> Right (O.ret (O.v "False"))
