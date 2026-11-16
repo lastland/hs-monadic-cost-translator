@@ -83,6 +83,7 @@ sourceAliases =
     ,("scoped-factory-guard-shadow-integer", ["scoped-factory-guard-shadow/Example.hs"])
     ,("constrained-sharing-same-dictionary", ["constrained-sharing-different-dictionaries/Example.hs"])
     ,("anf-scoped-renaming", ["anf-scoped-renaming/Shadowed.hs", "anf-scoped-renaming/Renamed.hs"])
+    ,("top-level-function-interface", ["top-level-function-interface/Control.hs", "top-level-function-interface/WithValue.hs"])
     ,("generated-warnings-minimal", ["generated-warnings/Minimal.hs"])]
 
 sourceOnlyDirectories :: [String]
