@@ -122,7 +122,7 @@ hlint src app test/*.hs test/reference/*.hs integration/probes integration/test-
 GitHub Actions runs lint and runtime-free build/test jobs on GHC **9.10.3**, Cabal **3.16.1.0**, and HLint **3.10** without checking out `hs-pbt/`:
 
 ```sh
-hlint src app
+hlint src app test/*.hs test/reference/*.hs
 cabal update
 cabal build exe:cost-translate test:cost-translate-test --ghc-options='-Wall -Werror'
 export PATH="$(dirname "$(cabal list-bin exe:cost-translate --ghc-options='-Wall -Werror')"):$PATH"
@@ -130,6 +130,8 @@ cabal test cost-translate-test --ghc-options='-Wall -Werror' \
   --test-options='diagnostics generated-module-name-diagnostic whole-module-failure test-selection fixture-policy' \
   --test-show-details=direct
 ```
+
+The explicit test globs exclude fixture, policy, and mutation inputs.
 
 Because `validateReferenceCases` runs at startup and `fixture-policy` runs `checkReferencePolicyTests`, runtime-free CI enforces the full `test/cases/` inventory, `Case.hs`/`Reference.hs` AST policy, Cabal runner registrations, and CLI rejection diagnostics. Running the `MemoristANT`-backed semantic comparisons, `reference-harness`, and `integration/` requires a local `hs-pbt/` checkout under `stack test`.
 
