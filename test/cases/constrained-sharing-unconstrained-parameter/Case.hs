@@ -1,0 +1,38 @@
+module Case (probes) where
+
+import Generated (initialize, oneM, twoM)
+import qualified Example as Source
+import qualified Memorist.Memorist as M
+import ReferenceSupport (Sample(..), Probe, scalarSource)
+
+probes :: [Probe]
+probes =
+    [ scalarSource "fixed-unconstrained-element-types"
+        (\_ -> Source.one 0 + Source.two 0) $ \_ -> do
+        bindings <- initialize
+        i <- M.fromPure1 (oneM bindings) (0 :: Int)
+        j <- M.fromPure1 (twoM bindings) (0 :: Int)
+        pure (i + j)
+    , scalarSource "interleaved-unconstrained-element-types"
+        (\sample -> sum [Source.one (number sample + step)
+            + Source.two (other sample - step)
+            | step <- [0 .. repeats sample - 1]]) $ \sample -> do
+        bindings <- initialize
+        sum <$> mapM (\step -> do
+            let first = M.fromPure1 (oneM bindings) (number sample + step)
+                second = M.fromPure1 (twoM bindings) (other sample - step)
+            if even (variant sample + step) then do
+                i <- first
+                j <- second
+                pure (i + j)
+            else do
+                j <- second
+                i <- first
+                pure (i + j)) [0 .. repeats sample - 1]
+    , scalarSource "repeated-first-element-type"
+        (\sample -> sum [Source.one (number sample + step)
+            | step <- [0 .. repeats sample - 1]]) $ \sample -> do
+        bindings <- initialize
+        sum <$> mapM (M.fromPure1 (oneM bindings) . (number sample +))
+            [0 .. repeats sample - 1]
+    ]
