@@ -40,8 +40,8 @@ checkGeneratedArtifacts label artifacts = do
         "generated-warnings-minimal" -> checkMinimalWarnings root
         "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
         "manual-constructor-equations" -> checkOuterListInspection output
-        "anf-demand" -> checkTerminalDoBlocks output
-        "manual-terminal-do" -> checkTerminalDoBlocks output
+        "anf-demand" -> checkTerminalDoBlocks output "chooseM"
+        "manual-terminal-do" -> mapM_ (checkTerminalDoBlocks output) ["chooseM", "localM"]
         "pattern-scaling" -> do
             generated <- readFile output
             unless (length generated < 40000) $
@@ -94,16 +94,24 @@ checkOuterListInspection output = do
         fail ("chooseM: expected one outer-list force and one case containing NilT and ConsT; found " ++
               show (length forces) ++ " forces and " ++ show (length cases) ++ " cases")
 
-checkTerminalDoBlocks :: FilePath -> IO ()
-checkTerminalDoBlocks output = do
-    binding <- parseGeneratedBinding output "chooseM"
+checkTerminalDoBlocks :: FilePath -> String -> IO ()
+checkTerminalDoBlocks output target = do
+    binding <- parseGeneratedBinding output target
     let nested = [() | HsDo _ (DoExpr Nothing) statements <- collectAst (m_grhss binding) :: [HsExpr GhcPs],
             terminal : _ <- [reverse (unLoc statements)],
-            Just (L _ (HsDo _ (DoExpr Nothing) _)) <- [terminalExpression terminal]]
+            Just expression <- [terminalExpression terminal],
+            terminalOrdinaryDo expression]
     unless (null nested) $
-        fail ("chooseM: found " ++ show (length nested) ++ " directly nested terminal ordinary do; " ++
-              "the entry tick and conditional must share one do block")
+        fail (target ++ ": terminal ordinary do remains nested directly or through parentheses/let; " ++
+              "terminal actions must share their enclosing do block")
   where
+    terminalOrdinaryDo :: LHsExpr GhcPs -> Bool
+    terminalOrdinaryDo expression = case unLoc expression of
+        HsDo _ (DoExpr Nothing) _ -> True
+        HsPar _ nested -> terminalOrdinaryDo nested
+        HsLet _ _ body -> terminalOrdinaryDo body
+        _ -> False
+
     terminalExpression :: ExprLStmt GhcPs -> Maybe (LHsExpr GhcPs)
     terminalExpression statement = case unLoc statement of
         BodyStmt _ expression _ _ -> Just expression

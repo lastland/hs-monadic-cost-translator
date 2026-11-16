@@ -94,7 +94,7 @@ thenS = noLocA . mkBodyStmt
 doE :: [Stmt] -> Expr -> Expr
 doE [] body = body
 -- Splice only a directly exposed ordinary do, retaining its existing LastStmt.
--- Parentheses, annotations, lets and other do flavours remain boundaries.
+-- Do not look through parentheses, annotations, lets or other do flavours.
 doE statements (L _ (HsDo _ (DoExpr Nothing) inner)) =
     noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ unLoc inner)))
 doE statements body = noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ [noLocA (mkLastStmt final)])))
@@ -102,6 +102,11 @@ doE statements body = noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ [no
 
 letE :: [Decl] -> Expr -> Expr
 letE [] body = body
+-- Keep the declaration group's scope over the same body statements.
+-- Only rewrite a bare ordinary do; wrappers and other do flavours stay intact.
+letE declarations (L _ (HsDo _ (DoExpr Nothing) statements)) =
+    noLocA (mkHsDo (DoExpr Nothing) (noLocA
+        (noLocA (LetStmt noAnn (locals declarations)) : unLoc statements)))
 letE declarations body = noLocA (HsLet noAnn (locals declarations) body)
 
 ann :: Expr -> Ty -> Expr

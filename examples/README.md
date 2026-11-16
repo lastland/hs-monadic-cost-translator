@@ -358,12 +358,12 @@ runInt (fromPure2 guardedVariableM False (5 : undefined :: [Int]))
 - In `choose c x y = if c then x else y`, the function entry `M.tick`, the `M.force` of the condition thunk, and the `if-then-else` share a single flat `do` block (`chooseM`).
 - When an explicit type annotation encloses the conditional (`annotated`), the generated `do` block preserves the enclosing `:: M.MemoristM a` annotation and keeps the `else` branch's local `saved` binding scoped to that branch (`annotatedM`).
 
-Translate `examples/TerminalDo.hs` and inspect `chooseM` and `annotatedM`:
+Translate `examples/TerminalDo.hs` and inspect `chooseM`, `localM`, and `annotatedM`:
 
 ```sh
 work=$(mktemp -d)
 stack run cost-translate -- examples/TerminalDo.hs "$work/Generated.hs"
-rg -n -A 12 '^(chooseM|annotatedM) ' "$work/Generated.hs"
+rg -n -A 12 '^(chooseM|localM|annotatedM) ' "$work/Generated.hs"
 ```
 
 In GHCi:
@@ -374,6 +374,10 @@ runInt (fromPure3 chooseM True (5 :: Int) (undefined :: Int))
 runInt (fromPure2 ignoredFailureM True (5 :: Int))
 -- (10, 3)
 ```
+
+The generated `localM` keeps its shared `saved` binding in a `let` statement
+inside the outer `do`. The entry tick, thunk allocations, and final call share
+one block; type annotations and branch-local scopes remain intact.
 
 ## Source Conventions and Limitations
 
