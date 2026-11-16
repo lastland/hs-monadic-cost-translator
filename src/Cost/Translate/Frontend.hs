@@ -131,7 +131,10 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++ enabled
-                common = [ Section True "sharing and scalar support" (sharingSupport hasReflection ++ scalarSupport)
+                needsSharing = any (\case
+                    HsVar _ (L _ (Unqual occurrence)) -> occNameString occurrence `elem` ["sharedAt", "sharedAtBy"]
+                    _ -> False) (collect declarations :: [HsExpr GhcPs])
+                common = [ Section True "sharing and scalar support" (concat [sharingSupport hasReflection | needsSharing] ++ scalarSupport)
                          , Section True "foldable support" foldableSupport
                          , Section True "datatype conversion and demand support" datatypeSupport
                          ]
@@ -583,8 +586,9 @@ withTypedValBinds signatures env binds finish = case binds of
                     _ -> Right ()) (grhssGRHSs (m_grhss match))
                 action <- withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' -> emitGuards scope' (grhssGRHSs (m_grhss match)) (failureExpr "source guard failure")
                 let n = localName scope (unLoc name)
+                    bindingType = Map.lookup (unLoc name) (inferredBindings scope)
                 paths <- locatedAt (getLocA name)
-                    (maybe (Right Nothing) sharingPaths (Map.lookup (unLoc name) (inferredBindings scope)))
+                    (maybe (Right Nothing) sharingPaths bindingType)
                 let reference = if isJust paths then O.call n [O.tuple []] else O.v n
                 continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
                 if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
@@ -593,8 +597,11 @@ withTypedValBinds signatures env binds finish = case binds of
                             allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
                             parameters = [O.conP "()" [] | isJust paths]
                             anchorName = Map.findWithDefault (n ++ "anchor") (unLoc name) (plannedAnchors (namePlan scope))
-                            declaration = O.val n parameters (O.app allocate [O.call "M.lazy" [action],O.v anchorName])
-                        pure (O.doE [O.bind anchorName (O.call "M.lazy" [O.ret (O.tuple [])])] (O.letE (signature ++ [declaration]) continuation))
+                            monomorphic = maybe False (null . fst . splitForAllTyVars) bindingType
+                            allocation = O.call "M.lazy" [if monomorphic then action else O.ret (O.tuple [])]
+                            declaration = O.val n parameters (if monomorphic then O.v anchorName
+                                else O.app allocate [O.call "M.lazy" [action],O.v anchorName])
+                        pure (O.doE [O.bind anchorName allocation] (O.letE (signature ++ [declaration]) continuation))
                     else pure continuation
         _ -> do
             let scope' = insertEnv (unLoc name) (Function (localName scope (unLoc name)) (arity matches)) scope
