@@ -1,0 +1,15 @@
+cabal-version: 3.0
+name: fixture
+version: 0.1.0.0
+build-type: Simple
+
+common settings
+    default-language: GHC2021
+    ghc-options: -Wall
+
+test-suite cost-translate-test
+    import: settings
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is: Main.hs
+    build-depends: base

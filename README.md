@@ -91,85 +91,35 @@ Reusing the record preserves top-level thunk identity, ensuring that shared thun
 
 ### Running the Test Suite
 
-The repository contains two test suites:
+The repository provides two test projects (see [`docs/testing.md`](docs/testing.md) for the contributor guide, fixture layout, and policy rules):
 
-- **Root test suite**: Run `stack test` to execute `cost-translate-test` (`test/Main.hs`). This suite tests whole-module translation across the supported language subset, validates CLI failure modes, checks arity logging, and verifies that generated modules typecheck and evaluate to expected values and costs.
-  
-  To run specific test cases, pass test names through `--test-arguments`:
+- **Root test suite (`cost-translate-test`, `test/Main.hs`)**: Run `stack test` to execute the reference-comparison, diagnostic, and policy suite, or pass exact selector names through `--test-arguments`:
 
   ```sh
-   stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
-   stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
-   stack test cost-translate:test:cost-translate-test --test-arguments="thunk-case thunk-guards"
-   stack test cost-translate:test:cost-translate-test --test-arguments="anf-demand thunk-matching-sharing anf-properties anf-scoped-renaming"
-   ```
+  stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
+  stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
+  stack test cost-translate:test:cost-translate-test --test-arguments="thunk-case thunk-guards"
+  stack test cost-translate:test:cost-translate-test --test-arguments="anf-demand thunk-matching-sharing anf-properties anf-scoped-renaming"
+  stack test cost-translate:test:cost-translate-test --test-arguments="reference-harness fixture-policy"
+  ```
 
-  The thunk tests check runtime reference identity and fresh-name progression as
-  well as values, laziness, and entry ticks. Test names are exact matches. The
-  runner rejects unknown names before running any tests; no arguments runs the
-  full suite. `whole-module-failure` selects the whole-module rejection check.
+  Before running any selected group, `test/Main.hs` discovers all semantic fixtures (`discoverReferenceCases`) into a typed registry and validates the entire `test/cases/` inventory, AST/import policy, and Cabal runner registrations (`validateReferenceCases`). Unknown selectors fail before executing any test.
 
-  The runtime-free `test-selection` group checks selector failures and requested
-  group execution through the runner's command line. `fixture-policy` parses the
-  runner source with GHC and checks that file writes use statically named `.log`
-  destinations. It also checks allowed and rejected examples from static fixtures.
-  This is a syntactic check of common file-writing/opening APIs, not general IO
-  analysis or name resolution.
-  The genuine AST-generation probe, `test/OutputAstProbe.hs`, is exempt because
-  generating Haskell is the behavior it tests.
+  Each semantic fixture pairs a source module (`Example.hs` or a registered alias in `test/ReferencePolicy.hs`) with an independent handwritten reference (`Reference.hs`, declaring `module Generated`) and a static probe catalog (`Case.hs`, exporting `probes :: [Probe]`). `test/ReferenceRunner.hs` compiles the translated output and `Reference.hs` in separate `generated/` and `reference/` sandboxes with `ghc -dynamic` against the same `Case.hs` (avoiding datatype and instance collisions while keeping the root package free of `MemoristANT` and `QuickCheck` build dependencies). The shared `Compare` controller (`test/reference/Compare.hs`) runs both worker processes across fixed boundary samples and 200 seeded QuickCheck trials, verifying pure source agreement (`scalarSource`), demanded values and exact ticks (`scalar`, `boolean`, `integer`, `demanded`), supplementary thunk-alias and allocation snapshots (`snapshot`), and expected exceptions (`failure`), followed by artifact checks in `test/GeneratedChecks.hs`.
 
-  Fixed source modules and runtime drivers live in `test/cases/<case>/` as `.hs`
-  files. The runner copies these packaged fixtures into an isolated temporary
-  directory, translates the source, then compiles and runs the driver there.
-  Generated modules and logs stay in that directory for diagnosis. Add fixed
-  Haskell programs as fixtures, not source strings in `test/Main.hs`; diagnostic
-  fixtures may intentionally contain invalid Haskell.
+  Non-semantic selectors test rejection diagnostics (`diagnostics`, `generated-module-name-diagnostic`, `whole-module-failure`), CLI selector handling (`test-selection`), GHC-parsed fixture and reference policies (`fixture-policy`), and comparator/observer fault detection against known mutations (`reference-harness`). Static enforcement guarantees structural compliance and shared trial execution, whereas semantic fidelity of `Reference.hs` and probe coverage remain review responsibilities.
 
-  `anf-demand` checks computed suspensions, explicit source-binding anchors,
-  pattern/guard order, scalar/Boolean demand, and caller-level allocation counts
-  for scalar matching paths. `thunk-matching-sharing` checks polymorphic and
-  dictionary-sensitive references through matching, including scoped and
-  defaulted uses. `anf-properties` translates its fixture once and checks all
-  four pair-demand masks with bounded inputs, repeated demands, and multi-output
-  captures/compositions. Pair fixtures independently assert thunk identities and
-  caller-level allocation counts, including with unused failing inputs.
-  Skipped-field cost inference also checks that preparation records no input
-  demand. Direct aliases add no thunk; explicit local anchors and computed
-  subjects still allocate their required thunks. These counts observe Memorist's
-  caller-level fresh names, not total heap allocation. Fixed boundary cases run
-  before seeded and randomized cases; failures retain counterexamples and seed
-  information in the driver log.
+- **Supplemental integration project (`integration/cost-translate-integration.cabal`)**: Run `stack --stack-yaml integration/stack.yaml test` to execute standalone external-runtime feasibility probes (`cost-translate-integration`, `runtime-scanl`, `runtime-polymorphic-sharing`, `runtime-higher-kinded`) against `MemoristANT` and QuickCheck. These suites test the external runtime environment rather than replacing translator verification in `cost-translate-test`.
 
-  `anf-scoped-renaming` checks paired source modules differing only in four inner
-  `forall` binders. It translates and compiles each variant separately with the
-  same driver, checks source/generated values and literal entry-tick expectations,
-  then compares their observations. Case and pattern-guard variants cover unused
-  annotated parameters at `Int`/`Bool` and dictionary-sensitive factories at
-  `Int`/`Integer`. The factory results differ by specialization, so erasing an
-  annotation cannot hide incorrect defaulting. These groups run in the full
-  local suite with Memorist; they do not change the runtime-free CI boundary.
-
-- **Integration test suite**: Run `stack --stack-yaml integration/stack.yaml test` to execute the dedicated integration project (`integration/cost-translate-integration.cabal`). This project tests generated modules and handwritten probes directly against `MemoristANT` and QuickCheck:
-  - `cost-translate-integration`: runs Tasty, HUnit, and QuickCheck test suites (P1–P7) verifying exact tick formulas, value equivalence, and composition chains.
-  - `runtime-scanl`: verifies the demand-laziness regression fix for `scanlM` (delaying input-spine and callback forcing).
-  - `runtime-polymorphic-sharing`: verifies that unconstrained polymorphic thunks share a single runtime name across distinct type instantiations.
-  - `runtime-higher-kinded`: verifies higher-kinded datatype conversions, demand generation, and compatible shrinks.
-
-To check code style and lint rules across both projects, run:
+To lint the translator and test sources, run:
 
 ```sh
-hlint src app test/*.hs integration/probes integration/test-integration
+hlint src app test/*.hs test/reference/*.hs integration/probes integration/test-integration
 ```
 
 ### Continuous Integration
 
-GitHub Actions runs independent lint and build/test jobs on pushes and pull
-requests, using GHC **9.10.3**, Cabal **3.16.1.0**, and HLint **3.10**. CI does not
-check out or provision `hs-pbt/`. It runs the root suite's runtime-free
-`diagnostics`, `generated-module-name-diagnostic`, `whole-module-failure`,
-`test-selection`, and `fixture-policy` groups.
-
-To reproduce these checks with the pinned tools:
+GitHub Actions runs lint and runtime-free build/test jobs on GHC **9.10.3**, Cabal **3.16.1.0**, and HLint **3.10** without checking out `hs-pbt/`:
 
 ```sh
 hlint src app
@@ -181,11 +131,7 @@ cabal test cost-translate-test --ghc-options='-Wall -Werror' \
   --test-show-details=direct
 ```
 
-HLint findings (including suggestions) and compiler warnings fail CI. HLint
-checks only the translator implementation in `src/` and `app/`; the Cabal build
-checks the translator and test runner. CI excludes runtime-dependent tests, the
-integration project, and lint/warning checks on generated Haskell, fixtures, and
-examples. The full local suites described above remain available with `hs-pbt/`.
+Because `validateReferenceCases` runs at startup and `fixture-policy` runs `checkReferencePolicyTests`, runtime-free CI enforces the full `test/cases/` inventory, `Case.hs`/`Reference.hs` AST policy, Cabal runner registrations, and CLI rejection diagnostics. Running the `MemoristANT`-backed semantic comparisons, `reference-harness`, and `integration/` requires a local `hs-pbt/` checkout under `stack test`.
 
 ## Features
 
@@ -322,12 +268,20 @@ The repository organizes its implementation, CLI, tests, and documentation as fo
 | `src/Cost/Translate/Validation.hs` | Traverses desugared Core to enforce the scalar comparison gate; emits the `Scalar` class and instances. |
 | `src/Cost/Translate/Typed.hs` | Runs targeted desugaring to recover GHC inferred types for variable expressions and annotations. |
 | `src/Cost/Translate/Diagnostic.hs` | Defines phase-preserving diagnostic types (`UnsupportedSource`, `GeneratedModuleNameInvalid`). |
-| `test/Main.hs` | Root end-to-end test suite (`cost-translate-test`). |
-| `test/cases/` | Checked-in Haskell inputs and runtime drivers, including intentionally invalid diagnostic inputs. |
-| `test/RuntimeScanlCandidate.hs` | External runtime regression gate for demand-lazy `scanlM`. |
-| `test/RuntimePolymorphicSharingGate.hs` | External runtime regression gate for polymorphic thunk sharing. |
-| `test/RuntimeHigherKindedGate.hs` | External runtime regression gate for higher-kinded datatype conversions and demand generation. |
-| `integration/` | Independent Stack project verifying generated code against `MemoristANT` and QuickCheck (`cost-translate-integration.cabal`, `test-integration/Main.hs`, `probes/Probes.hs`). |
+| `test/Main.hs` | Root test runner (`cost-translate-test`); validates the complete reference inventory and Cabal manifests before executing selected semantic, diagnostic, policy, or harness groups. |
+| `test/ReferencePolicy.hs` | Runtime-free GHC parser and inventory gate enforcing `test/cases/` layout, `Case.hs` and `Reference.hs` AST and import whitelists, and Cabal runner registrations. |
+| `test/ReferenceRunner.hs` | Stages isolated `generated/` and `reference/` sandboxes, dynamically compiles observer workers, runs the shared comparator, and executes `reference-harness` mutation checks. |
+| `test/reference/` | Shared reference-comparison core (`Protocol.hs`, `ReferenceSupport.hs`, `Observe.hs`, `Compare.hs`, and demand-plan support). |
+| `test/GeneratedChecks.hs` | Post-comparison checks on generated artifacts (layout, `-Wall -Werror`, HLint, code-size bounds, arity logs, and paired source-renaming checks). |
+| `test/FixturePolicy.hs` | Runtime-free GHC parser check verifying that runner file writes target statically named `.log` paths. |
+| `test/cases/` | Checked-in fixtures: semantic cases (`Example.hs`, `Case.hs`, `Reference.hs`), aliased and paired sources, diagnostic rejection inputs, and `fixture-policy` specimens. |
+| `test/reference-selftest/` | Fault-injection and protocol specimens exercised by `reference-harness`. |
+| `test/reference-policy/` | Valid and invalid AST, inventory, and Cabal manifest specimens exercised by `fixture-policy`. |
+| `test/RuntimeScanlCandidate.hs` | Supplemental external-runtime environment gate for demand-lazy `scanlM`. |
+| `test/RuntimePolymorphicSharingGate.hs` | Supplemental external-runtime environment gate for polymorphic thunk sharing. |
+| `test/RuntimeHigherKindedGate.hs` | Supplemental external-runtime environment gate for higher-kinded datatype conversions and demand generation. |
+| `integration/` | Supplemental Stack project running handwritten runtime feasibility probes and external-runtime gates against `MemoristANT` and QuickCheck (`cost-translate-integration.cabal`, `test-integration/Main.hs`, `probes/Probes.hs`). |
+| `docs/testing.md` | Contributor guide to the enforced reference-comparison architecture, probe API, static policy rules, and workflow for adding test cases. |
 | `docs/adr/` | Architecture decision records (0001–0004) documenting cost semantics, GHC API boundaries, external runtime interface, and explicit thunk sharing. |
 | `examples/` | Standalone source examples with step-by-step walkthroughs and verified values and costs. |
 

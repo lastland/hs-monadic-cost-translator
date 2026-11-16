@@ -1,0 +1,10 @@
+module Case (probes) where
+
+import Generated
+import ReferenceSupport
+
+probes :: [Probe]
+probes = [scalar "value" (const undefined)]
+
+assertion :: Property
+assertion = undefined

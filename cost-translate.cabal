@@ -6,10 +6,17 @@ build-type:         Simple
 license:            MIT
 license-file:       LICENSE
 data-files:
-    test/Main.hs
-    test/OutputAstProbe.hs
+    cost-translate.cabal
+    integration/cost-translate-integration.cabal
+    integration/test-integration/Main.hs
+    test/*.hs
     test/cases/**/*.hs
+    test/reference/*.hs
+    test/reference-selftest/*.hs
+    test/reference-policy/**/*.hs
+    test/reference-policy/**/*.cabal
 extra-source-files:
+    docs/testing.md
     test/OutputAstProbe.hs
     test/RuntimeFilterGate.hs
     test/RuntimeScanlGate.hs
@@ -65,6 +72,9 @@ test-suite cost-translate-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    FixturePolicy
+                     GeneratedChecks
+                     ReferencePolicy
+                     ReferenceRunner
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate
     build-depends:
