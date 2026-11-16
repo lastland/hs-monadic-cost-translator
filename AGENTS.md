@@ -12,6 +12,11 @@ logs, agent context, and task-completion reports out of READMEs. Describe curren
 behavior directly. Update a README when that human-facing description changes,
 not merely because work was completed.
 
+## Tests
+
+Run Stack tests with `sh scripts/stack-test.sh [arguments]` instead of invoking
+`stack test` directly.
+
 ## Agent skills
 
 ### Issue tracker

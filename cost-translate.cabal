@@ -28,8 +28,10 @@ extra-source-files:
     docs/testing.md
     examples/VALIDATION.md
     scripts/stack-compiler.yaml
+    scripts/stack-test.sh
     scripts/validate.sh
     test/compiler_preflight.py
+    test/stack_test.py
     test/OutputAstProbe.hs
     test/RuntimeFilterGate.hs
     test/RuntimeScanlGate.hs
