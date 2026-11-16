@@ -4,6 +4,8 @@ work x = x+x
 keep x = x
 returnedShared x = let y = work x in (keep y,keep y)
 alias x = (x,x)
+caseAlias x = case x of y -> (x,y)
+guardAlias x | y <- x = (x,y)
 separate x = (work x,work x)
 localPair x = let y = work x in (y,y)
 caseLocal x = let y = work x in case y of z -> (y,z)

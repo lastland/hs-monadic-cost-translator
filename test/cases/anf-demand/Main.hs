@@ -13,6 +13,14 @@ checkInt label expected ticks source program = do
   assert (label ++ ": generated value") (M.correct program expected)
   assert (label ++ ": entry ticks") (MT.toInteger (M.infcost program M.fullDemand) == ticks)
   pass label
+-- Only the simple scalar matchers below have this resource contract. fromPure1
+-- allocates one outer input; reprM field allocations are enclosed in that thunk
+-- and do not advance the caller's next name. These matchers add no caller thunks.
+checkScalarMatch :: String -> Int -> Int -> M.MemoristM Int -> IO ()
+checkScalarMatch label expected source program = do
+  let (_,next) = M.runM program M.nzero
+  assert (label ++ ": only outer input allocated at caller level") (next == M.nnext M.nzero)
+  checkInt label expected 1 source program
 checkBool :: String -> Bool -> Integer -> Bool -> M.MemoristM Bool -> IO ()
 checkBool label expected ticks source program = do
   assert (label ++ ": source value") (source == expected)
@@ -69,28 +77,28 @@ main = do
   repeated "computed case demanded once" 10 2 Source.caseComputed caseComputedM
   repeated "computed guard demanded once" 10 2 Source.guardComputed guardComputedM
   repeated "source-written let reused" 5 1 Source.sourceLet sourceLetM
-  mapM_ (\(label,source,make) -> checkInt label 7 1 (source undefined) (M.fromPure1 make (undefined::Int)))
+  mapM_ (\(label,source,make) -> checkScalarMatch label 7 (source undefined) (M.fromPure1 make (undefined::Int)))
     [("case variable",Source.caseVariable,caseVariableM), ("case wildcard",Source.caseWildcard,caseWildcardM),
      ("guard variable",Source.guardVariable,guardVariableM), ("guard wildcard",Source.guardWildcard,guardWildcardM)]
   mapM_ (\(label,source,make) -> do
-    checkInt (label ++ " outer only") 7 1 (source (Source.Box undefined)) (M.fromPure1 make (Source.Box undefined))
+    checkScalarMatch (label ++ " outer only") 7 (source (Source.Box undefined)) (M.fromPure1 make (Source.Box undefined))
     fails (label ++ " demands subject") (source undefined == 7) (M.correct (M.fromPure1 make (undefined::Source.Box)) (7::Int)))
     [("case constructor",Source.caseConstructor,caseConstructorM), ("guard constructor",Source.guardConstructor,guardConstructorM)]
   mapM_ (\(label,source,make) -> do
-    checkInt (label ++ " match") 7 1 (source 0) (M.fromPure1 make (0::Int))
-    checkInt (label ++ " fallback") 8 1 (source 1) (M.fromPure1 make (1::Int))
+    checkScalarMatch (label ++ " match") 7 (source 0) (M.fromPure1 make (0::Int))
+    checkScalarMatch (label ++ " fallback") 8 (source 1) (M.fromPure1 make (1::Int))
     fails (label ++ " demands subject") (source undefined == 7) (M.correct (M.fromPure1 make (undefined::Int)) (7::Int)))
     [("case literal",Source.caseLiteral,caseLiteralM), ("guard literal",Source.guardLiteral,guardLiteralM)]
   asPattern "case demanding as-pattern" Source.caseAs caseAsM
   asPattern "guard demanding as-pattern" Source.guardAs guardAsM
   mapM_ (\(label,source,make) -> do
-    checkInt (label ++ " skips nested bottom") 2 1 (source (Source.Box 1,Source.Box undefined)) (M.fromPure1 make (Source.Box 1,Source.Box undefined))
-    checkInt (label ++ " full match") 1 1 (source (Source.Box 0,Source.Box 0)) (M.fromPure1 make (Source.Box 0,Source.Box 0))
+    checkScalarMatch (label ++ " skips nested bottom") 2 (source (Source.Box 1,Source.Box undefined)) (M.fromPure1 make (Source.Box 1,Source.Box undefined))
+    checkScalarMatch (label ++ " full match") 1 (source (Source.Box 0,Source.Box 0)) (M.fromPure1 make (Source.Box 0,Source.Box 0))
     fails (label ++ " reaches nested bottom") (source (Source.Box 0,Source.Box undefined) == 1) (M.correct (M.fromPure1 make (Source.Box 0,Source.Box undefined)) (1::Int)))
     [("case nested mismatch",Source.caseNested,caseNestedM), ("guard nested mismatch",Source.guardNested,guardNestedM)]
   mapM_ (\(label,source,make) -> do
-    checkInt (label ++ " source order") 2 1 (source (Source.Record undefined 1)) (M.fromPure1 make (Source.Record undefined 1))
-    checkInt (label ++ " full match") 1 1 (source (Source.Record 0 0)) (M.fromPure1 make (Source.Record 0 0))
+    checkScalarMatch (label ++ " source order") 2 (source (Source.Record undefined 1)) (M.fromPure1 make (Source.Record undefined 1))
+    checkScalarMatch (label ++ " full match") 1 (source (Source.Record 0 0)) (M.fromPure1 make (Source.Record 0 0))
     fails (label ++ " reaches later field") (source (Source.Record undefined 0) == 1) (M.correct (M.fromPure1 make (Source.Record undefined 0)) (1::Int)))
     [("case reverse record",Source.caseRecord,caseRecordM), ("guard reverse record",Source.guardRecord,guardRecordM)]
   mapM_ (\(label,source,make) -> do

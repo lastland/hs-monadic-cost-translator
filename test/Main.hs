@@ -52,6 +52,7 @@ testRegistry =
     , TestGroup "thunk-sharing" checkThunkSharing
     , TestGroup "thunk-matching-sharing" checkThunkMatchingSharing
     , TestGroup "anf-properties" checkAnfProperties
+    , TestGroup "anf-scoped-renaming" checkAnfScopedRenaming
     , example "scoped-case-alias-shadow" 1 3
     , example "scoped-guard-alias-shadow" 1 3
     , action "scoped-factory-case-shadow-int" "scoped-factory-case-shadow/Example.hs" 1 3
@@ -229,7 +230,7 @@ checkAnfDemand = do
       either fail pure translated
       copyFixture "anf-demand/Main.hs" (root </> "Main.hs")
       _ <- compileAndRun root
-      putStrLn "PASS: anf-demand / fresh suspension, explicit anchors, ordered matching, scalar and Boolean demand"
+      putStrLn "PASS: anf-demand / fresh suspension, explicit anchors, ordered matching, scalar caller allocations, scalar and Boolean demand"
 
 checkThunkFields :: IO ()
 checkThunkFields = do
@@ -450,6 +451,42 @@ checkAnfProperties = do
       copyFixture "anf-properties/Main.hs" (root </> "Main.hs")
       result <- compileAndRun root
       putStrLn ("PASS: anf-properties / " ++ result)
+
+-- Compile paired programs separately: generated instances cannot coexist in one
+-- driver. Each variant has its own source/value/tick oracle before comparison.
+checkAnfScopedRenaming :: IO ()
+checkAnfScopedRenaming = do
+    shadowedPath <- getDataFileName ("test" </> "cases" </> "anf-scoped-renaming" </> "Shadowed.hs")
+    renamedPath <- getDataFileName ("test" </> "cases" </> "anf-scoped-renaming" </> "Renamed.hs")
+    shadowedSource <- readFile shadowedPath
+    renamedSource <- readFile renamedPath
+    unless (length (filter (isInfixOf shadowedSignature) (lines shadowedSource)) == 4 &&
+            renameInner shadowedSource == renamedSource) $
+        fail "scoped-renaming fixtures must differ only in the four inner forall binders"
+    tmp <- getTemporaryDirectory
+    root <- createTempDirectory tmp "cost-translate-anf-scoped-renaming-"
+    putStrLn ("ANF scoped-renaming fixtures and logs: " ++ root)
+    renamed <- runVariant root "renamed" "Renamed.hs"
+    shadowed <- runVariant root "shadowed" "Shadowed.hs"
+    unless (shadowed == renamed) $
+        fail ("renaming inner type variables changed observations\nshadowed: " ++ shadowed ++ "\nrenamed: " ++ renamed)
+    putStrLn "PASS: anf-scoped-renaming / paired case and guard shapes / parameter and factory specializations / values and entry ticks"
+  where
+    shadowedSignature = "inner :: forall a. a -> Int"
+    renamedSignature = "inner :: forall b. b -> Int"
+    renameInner [] = []
+    renameInner input@(c:rest)
+        | shadowedSignature `isPrefixOf` input = renamedSignature ++ renameInner (drop (length shadowedSignature) input)
+        | otherwise = c : renameInner rest
+    runVariant root label fixture = do
+        variant <- createTempDirectory root (label ++ "-")
+        copyFixture ("anf-scoped-renaming" </> fixture) (variant </> "Example.hs")
+        translated <- translateFile (variant </> "Example.hs") (variant </> "Generated.hs")
+        either (fail . ((label ++ " scoped-renaming translation failed: ") ++)) pure translated
+        copyFixture ("anf-scoped-renaming" </> "Main.hs") (variant </> "Main.hs")
+        result <- compileAndRun variant
+        putStrLn ("PASS: anf-scoped-renaming / " ++ label ++ " source/generated values and entry ticks")
+        pure result
 
 -- Keep type-specific assertions readable while exercising the same public seam.
 checkThunkMatchingSharing :: IO ()

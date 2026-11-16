@@ -101,7 +101,7 @@ The repository contains two test suites:
    stack test cost-translate:test:cost-translate-test --test-arguments="scanl-unused-input"
    stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics explicit-constructor-exports"
    stack test cost-translate:test:cost-translate-test --test-arguments="thunk-case thunk-guards"
-   stack test cost-translate:test:cost-translate-test --test-arguments="anf-demand thunk-matching-sharing anf-properties"
+   stack test cost-translate:test:cost-translate-test --test-arguments="anf-demand thunk-matching-sharing anf-properties anf-scoped-renaming"
    ```
 
   The thunk tests check runtime reference identity and fresh-name progression as
@@ -126,12 +126,28 @@ The repository contains two test suites:
   fixtures may intentionally contain invalid Haskell.
 
   `anf-demand` checks computed suspensions, explicit source-binding anchors,
-  pattern/guard order, and scalar/Boolean demand. `thunk-matching-sharing` checks
-  polymorphic and dictionary-sensitive references through matching, including
-  scoped and defaulted uses. `anf-properties` translates its fixture once and
-  checks all four pair-demand masks with bounded inputs, repeated demands, and
-  multi-output captures/compositions. It runs both seeded and randomized cases;
-  failures retain shrunk counterexamples and seed information in the driver log.
+  pattern/guard order, scalar/Boolean demand, and caller-level allocation counts
+  for scalar matching paths. `thunk-matching-sharing` checks polymorphic and
+  dictionary-sensitive references through matching, including scoped and
+  defaulted uses. `anf-properties` translates its fixture once and checks all
+  four pair-demand masks with bounded inputs, repeated demands, and multi-output
+  captures/compositions. Pair fixtures independently assert thunk identities and
+  caller-level allocation counts, including with unused failing inputs.
+  Skipped-field cost inference also checks that preparation records no input
+  demand. Direct aliases add no thunk; explicit local anchors and computed
+  subjects still allocate their required thunks. These counts observe Memorist's
+  caller-level fresh names, not total heap allocation. Fixed boundary cases run
+  before seeded and randomized cases; failures retain counterexamples and seed
+  information in the driver log.
+
+  `anf-scoped-renaming` checks paired source modules differing only in four inner
+  `forall` binders. It translates and compiles each variant separately with the
+  same driver, checks source/generated values and literal entry-tick expectations,
+  then compares their observations. Case and pattern-guard variants cover unused
+  annotated parameters at `Int`/`Bool` and dictionary-sensitive factories at
+  `Int`/`Integer`. The factory results differ by specialization, so erasing an
+  annotation cannot hide incorrect defaulting. These groups run in the full
+  local suite with Memorist; they do not change the runtime-free CI boundary.
 
 - **Integration test suite**: Run `stack --stack-yaml integration/stack.yaml test` to execute the dedicated integration project (`integration/cost-translate-integration.cabal`). This project tests generated modules and handwritten probes directly against `MemoristANT` and QuickCheck:
   - `cost-translate-integration`: runs Tasty, HUnit, and QuickCheck test suites (P1–P7) verifying exact tick formulas, value equivalence, and composition chains.
