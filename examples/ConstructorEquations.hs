@@ -1,8 +1,5 @@
 module ConstructorEquations where
 
--- Named negate is outside the translator's supported calling conventions.
-{- HLINT ignore "Use negate" -}
-
 positive, negative :: Int -> Bool
 positive x = x > 0
 negative x = x < 0
@@ -18,7 +15,7 @@ choose (y : _)
 repeated :: [Int] -> Int
 repeated [] = 0
 repeated (y : _) | positive y = y
-repeated (y : _) | negative y = 0 - y
+repeated (y : _) | negative y = negate y
 repeated (_ : _) = 0
 
 -- A wildcard guard before constructor equations must not inspect the list

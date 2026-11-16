@@ -1049,16 +1049,19 @@ resolve env name = case lookupEnv name env of
 
 primitive :: Name -> Maybe Binding
 primitive name
-    | any (\m -> builtin name m occurrence) modules = Just (adapter
+    | builtin name "GHC.Internal.Num" "negate" = Just (adapter ["ta"]
+        (O.doE [O.bind "a" (force "ta")] (O.ret (O.call "negate" [O.v "a"]))))
+    | any (\m -> builtin name m occurrence) modules = Just (binary
         (O.doE [O.bind "a" (force "ta"), O.bind "b" (force "tb")] (O.ret (O.op occurrence (O.v "a") (O.v "b")))))
-    | any (\m -> builtin name m "&&") ["GHC.Classes","GHC.Internal.Classes"] = Just (adapter
+    | any (\m -> builtin name m "&&") ["GHC.Classes","GHC.Internal.Classes"] = Just (binary
         (O.doE [O.bind "a" (force "ta")] (O.ifE (O.v "a") (force "tb") (O.ret (O.v "False")))))
-    | any (\m -> builtin name m "||") ["GHC.Classes","GHC.Internal.Classes"] = Just (adapter
+    | any (\m -> builtin name m "||") ["GHC.Classes","GHC.Internal.Classes"] = Just (binary
         (O.doE [O.bind "a" (force "ta")] (O.ifE (O.v "a") (O.ret (O.v "True")) (force "tb"))))
     | otherwise = Nothing
   where
     occurrence = getOccString name
-    adapter body = Adapter (O.lam (map O.p ["ta","tb"]) body) 2
+    adapter arguments body = Adapter (O.lam (map O.p arguments) body) (length arguments)
+    binary = adapter ["ta","tb"]
     force n = O.call "M.force" [O.v n]
     modules
         | occurrence `elem` ["+","-","*"] = ["GHC.Internal.Num"]
