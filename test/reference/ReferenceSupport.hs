@@ -4,11 +4,13 @@
 -- | Cases supply computations, never properties, equality functions, or IO.
 -- Constructors stay private: the observer owns forcing and cost measurement.
 module ReferenceSupport
-    ( Sample(..), Probe, scalar, scalarSource, boolean, integer, demanded, snapshot, failure, runProbes
+    ( Sample(..), Probe, scalar, scalarSource, boolean, integer, demanded, snapshot, failure
+    , generatedDemands, drawProbeDemands, runProbes
     ) where
 
 import Control.Exception (SomeAsyncException, SomeException, evaluate, fromException, throwIO, try)
-import Control.Monad (unless)
+import Control.Monad (unless, when)
+import qualified DemandSupport as D
 import qualified Memorist.Memorist as M
 import qualified Memorist.Base.Thunk as MT
 import Protocol
@@ -20,6 +22,7 @@ data Probe where
         (Sample -> a -> M.Dem a) -> Maybe (Sample -> b) -> Probe
     Snapshot :: Show a => String -> (Sample -> a) -> Probe
     Failure :: String -> (Sample -> M.MemoristM Int) -> Probe
+    Generated :: D.DemandProbe Sample -> Probe
 
 scalar :: String -> (Sample -> M.MemoristM Int) -> Probe
 scalar label = demanded label (const id) (const M.fullDemand)
@@ -45,31 +48,55 @@ snapshot = Snapshot
 failure :: String -> (Sample -> M.MemoristM Int) -> Probe
 failure = Failure
 
-runProbes :: [Probe] -> Sample -> IO [Result]
-runProbes probes sample = do
+generatedDemands :: D.DemandProbe Sample -> Probe
+generatedDemands = Generated
+
+validateCatalog :: [Probe] -> IO ()
+validateCatalog probes = do
     unless (any computation probes) (fail "case has no costed reference comparison")
-    results <- mapM (`runProbe` sample) probes
-    let labels = [label | Result label _ <- results]
+    let labels = map probeLabel probes
+    when (any null labels) (fail "empty observation label")
     unless (length labels == length (unique labels)) (fail "duplicate observation labels")
-    pure results
   where
     computation Computation{} = True
-    computation Failure{} = True
+    computation Failure{} = False
     computation Snapshot{} = False
+    computation Generated{} = True
     unique [] = []
     unique (x:xs) = x : unique (filter (/= x) xs)
 
+probeLabel :: Probe -> String
+probeLabel (Computation label _ _ _ _) = label
+probeLabel (Snapshot label _) = label
+probeLabel (Failure label _) = label
+probeLabel (Generated probe) = D.demandLabel probe
+
+drawProbeDemands :: [Probe] -> Int -> Int -> Sample -> IO [DemandBatch]
+drawProbeDemands probes budget seed sample = do
+    validateCatalog probes
+    sequence [D.drawDemands budget (seed + index) sample probe
+        | (index, probe) <- zip [0..] [p | Generated p <- probes]]
+
+runProbes :: [Probe] -> Sample -> [DemandBatch] -> IO ([Result], [DemandObservation])
+runProbes probes sample batches = do
+    validateCatalog probes
+    let planned = [probe | Generated probe <- probes]
+    unless (map D.demandLabel planned == map batchLabel batches) $
+        fail "missing, reordered, duplicated, or undeclared generated-demand batch"
+    ordinary <- sequence [runProbe probe sample | probe <- probes, not (isGenerated probe)]
+    replayed <- sequence [D.replayDemands sample batch probe | (probe, batch) <- zip planned batches]
+    pure (ordinary, concat replayed)
+  where
+    isGenerated Generated{} = True
+    isGenerated _ = False
+
 runProbe :: Probe -> Sample -> IO Result
 runProbe (Computation label make project demand source) sample = do
-    actual <- measured label $ do
-        let result = M.eval1 (make sample)
-            observed = show (project sample (M.value result))
-            ticks = MT.toInteger (M.calcCost result (demand sample (M.value result)))
-        _ <- evaluate (length observed)
-        _ <- evaluate ticks
-        pure (Returned observed (Just ticks))
+    actual <- measureComputation label (make sample) (project sample) (demand sample)
     case source of
-        Nothing -> pure actual
+        Nothing -> do
+            unless (actual /= Result label Raised) (fail (label ++ ": unexpected computation failure"))
+            pure actual
         Just oracle -> do
             expected <- measured label $ do
                 let observed = show (oracle sample)
@@ -77,14 +104,28 @@ runProbe (Computation label make project demand source) sample = do
                 pure (Returned observed Nothing)
             unless (sameValue actual expected) (fail (label ++ ": source value differs: " ++ show (actual, expected)))
             pure actual
-runProbe (Snapshot label make) sample = measured label $ do
-    let observed = show (make sample)
-    _ <- evaluate (length observed)
-    pure (Returned observed Nothing)
+runProbe (Snapshot label make) sample = do
+    result <- measured label $ do
+        let observed = show (make sample)
+        _ <- evaluate (length observed)
+        pure (Returned observed Nothing)
+    unless (result /= Result label Raised) (fail (label ++ ": structural observation failed"))
+    pure result
 runProbe (Failure label make) sample = do
-    result <- runProbe (Computation label make (const id) (const M.fullDemand) Nothing) sample
+    result <- measureComputation label (make sample) id M.fullDemand
     unless (result == Result label Raised) (fail (label ++ ": expected a demanded failure"))
     pure result
+runProbe Generated{} _ = fail "internal error: generated demand was not replayed"
+
+measureComputation :: (M.Demand a, Show b) =>
+    String -> M.MemoristM a -> (a -> b) -> (a -> M.Dem a) -> IO Result
+measureComputation label program project demand = measured label $ do
+    let result = M.eval1 program
+        observed = show (project (M.value result))
+        ticks = MT.toInteger (M.calcCost result (demand (M.value result)))
+    _ <- evaluate (length observed)
+    _ <- evaluate ticks
+    pure (Returned observed (Just ticks))
 
 sameValue :: Result -> Result -> Bool
 sameValue (Result _ (Returned actual _)) (Result _ (Returned expected _)) = actual == expected

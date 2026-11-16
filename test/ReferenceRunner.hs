@@ -10,7 +10,7 @@ import Cost.Translate (translateFile)
 import Paths_cost_translate (getDataFileName)
 import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>), takeFileName)
+import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO.Temp (createTempDirectory)
 import System.Process (readProcessWithExitCode)
 
@@ -32,7 +32,7 @@ prepareReferenceEnvironment = do
     root <- createTempDirectory temporary "cost-reference-suite-"
     let support = root </> "support"
     createDirectoryIfMissing True support
-    forM_ ["Protocol.hs", "ReferenceSupport.hs", "Observe.hs", "Compare.hs"] $ \name -> do
+    forM_ ["Protocol.hs", "ReferenceSupport.hs", "DemandSupport.hs", "Observe.hs", "Compare.hs"] $ \name -> do
         source <- getDataFileName ("test" </> "reference" </> name)
         copyFile source (support </> name)
     let executable = root </> "compare"
@@ -85,7 +85,7 @@ compile support sandbox entry packages executable = do
     let objects = sandbox </> (entry ++ "-objects")
     createDirectoryIfMissing True objects
     (status, out, err) <- readProcessWithExitCode "ghc"
-        (["-v0", "-dynamic", "-i", "-i" ++ sandbox, "-i" ++ support,
+        (["-v0", "-dynamic", "-Werror=unused-imports", "-i", "-i" ++ sandbox, "-i" ++ support,
           "-outputdir", objects, "-main-is", entry ++ ".main", support </> entry ++ ".hs",
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
@@ -103,15 +103,31 @@ checkReferenceHarness environment = do
     forM_ ["WrongValue.hs", "ExtraTick.hs", "LostAlias.hs", "ExtraAllocation.hs", "PrematureForce.hs"] $ \name -> do
         mutant <- specimen root name
         check root False name mutant reference
+    forM_ ["EmptyCase.hs", "SnapshotsOnly.hs", "FailuresOnly.hs", "BrokenProjection.hs"] $ \caseFile -> do
+        actual <- specimenWithCase root "Matching.hs" caseFile
+        expected <- specimenWithCase root "Reference.hs" caseFile
+        check root False caseFile actual expected
+    badSource <- getDataFileName ("test" </> "reference-selftest" </> "BadObserver.hs")
+    let malformed = root </> "malformed-observer"
+    compile (takeDirectory badSource) root "BadObserver" [] malformed
+    check root False "malformed-response" malformed reference
     -- A comparer is not a worker: its usage error must not become a matching
     -- program exception. This also exercises worker exit/protocol supervision.
     check root False "wrong-executable" (comparer environment) reference
-    putStrLn "PASS: reference-harness / values, ticks, aliases, allocations, laziness, and worker failures"
+    demandChecks <- getDataFileName ("test" </> "reference-selftest" </> "DemandChecks.hs")
+    let demandExecutable = root </> "demand-checks"
+    compile (takeDirectory demandChecks) (supportDirectory environment) "DemandChecks"
+        ["MemoristANT", "QuickCheck"] demandExecutable
+    (demandStatus, demandOut, demandErr) <- readProcessWithExitCode demandExecutable [] ""
+    writeFile (root </> "demand-checks.log") (demandOut ++ demandErr)
+    unless (demandStatus == ExitSuccess) (fail (demandOut ++ demandErr))
+    putStrLn "PASS: reference-harness / values, ticks, aliases, allocations, laziness, worker failures, and demand codecs"
   where
-    specimen root name = do
-        let sandbox = root </> name
+    specimen root name = specimenWithCase root name "Case.hs"
+    specimenWithCase root name caseFile = do
+        let sandbox = root </> (name ++ "-" ++ caseFile)
         createDirectoryIfMissing True sandbox
-        forM_ [(name, "Generated.hs"), ("Case.hs", "Case.hs")] $ \(sourceName, destinationName) -> do
+        forM_ [(name, "Generated.hs"), (caseFile, "Case.hs")] $ \(sourceName, destinationName) -> do
             source <- getDataFileName ("test" </> "reference-selftest" </> sourceName)
             copyFile source (sandbox </> destinationName)
         buildObserver environment sandbox

@@ -1,15 +1,15 @@
 module Compare (main) where
 
 import Control.Exception (bracket)
-import Control.Monad (unless)
+import Control.Monad (forM, unless)
 import Data.List (intercalate)
 import Protocol
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.IO (BufferMode(LineBuffering), Handle, hFlush, hGetLine, hPutStrLn, hSetBuffering)
+import System.IO (BufferMode(LineBuffering), Handle, hFlush, hGetLine, hPrint, hSetBuffering)
 import System.Process (CreateProcess(..), ProcessHandle, StdStream(..), createProcess, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
-import Test.QuickCheck (Args(..), Gen, arbitrary, chooseInt, counterexample, forAllShrink, ioProperty, isSuccess, quickCheckWithResult, shrink, stdArgs, vectorOf, (===))
+import Test.QuickCheck (Args(..), Gen, arbitrary, chooseInt, counterexample, forAllShrink, ioProperty, isSuccess, quickCheckWithResult, shrink, stdArgs, vectorOf)
 import Test.QuickCheck.Random (mkQCGen)
 import Text.Read (readMaybe)
 
@@ -22,6 +22,7 @@ main = do
         [generated, reference] ->
             bracket (start generated) stop $ \actual ->
             bracket (start reference) stop $ \expected -> do
+                checkDemandBudgets actual expected
                 mapM_ (compareSample actual expected) boundaries
                 mapM_ (check actual expected) [20261114, 20261115]
         _ -> fail "usage: compare GENERATED_OBSERVER REFERENCE_OBSERVER"
@@ -44,18 +45,65 @@ check actual expected seed = do
     result <- quickCheckWithResult
         (stdArgs { maxSuccess = 100, maxSize = 12, replay = Just (mkQCGen seed, 0) }) $
         forAllShrink samples shrinkSample $ \sample -> ioProperty $ do
-            generated <- observe actual sample
-            reference <- observe expected sample
+            (generated, reference) <- observeSample actual expected seed sample
             pure $ counterexample ("seed: " ++ show seed ++ "\n" ++ differences generated reference)
-                (generated === reference)
+                (generated == reference)
     unless (isSuccess result) exitFailure
 
 compareSample :: Server -> Server -> Sample -> IO ()
 compareSample actual expected sample = do
-    generated <- observe actual sample
-    reference <- observe expected sample
+    (generated, reference) <- observeSample actual expected 20261114 sample
     unless (generated == reference) $
         fail ("boundary sample: " ++ show sample ++ "\n" ++ differences generated reference)
+
+-- At least 200 budget-15 draws, explicit zero budgets, and every budget through
+-- 25. The reference never draws: it replays the actual plans and complete shrink
+-- lists received from the generated worker.
+checkDemandBudgets :: Server -> Server -> IO ()
+checkDemandBudgets actual expected = do
+    let sample = head boundaries
+    initial <- draw actual 0 20261114 sample
+    unless (null initial) $ mapM_ (checkBudget sample) [0..25]
+  where
+    checkBudget sample budget = do
+        (_, generated, reference) <- observeAt actual expected budget (20261114 + budget) sample
+        unless (generated == reference) $
+            fail ("demand budget: " ++ show budget ++ "\n" ++ differences [generated] [reference])
+
+observeSample :: Server -> Server -> Int -> Sample -> IO ([Response], [Response])
+observeSample actual expected seed sample = do
+    (hasPlans, generated, reference) <- observeAt actual expected 15 seed sample
+    extra <- if hasPlans
+        then forM [0, (abs (number sample) + 3 * variant sample) `mod` 26] $ \budget -> do
+            (_, a, b) <- observeAt actual expected budget (seed + 31 * budget) sample
+            pure (a,b)
+        else pure []
+    pure (generated : map fst extra, reference : map snd extra)
+
+observeAt :: Server -> Server -> Int -> Int -> Sample -> IO (Bool, Response, Response)
+observeAt actual expected budget seed sample = do
+    batches <- draw actual budget seed sample
+    generated <- evaluateServer actual sample batches
+    reference <- evaluateServer expected sample batches
+    pure (not (null batches), generated, reference)
+
+draw :: Server -> Int -> Int -> Sample -> IO [DemandBatch]
+draw server budget seed sample = do
+    response <- request server (Draw budget seed sample)
+    case response of
+        Drawn batches -> do
+            unless (all ((== budget) . batchBudget) batches &&
+                    map batchSeed batches == take (length batches) [seed..]) $
+                fail "worker changed the controller's demand budget or seed"
+            pure batches
+        _ -> fail "worker did not return generated demand plans"
+
+evaluateServer :: Server -> Sample -> [DemandBatch] -> IO Response
+evaluateServer server sample batches = do
+    response <- request server (Evaluate sample batches)
+    case response of
+        Evaluated{} -> pure response
+        _ -> fail "worker did not return observations"
 
 boundaries :: [Sample]
 boundaries =
@@ -63,13 +111,13 @@ boundaries =
     | (n,m,xs,w,r,v) <- [(5,0,[1,2,3],3,4,0), (0,0,[],0,1,0), (-1,1,[-1,0,1],1,8,1)]
     , (l,d) <- [(False,False),(True,False),(False,True),(True,True)]]
 
-observe :: Server -> Sample -> IO [Result]
-observe (input, output, _) sample = do
-    hPutStrLn input (show sample)
+request :: Server -> Request -> IO Response
+request (input, output, _) command = do
+    hPrint input command
     hFlush input
     response <- timeout 30000000 (hGetLine output)
     case response >>= readMaybe of
-        Just results -> pure results
+        Just responseValue -> pure responseValue
         Nothing -> fail "observer timed out or returned an invalid response"
 
 samples :: Gen Sample
@@ -88,6 +136,13 @@ shrinkSample s =
     [s { rightDemand = False } | rightDemand s] ++
     [s { variant = n } | n <- shrink (variant s), n >= 0]
 
-differences :: [Result] -> [Result] -> String
-differences actual expected = intercalate "\n"
-    ["generated: " ++ show a ++ "\nreference: " ++ show b | (a,b) <- zip actual expected, a /= b]
+differences :: [Response] -> [Response] -> String
+differences actual expected = intercalate "\n" (take 20 messages)
+  where
+    messages = ["different response counts" | length actual /= length expected] ++
+        concat [responseDifferences a b | (a,b) <- zip actual expected]
+    responseDifferences (Evaluated a da) (Evaluated b db) =
+        ["different observation counts" | length a /= length b || length da /= length db] ++
+        ["generated: " ++ show x ++ "\nreference: " ++ show y | (x,y) <- zip a b, x /= y] ++
+        ["generated demand: " ++ show x ++ "\nreference demand: " ++ show y | (x,y) <- zip da db, x /= y]
+    responseDifferences a b = ["unexpected responses: " ++ show (a,b) | a /= b]

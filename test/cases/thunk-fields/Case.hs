@@ -41,10 +41,11 @@ probes = concatMap boxChecks
         xs <- M.lazy (costedList (tailValues sample))
         consM x xs
     , snapshot "cons/preparation-resources" (const consAliases)
-    , demanded "mixed/selected" boxProjection boxDemand (\sample -> input sample >>= mixedM)
     , scalarSource "mixed/source-left" (\sample -> Source.first (Source.mixed (number sample))) $ \sample -> do
         BoxT a _ <- input sample >>= mixedM
         M.force a
+    -- The right field is bottom. The four fixed masks below distinguish
+    -- successful left/skip observations from intentional right-field failures.
     , demanded "mixed/skipped-computation" (\_ (BoxT a _) -> M.tval a)
         (\_ (BoxT a _) -> BoxD (M.fullDemand a) M.Skip) (\sample -> input sample >>= mixedM)
     , demanded "mixed/skipped-errors" (const (const ())) (const (const (BoxD M.Skip M.Skip)))
@@ -55,6 +56,10 @@ probes = concatMap boxChecks
     , failure "mixed/demanded-error" $ \sample -> do
         BoxT _ b <- input sample >>= mixedM
         M.force b
+    , failure "mixed/demanded-both" $ \sample -> do
+        BoxT a b <- input sample >>= mixedM
+        left <- M.force a
+        left `seq` M.force b
     , failure "bad/demanded-error" (\sample -> M.fromPure1 badM (number sample))
     , snapshot "mixed/preparation-resources" (const (boxAliases mixedM))
     ]

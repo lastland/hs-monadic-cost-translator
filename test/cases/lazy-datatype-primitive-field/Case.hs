@@ -14,11 +14,16 @@ probes =
         (\_ (BoxT x _) -> M.tval x)
         (\_ (BoxT x _) -> BoxD (M.Need (M.tval x)) M.Skip)
         (\s -> M.fromPure1 wrapM (number s))
-    , demanded "wrapped-field-demands" (\s -> project (leftDemand s) (rightDemand s))
-        (\s -> boxDemand (leftDemand s) (rightDemand s)) (\s -> M.fromPure1 wrapM (other s))
+    , demanded "wrapped-first-or-skipped" (\s -> project (leftDemand s) False)
+        (\s -> boxDemand (leftDemand s) False) (\s -> M.fromPure1 wrapM (other s))
     , failure "primitive-field-is-bottom" $ \s -> do
         BoxT _ n <- M.fromPure1 wrapM (number s)
         M.force n
+    , failure "both-fields-demanded" $ \s -> do
+        BoxT x n <- M.fromPure1 wrapM (number s)
+        first <- M.force x
+        second <- M.force n
+        pure (first + second)
     , failure "first-field-is-demanded" (\_ -> M.fromPure1 boxedM (undefined :: Int))
     ]
 

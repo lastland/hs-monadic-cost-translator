@@ -2,8 +2,9 @@ module Observe (main) where
 
 import qualified Case
 import Control.Monad (unless)
-import ReferenceSupport (runProbes)
-import System.IO (BufferMode(LineBuffering), hIsEOF, hSetBuffering, stdin, stdout)
+import ReferenceSupport (drawProbeDemands, runProbes)
+import Protocol (Request(..), Response(..))
+import System.IO (BufferMode(LineBuffering), hSetBuffering, isEOF, stdout)
 import Text.Read (readMaybe)
 
 main :: IO ()
@@ -12,10 +13,14 @@ main = do
     loop
   where
     loop = do
-        finished <- hIsEOF stdin
+        finished <- isEOF
         unless finished $ do
             input <- getLine
-            sample <- maybe (fail "invalid comparison sample") pure (readMaybe input)
-            results <- runProbes Case.probes sample
-            print results
+            request <- maybe (fail "invalid comparison request") pure (readMaybe input)
+            response <- case request of
+                Draw budget seed sample -> Drawn <$> drawProbeDemands Case.probes budget seed sample
+                Evaluate sample batches -> do
+                    (results, demands) <- runProbes Case.probes sample batches
+                    pure (Evaluated results demands)
+            print response
             loop

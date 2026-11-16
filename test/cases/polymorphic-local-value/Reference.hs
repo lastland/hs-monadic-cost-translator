@@ -1,8 +1,8 @@
+{-# LANGUAGE RankNTypes #-}
 module Generated where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
-import Unsafe.Coerce (unsafeCoerce)
 
 emptyM :: M.Th a -> M.MemoristM (L.ListT b)
 emptyM _ = M.tick >> pure L.NilT
@@ -26,9 +26,11 @@ boolsM xs = do
 localM :: M.Th a -> M.MemoristM Int
 localM x = do
     M.tick
-    shared <- M.lazy (emptyM x :: M.MemoristM (L.ListT ()))
+    anchor <- M.lazy (pure ())
     -- The polymorphic source value is one thunk, not one per instantiation.
-    -- Its only possible constructor is NilT, so no element is coerced or read.
-    a <- intsM (unsafeCoerce shared)
-    b <- boolsM (unsafeCoerce shared)
+    -- Reuse its reserved allocator name at each element type.
+    let shared :: forall b. M.Th (L.ListT b)
+        shared = M.value (M.eval (M.lazy (emptyM x)) (M.tname anchor))
+    a <- intsM shared
+    b <- boolsM shared
     pure (a + b)
