@@ -93,6 +93,10 @@ thenS = noLocA . mkBodyStmt
 
 doE :: [Stmt] -> Expr -> Expr
 doE [] body = body
+-- Splice only a directly exposed ordinary do, retaining its existing LastStmt.
+-- Parentheses, annotations, lets and other do flavours remain boundaries.
+doE statements (L _ (HsDo _ (DoExpr Nothing) inner)) =
+    noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ unLoc inner)))
 doE statements body = noLocA (mkHsDo (DoExpr Nothing) (noLocA (statements ++ [noLocA (mkLastStmt final)])))
   where final = case unLoc body of { HsLet {} -> mkHsPar body; _ -> body }
 

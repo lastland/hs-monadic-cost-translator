@@ -7,7 +7,8 @@ import Data.List (isInfixOf, isPrefixOf, sort)
 import Data.Maybe (maybeToList)
 import GHC
     ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), HsExpr(..), LHsExpr
-    , MatchGroup(..), Match(..), Pat(..), getSessionDynFlags, moduleNameString
+    , MatchGroup(..), Match(..), Pat(..), HsDoFlavour(..), StmtLR(..), ExprLStmt
+    , getSessionDynFlags, moduleNameString
     , runGhc, unLoc
     )
 import GHC.Data.FastString (mkFastString)
@@ -36,6 +37,7 @@ checkGeneratedArtifacts label artifacts = case label of
     "generated-warnings" -> checkGeneratedWarnings root
     "generated-warnings-minimal" -> checkMinimalWarnings root
     "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
+    "anf-demand" -> checkTerminalDoBlocks output
     "pattern-scaling" -> do
         generated <- readFile output
         unless (length generated < 40000) $
@@ -70,6 +72,22 @@ checkOuterListInspection output = do
     unless (length forces == 1 && length cases == 1) $
         fail ("chooseM: expected one outer-list force and one case containing NilT and ConsT; found " ++
               show (length forces) ++ " forces and " ++ show (length cases) ++ " cases")
+
+checkTerminalDoBlocks :: FilePath -> IO ()
+checkTerminalDoBlocks output = do
+    binding <- parseGeneratedBinding output "chooseM"
+    let nested = [() | HsDo _ (DoExpr Nothing) statements <- collectAst (m_grhss binding) :: [HsExpr GhcPs],
+            terminal : _ <- [reverse (unLoc statements)],
+            Just (L _ (HsDo _ (DoExpr Nothing) _)) <- [terminalExpression terminal]]
+    unless (null nested) $
+        fail ("chooseM: found " ++ show (length nested) ++ " directly nested terminal ordinary do; " ++
+              "the entry tick and conditional must share one do block")
+  where
+    terminalExpression :: ExprLStmt GhcPs -> Maybe (LHsExpr GhcPs)
+    terminalExpression statement = case unLoc statement of
+        BodyStmt _ expression _ _ -> Just expression
+        LastStmt _ expression _ _ -> Just expression
+        _ -> Nothing
 
 -- Parse the published artifact, including its extension pragmas, without loading
 -- imports. Checks select a binding structurally, not by layout or fresh names.
