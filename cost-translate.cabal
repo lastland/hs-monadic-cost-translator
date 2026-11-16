@@ -24,6 +24,8 @@ data-files:
     test/reference-selftest/*.hs
     test/reference-policy/**/*.hs
     test/reference-policy/**/*.cabal
+    test/generated-functions/*.hs
+    test/generated-functions/*.sh
 extra-source-files:
     docs/testing.md
     examples/VALIDATION.md
@@ -91,6 +93,7 @@ test-suite cost-translate-test
     main-is:          Main.hs
     other-modules:    FixturePolicy
                      GeneratedChecks
+                     GeneratedFunctions
                      ReferencePolicy
                      ReferenceRunner
                      Paths_cost_translate

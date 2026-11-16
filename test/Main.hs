@@ -5,9 +5,13 @@ import Cost.Translate (translateFile)
 import Data.List (intercalate, isInfixOf, isPrefixOf, nub)
 import FixturePolicy (checkFixturePolicy)
 import GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources)
+import GeneratedFunctions (checkGeneratedFunctionSpecimens)
 import Paths_cost_translate (getDataFileName)
 import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverReferenceCases, validateReferenceCases)
-import ReferenceRunner (ReferenceEnvironment, checkReferenceHarness, prepareReferenceEnvironment, runReferenceCase)
+import ReferenceRunner
+    ( ReferenceEnvironment, checkGeneratedFunctionLifecycle, checkReferenceHarness
+    , prepareReferenceEnvironment, runReferenceCase
+    )
 import System.Directory (copyFile, doesFileExist, getCurrentDirectory, getTemporaryDirectory, listDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, setEnv)
 import System.Exit (ExitCode(..), exitFailure)
@@ -26,6 +30,7 @@ data Group
     | TestSelection
     | FixturePolicy
     | ReferenceHarness
+    | GeneratedFunctions
 
 groupName :: Group -> String
 groupName (Semantic label _) = label
@@ -35,6 +40,7 @@ groupName GeneratedModuleNameDiagnostic = "generated-module-name-diagnostic"
 groupName TestSelection = "test-selection"
 groupName FixturePolicy = "fixture-policy"
 groupName ReferenceHarness = "reference-harness"
+groupName GeneratedFunctions = "generated-functions"
 
 main :: IO ()
 main = do
@@ -46,7 +52,7 @@ main = do
     selected <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
-            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness]
+            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions]
         names = map groupName registry
         unknown = nub (filter (`notElem` names) selected)
     unless (null unknown) $ do
@@ -65,6 +71,7 @@ main = do
 needsRuntime :: Group -> Bool
 needsRuntime Semantic{} = True
 needsRuntime ReferenceHarness = True
+needsRuntime GeneratedFunctions = True
 needsRuntime _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
@@ -80,6 +87,9 @@ runGroup _ GeneratedModuleNameDiagnostic = checkGeneratedModuleNameDiagnostic
 runGroup _ TestSelection = checkTestSelection
 runGroup _ FixturePolicy = checkFixturePolicy >> checkReferencePolicyTests
 runGroup environment ReferenceHarness = requireEnvironment environment >>= checkReferenceHarness
+runGroup environment GeneratedFunctions = do
+    checkGeneratedFunctionSpecimens
+    requireEnvironment environment >>= checkGeneratedFunctionLifecycle
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure

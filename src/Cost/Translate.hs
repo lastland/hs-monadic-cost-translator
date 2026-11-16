@@ -1,8 +1,9 @@
-module Cost.Translate (translateFile) where
+module Cost.Translate (translateFile, generatedName) where
 
 import Control.Exception (SomeException, displayException, try)
 import Cost.Translate.Frontend (generate)
 import Cost.Translate.Diagnostic (renderDiagnostic)
+import Cost.Translate.Names (generatedName)
 import System.Directory (renameFile)
 import System.Exit (ExitCode(..))
 import System.FilePath (takeBaseName, takeDirectory, (</>))

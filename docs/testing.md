@@ -35,12 +35,30 @@ When `cost-translate-test` starts, `test/Main.hs` discovers all semantic fixture
 For each semantic fixture, `ReferenceRunner` creates two isolated sandboxes under a temporary run directory (`generated/` and `reference/`):
 
 1. Both sandboxes receive the pure source fixture (`Example.hs`, or a registered alias from `sourceAliases` in `test/ReferencePolicy.hs`) and the shared `Case.hs`.
-2. In `generated/`, `Cost.Translate.translateFile` translates the source module into `Generated.hs`. In `reference/`, `ReferenceRunner` copies the handwritten `Reference.hs` to `Generated.hs`.
+2. In `generated/`, `Cost.Translate.translateFile` translates the source module into `Generated.hs`. Before compiling any callers, `GeneratedFunctions` parses the source and published output with their language pragmas and requires every parameterized top-level source function to have a module-level generated binding under its translated name. Signatures, record selectors, and nested bindings do not satisfy this check. In `reference/`, `ReferenceRunner` copies the handwritten `Reference.hs` to `Generated.hs`; handwritten references are not subject to the source/output location rule.
 3. `ReferenceRunner` compiles `test/reference/Observe.hs` against `Case.hs` and `Generated.hs` in each sandbox using `ghc -dynamic -Werror=unused-imports -package MemoristANT -package QuickCheck`.
 4. The shared controller (`test/reference/Compare.hs`) starts both `observe` binaries as line-buffered child processes over `stdin`/`stdout` (`test/reference/Protocol.hs`), compares them across fixed boundary `Sample` inputs and 200 seeded QuickCheck trials with shrinking, and writes `comparison.log`.
 5. After comparison passes, `test/GeneratedChecks.hs` runs any applicable post-comparison artifact checks on `generated/` (`-Wall -Werror` and HLint on `generated-warnings*`, code-size bounds on `pattern-scaling`, maximal-application arity logs on `foldr-arity-four-partial`, single-inspection constructor grouping on `ordered-equations-and-conjunctive-guards`, and terminal ordinary-`do` flattening on `anf-demand` and `manual-terminal-do`). The terminal-`do` checks also look through parentheses and unannotated `let … in` wrappers, but stop at type annotations and control-flow boundaries. The paired binder pre-check on `anf-scoped-renaming` runs before comparison.
 
 Compiling the two workers in separate sandboxes ensures that both sides can declare `module Generated` and define representation types (`*T`), demand types (`*D`), and typeclass instances (`Repr`, `Demand`, `FoldableT`) without symbol or orphan-instance collisions, while still executing the exact same `Case.hs`. Dynamic linking (`-dynamic`) keeps temporary executable disk usage modest and leaves the root library and `cost-translate-test` executable free of `MemoristANT` and `QuickCheck` Cabal build dependencies.
+
+The location check covers all source variants automatically, including functions
+that are unused or absent from explicit source exports. It distinguishes
+parameterized functions from zero-argument value bindings and accepts multiple
+equations for one function. Failures report the source function and location,
+expected translated identifier, and generated artifact. This structural check
+does not prove ordinary calling types or the absence of hidden setup: direct
+caller compilation and behavioral comparisons check separate contracts. The
+`top-level-function-interface` fixture uses the same ordinary caller and
+handwritten reference with and without an unused top-level value.
+
+The `generated-functions` selector checks small positive and negative parser
+specimens and the shared lifecycle. Its lifecycle test runs the ordinary
+`identity` fixture in a child process with a private GHC wrapper. The wrapper
+runs the real compiler, then replaces the verified candidate with a specimen
+missing the expected function. The test requires the location diagnostic before
+caller compilation starts. This is harness sensitivity evidence, not a semantic
+reference comparison; it requires the external runtime environment.
 
 ## Manual Regression Examples
 

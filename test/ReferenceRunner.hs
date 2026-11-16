@@ -2,17 +2,24 @@
 -- This module deliberately has no MemoristANT or QuickCheck build dependency.
 module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
-    , runReferenceCase, checkReferenceHarness
+    , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
 import Cost.Translate (translateFile)
+import Data.List (isInfixOf, isPrefixOf)
+import Data.Maybe (fromMaybe)
+import GeneratedFunctions (checkTopLevelFunctions)
 import Paths_cost_translate (getDataFileName)
-import System.Directory (copyFile, createDirectoryIfMissing, getTemporaryDirectory)
+import System.Directory
+    ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
+    , getPermissions, getTemporaryDirectory, setPermissions
+    )
+import System.Environment (getEnvironment, getExecutablePath)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO.Temp (createTempDirectory)
-import System.Process (readProcessWithExitCode)
+import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 
 data ReferenceEnvironment = ReferenceEnvironment
     { environmentRoot :: FilePath
@@ -51,6 +58,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
         copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
     result <- translateFile (generated </> "Example.hs") (generated </> "Generated.hs")
     either (fail . ((label ++ ": translation failed: ") ++)) pure result
+    checkTopLevelFunctions (generated </> "Example.hs") (generated </> "Generated.hs")
     copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
     actual <- buildObserver environment generated
     expected <- buildObserver environment reference
@@ -91,6 +99,49 @@ compile support sandbox entry packages executable = do
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
     unless (status == ExitSuccess) (fail ("observer compilation failed in " ++ sandbox ++ "\n" ++ out ++ err))
+
+-- Mutate a real publication, not the lifecycle API. The wrapper first runs real
+-- GHC, then replaces its successfully checked candidate before publication.
+-- Removing the unconditional guard must make this infrastructure test fail even
+-- though the later caller compiler would also reject the missing export.
+checkGeneratedFunctionLifecycle :: ReferenceEnvironment -> IO ()
+checkGeneratedFunctionLifecycle environment = do
+    root <- createTempDirectory (environmentRoot environment) "function-lifecycle-"
+    let commands = root </> "commands"
+        wrapper = commands </> "ghc"
+        marker = root </> "mutation.log"
+    createDirectoryIfMissing True commands
+    realGhc <- findExecutable "ghc" >>= maybe (fail "lifecycle specimen requires ghc") pure
+    wrapperSource <- getDataFileName ("test" </> "generated-functions" </> "PublishMissing.sh")
+    missing <- getDataFileName ("test" </> "generated-functions" </> "Missing.hs")
+    copyFile wrapperSource wrapper
+    permissions <- getPermissions wrapper
+    setPermissions wrapper permissions { executable = True }
+    executablePath <- getExecutablePath
+    processEnvironment <- getEnvironment
+    let injected =
+            [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" processEnvironment))
+            ,("TMPDIR", root), ("FUNCTION_SPECIMEN_GHC", realGhc)
+            ,("FUNCTION_SPECIMEN_OUTPUT", missing), ("FUNCTION_SPECIMEN_LOG", marker)]
+        child = (proc executablePath ["identity"])
+            { env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) processEnvironment) }
+    (status, out, err) <- readCreateProcessWithExitCode child ""
+    writeFile (root </> "lifecycle.log") (out ++ err)
+    mutated <- doesFileExist marker
+    fixture <- case [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line] of
+        [directory] -> pure directory
+        _ -> fail ("lifecycle specimen did not reach the ordinary fixture\n" ++ out ++ err)
+    let generated = fixture </> "generated"
+    published <- doesFileExist (generated </> "Generated.hs")
+    compiled <- doesFileExist (generated </> "compile.log")
+    unless (status /= ExitSuccess && mutated && published && not compiled &&
+            all (`isInfixOf` err) ["Example.hs:2:", "top-level source function f",
+                "module-level generated binding fM", generated </> "Generated.hs"]) $
+        fail ("global function guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
+              out ++ err ++ "\nArtifacts: " ++ root)
+    putStrLn "PASS: generated-functions / ordinary fixture lifecycle rejects corrupted publication before caller compilation"
+  where
+    prefix = "Reference fixtures and logs: "
 
 -- These are infrastructure specimens, not translator correctness evidence.
 -- They deliberately inject known mistakes and must be rejected by the same

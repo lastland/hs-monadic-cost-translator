@@ -8,21 +8,12 @@ import Data.Maybe (maybeToList)
 import GHC
     ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), HsExpr(..), LHsExpr
     , MatchGroup(..), Match(..), Pat(..), HsDoFlavour(..), StmtLR(..), ExprLStmt
-    , getSessionDynFlags, moduleNameString
-    , runGhc, unLoc
+    , moduleNameString, unLoc
     )
-import GHC.Data.FastString (mkFastString)
-import GHC.Data.StringBuffer (stringToStringBuffer)
-import GHC.Driver.Config.Parser (initParserOpts)
-import GHC.Driver.Session (parseDynamicFilePragma)
-import GHC.Paths (libdir)
-import qualified GHC.Parser as Parser
-import GHC.Parser.Header (getOptions)
-import GHC.Parser.Lexer (ParseResult(..), getPsErrorMessages, initParserState, unP)
-import GHC.Types.Error (isEmptyMessages)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (RdrName(..), rdrNameOcc)
-import GHC.Types.SrcLoc (GenLocated(..), mkRealSrcLoc)
+import GHC.Types.SrcLoc (GenLocated(..))
+import GeneratedFunctions (parseHaskellModule)
 import Paths_cost_translate (getDataFileName)
 import qualified ReferenceRunner
 import System.Directory (findExecutable)
@@ -122,17 +113,7 @@ checkTerminalDoBlocks output target = do
 -- imports. Checks select a binding structurally, not by layout or fresh names.
 parseGeneratedBinding :: FilePath -> String -> IO (Match GhcPs (LHsExpr GhcPs))
 parseGeneratedBinding output target = do
-    source <- readFile output
-    flags <- runGhc (Just libdir) getSessionDynFlags
-    let buffer = stringToStringBuffer source
-        (headerErrors, options) = getOptions (initParserOpts flags) buffer output
-    unless (isEmptyMessages headerErrors) (fail (output ++ ": cannot parse generated pragmas"))
-    (fileFlags, leftovers, _) <- parseDynamicFilePragma flags options
-    unless (null leftovers) (fail (output ++ ": unrecognized generated file options"))
-    ast <- case unP Parser.parseModule (initParserState (initParserOpts fileFlags)
-                    buffer (mkRealSrcLoc (mkFastString output) 1 1)) of
-        POk state parsed | isEmptyMessages (getPsErrorMessages state) -> pure (unLoc parsed)
-        _ -> fail (output ++ ": cannot parse generated Haskell")
+    ast <- parseHaskellModule output
     case [unLoc alternative | L _ (ValD _ (FunBind _ name matches)) <- hsmodDecls ast,
             occNameString (rdrNameOcc (unLoc name)) == target,
             alternative <- unLoc (mg_alts matches)] of
