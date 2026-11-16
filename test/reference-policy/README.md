@@ -1,8 +1,9 @@
 # Reference-policy specimens
 
 These files are parsed, never compiled or executed. Invalid modules and Cabal
-files are deliberate adversarial inputs. Keep them checked in: the policy test
-must not manufacture Haskell programs or mutate live semantic fixtures.
+files are deliberate adversarial inputs. The policy tests use these checked-in
+specimens rather than generating Haskell programs or mutating live semantic
+fixtures.
 
 `ReferencePolicy` checks fixture layout, imports, compiler hooks and static probe
 catalogs. It does not establish semantic correctness or handwritten authorship.

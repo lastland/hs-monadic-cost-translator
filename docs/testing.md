@@ -35,11 +35,12 @@ Compiling the two workers in separate sandboxes ensures that both sides can decl
 ## Manual Regression Examples
 
 The five `manual-*` cases use the actual sources in [`examples/`](../examples/README.md),
-not fixture copies. `ReferencePolicy.manualExamples` binds each original fix to
-its example and selector. The mandatory inventory gate rejects missing examples,
-missing reference cases, source substitutions, and missing fix/source/selector
-documentation. Its negative self-tests run under `fixture-policy` without the
-target runtime.
+not fixture copies. `ReferencePolicy.manualExamples` registers each example source
+with its selector. The mandatory inventory gate rejects missing examples,
+missing reference cases, source substitutions, and missing source/selector rows
+in `examples/README.md`. Each row must name the source file and selector on the
+same line. Its negative self-tests run under `fixture-policy` without the target
+runtime.
 
 Source paths returned by discovery are Cabal data-file paths. `ReferenceRunner`
 stages each source under its declared filename as well as `Example.hs`, retaining

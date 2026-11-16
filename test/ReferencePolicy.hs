@@ -90,29 +90,29 @@ sourceOnlyDirectories =
     ["thunk-matching", "scoped-factory-case-shadow", "scoped-factory-guard-shadow"]
 
 -- These are the actual user-facing sources, not copies in test/cases. Keep one
--- reference case per fix, and require its source and manual instructions even
+-- reference case per example, and require its source and manual instructions even
 -- when a runtime-free selector is the only requested test.
-manualExamples :: [(String, String, FilePath)]
+manualExamples :: [(String, FilePath)]
 manualExamples =
-    [("b5f21ad", "manual-thunk-arguments", "examples/ThunkArguments.hs")
-    ,("446f2c1", "manual-thunk-matching", "examples/ThunkMatching.hs")
-    ,("f615f65", "manual-scoped-annotations", "examples/ScopedAnnotations.hs")
-    ,("dcf55d1", "manual-constructor-equations", "examples/ConstructorEquations.hs")
-    ,("d892e2f", "manual-terminal-do", "examples/TerminalDo.hs")]
+    [("manual-thunk-arguments", "examples/ThunkArguments.hs")
+    ,("manual-thunk-matching", "examples/ThunkMatching.hs")
+    ,("manual-scoped-annotations", "examples/ScopedAnnotations.hs")
+    ,("manual-constructor-equations", "examples/ConstructorEquations.hs")
+    ,("manual-terminal-do", "examples/TerminalDo.hs")]
 
 manualExampleProblems :: [FilePath] -> [(String, [FilePath])] -> String -> [String]
 manualExampleProblems files cases instructions = concat
     [[problem source "missing manual example" | source `notElem` files] ++
      [problem source "manual example must be the registered semantic source"
         | lookup label cases /= Just [source]] ++
-     [problem source "missing fix/source/selector row in examples/README.md"
-        | not (any (\line -> all (`isInfixOf` line) [commit, takeFileName source, label])
-                   (lines instructions))]
-    | (commit, label, source) <- manualExamples]
+     [problem source "missing source/selector row in examples/README.md"
+         | not (any (\line -> all (`isInfixOf` line) [takeFileName source, label])
+                    (lines instructions))]
+    | (label, source) <- manualExamples]
 
 checkManualExamples :: [(String, [FilePath])] -> IO [String]
 checkManualExamples cases = do
-    files <- fmap concat $ forM manualExamples $ \(_, _, source) -> do
+    files <- fmap concat $ forM manualExamples $ \(_, source) -> do
         path <- getDataFileName source
         exists <- doesFileExist path
         symbolic <- if exists then pathIsSymbolicLink path else pure False
@@ -167,7 +167,7 @@ inventoryCases complete (Inventory directories files filesystemProblems) = (case
     labels = sort . nub $ [d | d <- topDirectories,
         d `notElem` fixed ++ sourceOnlyDirectories ++ unregistered] ++
         [label | complete, (label, _) <- sourceAliases]
-    sources label = case [source | (_, registered, source) <- manualExamples, registered == label] of
+    sources label = case [source | (registered, source) <- manualExamples, registered == label] of
         [] -> map ("test/cases" </>) . sort $
             fromMaybe [label </> "Example.hs"] (lookup label sourceAliases)
         examples -> examples
@@ -182,7 +182,7 @@ inventoryCases complete (Inventory directories files filesystemProblems) = (case
                      complete || label `elem` topDirectories]
     expected = nub (semanticFiles ++ fixedFiles ++ providerFiles)
     requiredDirs = [d | complete, d <- fixed ++ sourceOnlyDirectories ++ map fst sourceAliases ++
-                                      [label | (_, label, _) <- manualExamples]]
+                                      [label | (label, _) <- manualExamples]]
     problems = filesystemProblems ++
         [problem d "unregistered diagnostic or infrastructure fixture" | d <- unregistered] ++
         [problem d "unaccounted nested fixture directory" | d <- directories,
@@ -328,7 +328,7 @@ checkModule flags role generated file ast =
     -- Minimal is the declared source of this one explicit source alias, not an
     -- arbitrary second local module. The paired ANF sources both declare Example.
     sourceModule = fromMaybe defaultSourceModule $ lookup (takeDirectory file)
-        [("test/cases" </> label, takeBaseName source) | (_, label, source) <- manualExamples]
+        [("test/cases" </> label, takeBaseName source) | (label, source) <- manualExamples]
     defaultSourceModule = if file `elem` ["test/cases/generated-warnings-minimal/Case.hs",
                                          "test/cases/generated-warnings-minimal/Reference.hs"]
                           then "Minimal" else "Example"
@@ -1045,9 +1045,10 @@ checkReferencePolicyTests = do
     mapM_ expectManifest manifestSpecimens
     mapM_ expectRegistrations
         [("registration-valid", []), ("registration-nested", ["unregistered Cabal manifest"])]
-    let exampleFiles = [source | (_, _, source) <- manualExamples]
-        exampleCases = [(label, [source]) | (_, label, source) <- manualExamples]
-        exampleInstructions = unlines [unwords [commit, label, source] | (commit, label, source) <- manualExamples]
+    let exampleFiles = [source | (_, source) <- manualExamples]
+        exampleCases = [(label, [source]) | (label, source) <- manualExamples]
+        exampleInstructions = unlines $ ["| Source | Selector |", "| --- | --- |"] ++
+            ["| `" ++ takeFileName source ++ "` | `" ++ label ++ "` |" | (label, source) <- manualExamples]
     expect "manual-examples/valid" [] (manualExampleProblems exampleFiles exampleCases exampleInstructions)
     expect "manual-examples/missing-source" ["missing manual example"]
         (manualExampleProblems [] exampleCases exampleInstructions)
@@ -1055,10 +1056,17 @@ checkReferencePolicyTests = do
         (manualExampleProblems exampleFiles [] exampleInstructions)
     expect "manual-examples/copied-source" ["registered semantic source"]
         (manualExampleProblems exampleFiles
-            [(label, ["test/cases/copied/Example.hs"]) | (_, label, _) <- manualExamples]
+            [(label, ["test/cases/copied/Example.hs"]) | (label, _) <- manualExamples]
             exampleInstructions)
-    expect "manual-examples/missing-instructions" ["missing fix/source/selector row"]
+    expect "manual-examples/missing-instructions" ["missing source/selector row"]
         (manualExampleProblems exampleFiles exampleCases "")
+    expect "manual-examples/missing-filename" ["missing source/selector row"]
+        (manualExampleProblems exampleFiles exampleCases (unlines [label | (label, _) <- manualExamples]))
+    expect "manual-examples/missing-selector" ["missing source/selector row"]
+        (manualExampleProblems exampleFiles exampleCases (unlines (map takeFileName exampleFiles)))
+    expect "manual-examples/split-instructions" ["missing source/selector row"]
+        (manualExampleProblems exampleFiles exampleCases
+            (unlines (concat [[takeFileName source, label] | (label, source) <- manualExamples])))
     putStrLn "PASS: reference-policy / parsed static catalogs, isolated references, fail-closed inventory and test registrations"
   where
     expectSource flags (role, specimen, fragments) = do
