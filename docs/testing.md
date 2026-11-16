@@ -35,7 +35,7 @@ When `cost-translate-test` starts, `test/Main.hs` discovers all semantic fixture
 For each semantic fixture, `ReferenceRunner` creates two isolated sandboxes under a temporary run directory (`generated/` and `reference/`):
 
 1. Both sandboxes receive the pure source fixture (`Example.hs`, or a registered alias from `sourceAliases` in `test/ReferencePolicy.hs`) and the shared `Case.hs`.
-2. In `generated/`, `Cost.Translate.translateFile` translates the source module into `Generated.hs`. Before compiling any callers, `GeneratedFunctions` parses the source and published output with their language pragmas and requires every parameterized top-level source function to have a module-level generated binding under its translated name. Signatures, record selectors, and nested bindings do not satisfy this check. In `reference/`, `ReferenceRunner` copies the handwritten `Reference.hs` to `Generated.hs`; handwritten references are not subject to the source/output location rule.
+2. In `generated/`, `Cost.Translate.translateFile` translates the source module into `Generated.hs`. Before compiling any callers, `GeneratedFunctions` parses the source and published output with their language pragmas and requires every parameterized top-level source function to have a module-level generated binding under its translated name. Signatures, record selectors, and nested bindings do not satisfy this check. `GeneratedConstruction` then rejects references to computation runners and result-reasoning operations. In `reference/`, `ReferenceRunner` copies the handwritten `Reference.hs` to `Generated.hs`; handwritten references are not subject to these generated-output checks.
 3. `ReferenceRunner` compiles `test/reference/Observe.hs` against `Case.hs` and `Generated.hs` in each sandbox using `ghc -dynamic -Werror=unused-imports -package MemoristANT -package QuickCheck`.
 4. The shared controller (`test/reference/Compare.hs`) starts both `observe` binaries as line-buffered child processes over `stdin`/`stdout` (`test/reference/Protocol.hs`), compares them across fixed boundary `Sample` inputs and 200 seeded QuickCheck trials with shrinking, and writes `comparison.log`.
 5. After comparison passes, `test/GeneratedChecks.hs` runs any applicable post-comparison artifact checks on `generated/` (`-Wall -Werror` and HLint on `generated-warnings*`, code-size bounds on `pattern-scaling`, maximal-application arity logs on `foldr-arity-four-partial`, single-inspection constructor grouping on `ordered-equations-and-conjunctive-guards`, and terminal ordinary-`do` flattening on `anf-demand` and `manual-terminal-do`). The terminal-`do` checks also look through parentheses and unannotated `let … in` wrappers, but stop at type annotations and control-flow boundaries. The paired binder pre-check on `anf-scoped-renaming` runs before comparison.
@@ -59,6 +59,36 @@ runs the real compiler, then replaces the verified candidate with a specimen
 missing the expected function. The test requires the location diagnostic before
 caller compilation starts. This is harness sensitivity evidence, not a semantic
 reference comparison; it requires the external runtime environment.
+
+Generated code constructs Memorist computations. It must not run them or extract
+their annotated results. `GeneratedConstruction` checks resolved GHC names in
+every published generated artifact before caller compilation. It rejects
+`eval`, `eval1`, the `Annotated` projections (`value`, `annot`, `costAnnot`,
+`usageAnnot`), and the raw computation runners (`runM`, `runMMBT`, `runMBT`,
+`runAnnotT`, `runMT`). It also rejects the definitions exported by
+`Memorist.Infer.Infer`, including `infcost`, `calcCost`, and `correct`: these APIs
+run or inspect computations rather than construct them. The rule includes uses
+inside generated helpers that are never called. Renaming an import, importing
+the operation without qualification, or assigning it to a local alias does not
+exempt it. An unrelated local function named `value` is not a violation.
+
+This boundary applies to generated support code as well as translated source
+bindings. The shared observer and independent reasoning checks may use these
+operations to inspect results and measure demanded costs. The check does not
+ban thunk operations such as `lazy`, `force`, or `tval` used by representation
+conversions. Contract specimens and publication-mutation tests check that the
+guard rejects reasoning operations even when a generated caller would otherwise
+compile and return the correct value and cost.
+
+Run this contract and its lifecycle sensitivity test with the external runtime
+available:
+
+```sh
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="generated-construction"
+```
+
+The guard checks references to these runtime definitions. It is not a proof
+against arbitrary reimplementations of an interpreter.
 
 ## Manual Regression Examples
 

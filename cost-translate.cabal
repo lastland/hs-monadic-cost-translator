@@ -26,6 +26,7 @@ data-files:
     test/reference-policy/**/*.cabal
     test/generated-functions/*.hs
     test/generated-functions/*.sh
+    test/generated-construction/*.hs
 extra-source-files:
     docs/testing.md
     examples/VALIDATION.md
@@ -93,6 +94,7 @@ test-suite cost-translate-test
     main-is:          Main.hs
     other-modules:    FixturePolicy
                      GeneratedChecks
+                     GeneratedConstruction
                      GeneratedFunctions
                      ReferencePolicy
                      ReferenceRunner

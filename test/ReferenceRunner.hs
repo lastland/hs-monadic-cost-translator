@@ -3,12 +3,14 @@
 module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
     , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
+    , checkGeneratedConstructionLifecycle
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
 import Cost.Translate (translateFile)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
+import GeneratedConstruction (checkGeneratedConstruction)
 import GeneratedFunctions (checkTopLevelFunctions)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
@@ -59,6 +61,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
     result <- translateFile (generated </> "Example.hs") (generated </> "Generated.hs")
     either (fail . ((label ++ ": translation failed: ") ++)) pure result
     checkTopLevelFunctions (generated </> "Example.hs") (generated </> "Generated.hs")
+    checkGeneratedConstruction (generated </> "Generated.hs")
     copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
     actual <- buildObserver environment generated
     expected <- buildObserver environment reference
@@ -102,18 +105,31 @@ compile support sandbox entry packages executable = do
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real
 -- GHC, then replaces its successfully checked candidate before publication.
--- Removing the unconditional guard must make this infrastructure test fail even
--- though the later caller compiler would also reject the missing export.
+-- The function mutant loses its export; the construction mutant keeps identity's
+-- public type, values and costs. Neither may reach caller compilation.
 checkGeneratedFunctionLifecycle :: ReferenceEnvironment -> IO ()
 checkGeneratedFunctionLifecycle environment = do
-    root <- createTempDirectory (environmentRoot environment) "function-lifecycle-"
+    checkPublicationGuard environment "function" ("generated-functions" </> "Missing.hs")
+        ["Example.hs:2:", "top-level source function f", "module-level generated binding fM"]
+    putStrLn "PASS: generated-functions / ordinary fixture lifecycle rejects corrupted publication before caller compilation"
+
+checkGeneratedConstructionLifecycle :: ReferenceEnvironment -> IO ()
+checkGeneratedConstructionLifecycle environment = do
+    checkPublicationGuard environment "construction" ("generated-construction" </> "ReasoningPublication.hs")
+        ["Generated.hs:8:", "reasoning-only operation Memorist.Base.Core.value",
+         "reasoning-only operation Memorist.Base.Core.eval1", "is forbidden in generated code"]
+    putStrLn "PASS: generated-construction / ordinary fixture lifecycle rejects behavior-preserving reasoning operations before caller compilation"
+
+checkPublicationGuard :: ReferenceEnvironment -> String -> FilePath -> [String] -> IO ()
+checkPublicationGuard environment label specimen expected = do
+    root <- createTempDirectory (environmentRoot environment) (label ++ "-lifecycle-")
     let commands = root </> "commands"
         wrapper = commands </> "ghc"
         marker = root </> "mutation.log"
     createDirectoryIfMissing True commands
     realGhc <- findExecutable "ghc" >>= maybe (fail "lifecycle specimen requires ghc") pure
     wrapperSource <- getDataFileName ("test" </> "generated-functions" </> "PublishMissing.sh")
-    missing <- getDataFileName ("test" </> "generated-functions" </> "Missing.hs")
+    replacement <- getDataFileName ("test" </> specimen)
     copyFile wrapperSource wrapper
     permissions <- getPermissions wrapper
     setPermissions wrapper permissions { executable = True }
@@ -122,7 +138,7 @@ checkGeneratedFunctionLifecycle environment = do
     let injected =
             [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" processEnvironment))
             ,("TMPDIR", root), ("FUNCTION_SPECIMEN_GHC", realGhc)
-            ,("FUNCTION_SPECIMEN_OUTPUT", missing), ("FUNCTION_SPECIMEN_LOG", marker)]
+             ,("FUNCTION_SPECIMEN_OUTPUT", replacement), ("FUNCTION_SPECIMEN_LOG", marker)]
         child = (proc executablePath ["identity"])
             { env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) processEnvironment) }
     (status, out, err) <- readCreateProcessWithExitCode child ""
@@ -135,11 +151,9 @@ checkGeneratedFunctionLifecycle environment = do
     published <- doesFileExist (generated </> "Generated.hs")
     compiled <- doesFileExist (generated </> "compile.log")
     unless (status /= ExitSuccess && mutated && published && not compiled &&
-            all (`isInfixOf` err) ["Example.hs:2:", "top-level source function f",
-                "module-level generated binding fM", generated </> "Generated.hs"]) $
-        fail ("global function guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
+            all (`isInfixOf` err) ((generated </> "Generated.hs") : expected)) $
+        fail ("global " ++ label ++ " guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
               out ++ err ++ "\nArtifacts: " ++ root)
-    putStrLn "PASS: generated-functions / ordinary fixture lifecycle rejects corrupted publication before caller compilation"
   where
     prefix = "Reference fixtures and logs: "
 
