@@ -1,0 +1,3 @@
+# Compiler discovery must not load the root project's external runtime package.
+resolver: ghc-9.10.3
+packages: []

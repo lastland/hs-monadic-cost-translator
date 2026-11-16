@@ -14,6 +14,11 @@ The translator requires:
 
 The root `stack.yaml` registers both `.` and `hs-pbt/` as packages so that GHC environments invoked under `stack run` and `stack test` can locate `MemoristANT` and `QuickCheck`.
 
+The GHC API dependencies support **GHC 9.10.3 only**. Cabal rejects other
+versions during dependency resolution, before compilation. The runtime-free
+validation command below needs Cabal and an installed GHC 9.10.3, but neither
+Stack nor `hs-pbt/`.
+
 ### Compiling and Running the Translator
 
 Build the project with Stack:
@@ -123,13 +128,19 @@ GitHub Actions runs lint and runtime-free build/test jobs on GHC **9.10.3**, Cab
 
 ```sh
 hlint src app test/*.hs test/reference/*.hs
+python3 test/compiler_preflight.py
 cabal update
-cabal build exe:cost-translate test:cost-translate-test --ghc-options='-Wall -Werror'
-export PATH="$(dirname "$(cabal list-bin exe:cost-translate --ghc-options='-Wall -Werror')"):$PATH"
-cabal test cost-translate-test --ghc-options='-Wall -Werror' \
-  --test-options='diagnostics generated-module-name-diagnostic whole-module-failure test-selection fixture-policy' \
-  --test-show-details=direct
+sh scripts/validate.sh
 ```
+
+`scripts/validate.sh` discovers an installed `ghc-9.10.3`, then a matching `ghc`
+on `PATH`, then Stack's compiler (`--no-install-ghc`). It never installs GHC.
+Stack discovery uses `scripts/stack-compiler.yaml`, which loads no runtime packages.
+Override discovery with `GHC=/path/to/ghc sh scripts/validate.sh`, or inspect the
+selection without building with `sh scripts/validate.sh --check-compiler`.
+The command checks the compiler and matching `ghc-pkg`, passes both explicitly
+to Cabal, and sets `PATH` so test and translator subprocesses use the same
+toolchain. CI supplies the setup action's exact compiler path via `GHC`.
 
 The explicit test globs exclude fixture, policy, and mutation inputs.
 

@@ -5,6 +5,9 @@ synopsis:           Translate pure Haskell to a monadic cost interface (proof of
 build-type:         Simple
 license:            MIT
 license-file:       LICENSE
+-- The translator uses this compiler's internal GHC API. Other versions are
+-- unsupported; build-depends below enforces this independently of the script.
+tested-with:        GHC ==9.10.3
 data-files:
     cost-translate.cabal
     integration/cost-translate-integration.cabal
@@ -17,6 +20,9 @@ data-files:
     test/reference-policy/**/*.cabal
 extra-source-files:
     docs/testing.md
+    scripts/stack-compiler.yaml
+    scripts/validate.sh
+    test/compiler_preflight.py
     test/OutputAstProbe.hs
     test/RuntimeFilterGate.hs
     test/RuntimeScanlGate.hs
@@ -48,8 +54,8 @@ library
         Cost.Translate.Output
     build-depends:
         base >=4.18 && <5,
-        ghc,
-        ghc-boot-th,
+        ghc ==9.10.3,
+        ghc-boot-th ==9.10.3,
         ghc-paths,
         containers,
         directory,
@@ -82,7 +88,7 @@ test-suite cost-translate-test
         cost-translate,
         directory,
         filepath,
-        ghc,
+        ghc ==9.10.3,
         ghc-paths,
         process,
         temporary

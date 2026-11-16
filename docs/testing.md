@@ -2,6 +2,22 @@
 
 The root test suite (`cost-translate-test`, `test/Main.hs`) verifies every successful-translation fixture by comparing the translated module against an independent, handwritten cost-monadic reference. The runner enforces this architecture in code—not through prompt conventions—via a mandatory static policy gate (`test/ReferencePolicy.hs`) and a single shared execution pipeline (`test/ReferenceRunner.hs` and `test/reference/`).
 
+## Compiler Selection and Runtime-Free Validation
+
+Only **GHC 9.10.3** is supported. The Cabal `ghc` and `ghc-boot-th` dependency
+bounds reject other versions before compilation; `tested-with` records the pin.
+
+Run `sh scripts/validate.sh` for the runtime-free CI build and checks with
+`-Wall -Werror`. It discovers an installed `ghc-9.10.3`, a matching `ghc` on
+`PATH`, or Stack's installed compiler, in that order. It never installs GHC.
+Stack discovery uses a compiler-only configuration with no runtime packages.
+Set `GHC=/path/to/ghc` to override discovery, or pass `--check-compiler` to run
+only the preflight. Validation selects matching `ghc` and `ghc-pkg` for Cabal
+and child processes. It requires neither Stack nor `hs-pbt/` when the compiler
+is available directly. Run `python3 test/compiler_preflight.py` to check selection
+and early rejection without a real compiler. The full semantic and integration
+suites still use the Stack commands below.
+
 ## Execution Pipeline and Sandbox Isolation
 
 When `cost-translate-test` starts, `test/Main.hs` discovers all semantic fixtures (`discoverReferenceCases`) into a typed `Group` registry with no arbitrary `IO` callbacks and runs `validateReferenceCases` across the entire repository **before** executing any selected group. Even a single-case run fails immediately if any fixture directory, `Case.hs`, `Reference.hs`, or `.cabal` test-suite stanza violates policy.
