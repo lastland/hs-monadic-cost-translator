@@ -70,7 +70,11 @@ every published generated artifact before caller compilation. It rejects
 run or inspect computations rather than construct them. The rule includes uses
 inside generated helpers that are never called. Renaming an import, importing
 the operation without qualification, or assigning it to a local alias does not
-exempt it. An unrelated local function named `value` is not a violation.
+exempt it. Record updates of forbidden fields and patterns that deconstruct the
+runtime `Annotated` constructor are also rejected. The check resolves ambiguous
+update fields through GHC's typechecked syntax rather than banning their spelling.
+Unrelated user fields or constructors and `Annotated` type mentions remain legal.
+An unrelated local function named `value` is not a violation.
 
 This boundary applies to generated support code as well as translated source
 bindings. The shared observer and independent reasoning checks may use these
