@@ -2,7 +2,13 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- Independent equations for the observed dictionary specializations. The
 -- caches model source sharing, not generated names or structural type keys.
-module Generated where
+module Generated
+    ( workM, plainM, parenthesizedM, annotatedM, asPatternM, guardAliasM
+    , guardParenthesizedM, guardAnnotatedM, guardAsM, computedCaseM
+    , computedGuardM, localM, sourceLetM, badM, ignoredCaseM, ignoredGuardM
+    , suspendedFailureM, sameCaseM, sameGuardM, differentM, localDictionariesM
+    , emptyM, polymorphicM, localPolymorphicM
+    ) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
@@ -24,6 +30,11 @@ initialize = do
             emptyValue one
     pure (Bindings int integer emptyThunk)
 
+-- Suspend the whole cache initialization so every global name has negative
+-- ancestry and cannot collide with a caller's ordinary allocation.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
+
 -- A reserved ordinary name supports one unconstrained thunk at every element
 -- type. No unsafe cast or generated sharing helper is needed.
 atAnchor :: M.Th () -> M.MemoristM a -> M.Th a
@@ -35,26 +46,26 @@ workValue x = do
     value <- M.force x
     pure (value + value)
 
-workM :: Num a => Bindings -> M.Th a -> M.MemoristM a
-workM _ = workValue
+workM :: Num a => M.Th a -> M.MemoristM a
+workM = workValue
 
 plainM, parenthesizedM, annotatedM, asPatternM, guardAliasM,
     guardParenthesizedM, guardAnnotatedM, guardAsM
-    :: Bindings -> M.Th a -> M.MemoristM (M.PairT a a)
-plainM _ x = M.tick >> pure (M.PairT x x)
-parenthesizedM _ x = M.tick >> pure (M.PairT x x)
-annotatedM _ x = M.tick >> pure (M.PairT x x)
-asPatternM _ x = M.tick >> pure (M.PairT x x)
-guardAliasM _ x = M.tick >> pure (M.PairT x x)
-guardParenthesizedM _ x = M.tick >> pure (M.PairT x x)
-guardAnnotatedM _ x = M.tick >> pure (M.PairT x x)
-guardAsM _ x = M.tick >> pure (M.PairT x x)
+    :: M.Th a -> M.MemoristM (M.PairT a a)
+plainM x = M.tick >> pure (M.PairT x x)
+parenthesizedM x = M.tick >> pure (M.PairT x x)
+annotatedM x = M.tick >> pure (M.PairT x x)
+asPatternM x = M.tick >> pure (M.PairT x x)
+guardAliasM x = M.tick >> pure (M.PairT x x)
+guardParenthesizedM x = M.tick >> pure (M.PairT x x)
+guardAnnotatedM x = M.tick >> pure (M.PairT x x)
+guardAsM x = M.tick >> pure (M.PairT x x)
 
 computedCaseM, computedGuardM, localM :: Num a
-    => Bindings -> M.Th a -> M.MemoristM (M.PairT a a)
-computedCaseM _ = computedPair
-computedGuardM _ = computedPair
-localM _ = computedPair
+    => M.Th a -> M.MemoristM (M.PairT a a)
+computedCaseM = computedPair
+computedGuardM = computedPair
+localM = computedPair
 
 computedPair :: Num a => M.Th a -> M.MemoristM (M.PairT a a)
 computedPair x = do
@@ -62,41 +73,48 @@ computedPair x = do
     shared <- M.lazy (workValue x)
     pure (M.PairT shared shared)
 
-sourceLetM :: Bindings -> M.Th a -> M.MemoristM (M.PairT a a)
-sourceLetM _ x = do
+sourceLetM :: M.Th a -> M.MemoristM (M.PairT a a)
+sourceLetM x = do
     M.tick
     shared <- M.lazy (M.force x)
     pure (M.PairT shared shared)
 
-badM :: Bindings -> M.Th a -> M.MemoristM a
-badM _ _ = M.tick >> error "unused matching subject evaluated"
+badM :: M.Th a -> M.MemoristM a
+badM _ = M.tick >> error "unused matching subject evaluated"
 
-ignoredCaseM, ignoredGuardM :: Bindings -> M.Th a -> M.MemoristM a
+ignoredCaseM, ignoredGuardM :: M.Th a -> M.MemoristM a
 ignoredCaseM = ignored
 ignoredGuardM = ignored
 
-ignored :: Bindings -> M.Th a -> M.MemoristM a
-ignored bindings x = do
+ignored :: M.Th a -> M.MemoristM a
+ignored x = do
     M.tick
-    _ <- M.lazy (badM bindings x)
+    _ <- M.lazy (badM x)
     M.force x
 
-suspendedFailureM :: Bindings -> M.Th a -> M.MemoristM (M.PairT a a)
-suspendedFailureM bindings x = do
+suspendedFailureM :: M.Th a -> M.MemoristM (M.PairT a a)
+suspendedFailureM x = do
     M.tick
-    failed <- M.lazy (badM bindings x)
+    failed <- M.lazy (badM x)
     pure (M.PairT x failed)
 
-sameCaseM, sameGuardM :: Bindings -> M.Th t -> M.MemoristM (M.PairT Int Int)
-sameCaseM bindings _ = M.tick >> pure (M.PairT (intCache bindings) (intCache bindings))
-sameGuardM bindings _ = M.tick >> pure (M.PairT (intCache bindings) (intCache bindings))
+sameCaseM, sameGuardM :: M.Th t -> M.MemoristM (M.PairT Int Int)
+sameCaseM = sameCaseWith globalBindings
+sameGuardM = sameGuardWith globalBindings
 
-differentM :: Bindings -> M.Th t -> M.MemoristM (M.PairT Int Integer)
-differentM bindings _ = M.tick >> pure (M.PairT (intCache bindings) (integerCache bindings))
+sameCaseWith, sameGuardWith :: Bindings -> M.Th t -> M.MemoristM (M.PairT Int Int)
+sameCaseWith bindings _ = M.tick >> pure (M.PairT (intCache bindings) (intCache bindings))
+sameGuardWith bindings _ = M.tick >> pure (M.PairT (intCache bindings) (intCache bindings))
 
-localDictionariesM :: Bindings -> M.Th t
+differentM :: M.Th t -> M.MemoristM (M.PairT Int Integer)
+differentM = differentWith globalBindings
+
+differentWith :: Bindings -> M.Th t -> M.MemoristM (M.PairT Int Integer)
+differentWith bindings _ = M.tick >> pure (M.PairT (intCache bindings) (integerCache bindings))
+
+localDictionariesM :: M.Th t
     -> M.MemoristM (M.PairT Int (M.PairT Int Integer))
-localDictionariesM _ _ = do
+localDictionariesM _ = do
     M.tick
     int <- M.lazy (M.lazy (pure 5) >>= workValue)
     integer <- M.lazy (M.lazy (pure 5) >>= workValue)
@@ -106,16 +124,20 @@ localDictionariesM _ _ = do
 emptyValue :: M.Th a -> M.MemoristM (L.ListT b)
 emptyValue _ = M.tick >> pure L.NilT
 
-emptyM :: Bindings -> M.Th a -> M.MemoristM (L.ListT b)
-emptyM _ = emptyValue
+emptyM :: M.Th a -> M.MemoristM (L.ListT b)
+emptyM = emptyValue
 
-polymorphicM :: Bindings -> M.Th t
+polymorphicM :: M.Th t
     -> M.MemoristM (M.PairT (L.ListT Int) (L.ListT Bool))
-polymorphicM bindings _ = M.tick >> pure (M.PairT (emptyCache bindings) (emptyCache bindings))
+polymorphicM = polymorphicWith globalBindings
 
-localPolymorphicM :: Bindings -> M.Th t
+polymorphicWith :: Bindings -> M.Th t
     -> M.MemoristM (M.PairT (L.ListT Int) (L.ListT Bool))
-localPolymorphicM _ x = do
+polymorphicWith bindings _ = M.tick >> pure (M.PairT (emptyCache bindings) (emptyCache bindings))
+
+localPolymorphicM :: M.Th t
+    -> M.MemoristM (M.PairT (L.ListT Int) (L.ListT Bool))
+localPolymorphicM x = do
     M.tick
     anchor <- M.lazy (pure ())
     let shared :: forall a. M.Th (L.ListT a)

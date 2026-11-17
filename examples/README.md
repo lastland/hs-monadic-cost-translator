@@ -12,7 +12,7 @@ This directory contains twelve pure Haskell modules within the supported subset 
 | [`Datatypes.hs`](Datatypes.hs) | Recursive and nested datatypes, explicit demands, top-level values |
 | [`Records.hs`](Records.hs) | Record fields and selectors, infix constructors, `Maybe` and pair fields |
 | [`HigherKinded.hs`](HigherKinded.hs) | Higher-kinded fields, `Fix`, non-regular recursion, conversions |
-| [`Shared.hs`](Shared.hs) | Top-level sharing through `initialize`, dictionary-sensitive sharing |
+| [`Shared.hs`](Shared.hs) | Monadic global values, dictionary-dependent values, global-sharing cost limitation |
 
 ### Focused Behavior and Code-Shape Modules
 
@@ -102,10 +102,11 @@ stack exec -- ghc -v0 -package MemoristANT -package QuickCheck \
 
 It prints `True` and `1`.
 
-Modules with top-level value bindings export `Bindings` and
-`initialize :: MemoristM Bindings`. Only functions that depend on those values,
-directly or through other functions, take `Bindings` as their first argument.
-Other functions retain their ordinary interface and need no initialization.
+Top-level values become monadic actions, such as `seedM :: MemoristM Int`.
+Every source function retains its ordinary translated interface, including
+functions that use those globals. No `Bindings` or `initialize` protocol is
+required. Re-executing a global action does not retain its earlier result; see
+the global-sharing cost limitation in the `Shared.hs` section below.
 
 **Cost model summary**: Every translated function call (and generated record selector) charges 1 tick on entry, constructor allocation charges 0 ticks, and scalar operators add 0 entry ticks. All costs below are measured under `fullDemand` unless stated otherwise.
 
@@ -219,22 +220,32 @@ case abstract converted :: Source.Higher Source.Layer Int of
 
 ### `Shared.hs`
 
-| Program via `initialize` | Value | Cost |
-| :--- | :--- | :--- |
-| `firstM` at `5` plus `secondM` at `5` | `30` | `3` |
-| `asIntM` at `0` plus `asIntegerM` at `0` | `(1, 2)` | `5` |
-| `asIntM` at `0` plus `asIntM` at `0` | `2` | `3` |
+| Direct program | Value | Source cost | Runtime cost |
+| :--- | :--- | :--- | :--- |
+| `firstM` at `5` plus `secondM` at `5` | `30` | `3` | `4` |
+| `asIntM` at `0` plus `asIntegerM` at `0` | `(1, 2)` | `5` | `5` |
+| `asIntM` at `0` plus `asIntM` at `0` | `2` | `3` | `4` |
 
 ```haskell
 translated :: MemoristM Int
 translated = do
-    bindings <- initialize
-    a <- fromPure1 (firstM bindings) (5 :: Int)
-    b <- fromPure1 (secondM bindings) (5 :: Int)
+    a <- fromPure1 firstM (5 :: Int)
+    b <- fromPure1 secondM (5 :: Int)
     pure (a + b)
 ```
 
-`firstM` and `secondM` share the top-level `seed` thunk in `bindings`, so `double` evaluates once (`1` tick for `firstM` + `1` tick for `secondM` + `1` tick for `doubleM`). The polymorphic binding `shared :: (Eq a, Num a) => a` evaluates `expensive 18446744073709551616`, which overflows to `0` at 64-bit `Int` (returning `1` in `1` tick) and stays non-zero at `Integer` (recursing once to `expensive (n - n)` and returning `2` in `2` ticks). Calls at the same dictionary type (`Int`) share one thunk, while `Int` and `Integer` use separate thunks.
+The source cost column retains the call-by-need specification: `first` and
+`second` should share the work in `seed`. The runtime column records the current
+action-based execution, which runs `seedM` twice. This discrepancy is a known
+Memorist limitation tracked in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2), not
+a change to the source tick policy.
+
+The polymorphic binding `shared :: (Eq a, Num a) => a` evaluates
+`expensive 18446744073709551616`. The literal overflows to `0` at 64-bit `Int`
+(returning `1` in `1` tick) and stays non-zero at `Integer` (recursing once and
+returning `2` in `2` ticks). The monadic action uses the selected dictionary on
+each execution; it does not retain a result for repeated uses at the same type.
 
 ## Focused Behavior and Code-Shape Walkthroughs
 
@@ -269,11 +280,12 @@ let (sameA, sameB, xName) = value res in (sameA, sameB, next == nnext xName, MT.
 
 - Matching an existing thunk reference against a variable (`y`), wildcard (`_`), parenthesized reference, type-annotated reference, or `as`-pattern (`y@_`) preserves the subject's thunk identity (`tname`) without forcing bottom.
 - Computed match subjects (`work x`, `bad x`) and explicit `let` bindings (`let bound = x`) allocate fresh `M.lazy` suspensions shared across uses of the bound variable.
-- Unconstrained polymorphic values (`sharedEmpty :: [a]`) reuse a single thunk across `[Int]` and `[Bool]` instantiations, while dictionary-constrained values (`shared :: Num a => a`) share across uses of `Int` (`sameCaseM`, `sameGuardM`) and separate `Int` from `Integer` (`differentM`).
+- Unconstrained polymorphic local values reuse a single native thunk across
+  `[Int]` and `[Bool]` instantiations. Top-level values such as `sharedEmpty`
+  and `shared` are actions and have the global-sharing limitation above.
 
-`plainM`, `guardAliasM`, and `computedCaseM` do not depend on the top-level
-values and need no initialization. `sameCaseM`, `sameGuardM`, and `differentM`
-use `shared`, so their calls still use `Bindings`:
+All functions are directly callable. Repeated demands involving global values
+remain subject to the runtime limitation above:
 
 ```haskell
 let (res, next) = runM (do x <- lazy (error "unused" :: MemoristM Int); PairT a b <- plainM x; pure (tname x, tname a, tname b)) nzero
@@ -287,19 +299,21 @@ let (gxName, gaName, gbName) = value gRes in (gaName == gxName, gbName == gxName
 runInt (do PairT a b <- fromPure1 computedCaseM (5 :: Int); (+) <$> force a <*> force b)
 -- (20, 2)
 
-value (eval1 (do bindings <- initialize; u <- lazy (pure ()); PairT a b <- sameCaseM bindings u; PairT c d <- sameGuardM bindings u; PairT e f <- differentM bindings u; pure (tname a == tname b, tname a == tname c, tname c == tname d, tname a == tname e, tname e /= tname f)))
--- (True, True, True, True, True)
 ```
 
 ### `ScopedAnnotations.hs` (`manual-scoped-annotations`)
 
 `ScopedAnnotations.hs` exercises `case` and pattern-guard subjects carrying scoped type annotations (`(x :: a)` and `(shared :: a)`) inside an outer `forall a` when a nested local function declares a shadowing `forall a` (`inner :: forall a. a -> Int`) or a distinct `forall b`:
 
-- The generated code binds the annotated subject in a plain Haskell `let` (`let caseThunk0 = (x :: M.Th a)`) at the match boundary outside the inner `forall a`, preventing the inner binder from capturing the outer type variable `a`.
-- Because `caseThunk0` is a plain Haskell alias rather than `M.lazy (M.force x)`, it preserves `tname`, adds no thunk allocation, force, or tick, leaves unused bottom arguments suspended, and keeps the outer dictionary selection (`Int` vs. `Integer`).
+- For an existing parameter thunk, the generated code binds a plain Haskell
+  alias (`let caseThunk0 = (x :: M.Th a)`) outside the inner `forall a`. The
+  alias preserves `tname`, adds no allocation, force, or tick, and leaves unused
+  bottom arguments suspended.
+- Global action subjects use native suspensions at the outer match boundary.
+  Both forms preserve the outer scoped type and dictionary selection (`Int`
+  versus `Integer`), but global values retain the sharing limitation above.
 
-The parameter-only functions are directly callable. The factory functions refer
-to `shared` and still require `Bindings`:
+Both parameter-only functions and factory functions are directly callable:
 
 ```haskell
 runInt (fromPure1 caseParameterM (5 :: Int))
@@ -311,13 +325,13 @@ runInt (fromPure1 caseParameterM (undefined :: Int))
 runInt (fromPure1 guardParameterM (undefined :: Int))
 -- (1, 3)
 
-runInt (do bindings <- initialize; fromPure1 (caseFactoryM bindings) (5 :: Int))
+runInt (fromPure1 caseFactoryM (5 :: Int))
 -- (1, 3)
-runInt (do bindings <- initialize; fromPure1 (guardFactoryM bindings) (5 :: Int))
+runInt (fromPure1 guardFactoryM (5 :: Int))
 -- (1, 3)
-runInt (do bindings <- initialize; fromPure1 (caseFactoryM bindings) (5 :: Integer))
+runInt (fromPure1 caseFactoryM (5 :: Integer))
 -- (2, 4)
-runInt (do bindings <- initialize; fromPure1 (guardFactoryM bindings) (5 :: Integer))
+runInt (fromPure1 guardFactoryM (5 :: Integer))
 -- (2, 4)
 ```
 

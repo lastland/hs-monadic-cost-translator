@@ -3,11 +3,12 @@
 The cost-monadic translator translates a single pure Haskell module into an
 instrumented module targeting the Memorist cost-semantics runtime
 (`MemoristANT`). The translated module makes sharing and evaluation explicit:
-every ordinary datatype field and shared value becomes a named thunk (`Th`),
+every ordinary datatype field and locally shared value becomes a named thunk (`Th`),
 execution runs inside the cost monad (`MemoristM`), and every source-function
 invocation charges one tick. The translator also generates representation
 types, demand types, conversion instances, and QuickCheck generators for
-property-based cost testing.
+property-based cost testing. Module-level values are monadic actions, and source
+functions remain directly callable without initialization.
 
 The glossary is organized by area. Each area keeps its own ubiquitous language.
 
@@ -97,7 +98,7 @@ _Avoid_: Monadic Foldable, list adapter
 
 ## Sharing
 
-The domain governing explicit thunk allocation, call-by-need preservation, polymorphic and dictionary-keyed thunk reuse, top-level value initialization, and calling convention validation.
+The domain governing explicit thunk allocation, call-by-need preservation, polymorphic and dictionary-keyed thunk reuse, module-level value actions, and calling convention validation.
 
 ### Language
 
@@ -126,7 +127,8 @@ Negative integer markers (`-1` and `-2`) inserted into thunk name ancestry to en
 _Avoid_: Namespace separators, key prefixes
 
 **Bindings Record**:
-A generated data structure grouping top-level value thunks and functions, created once per evaluation by `initialize :: MemoristM Bindings` to preserve top-level sharing across calls.
+A private environment used by handwritten references to model shared global
+values. Generated functions require neither a bindings record nor initialization.
 _Avoid_: Global environment, state record
 
 **Callable**:

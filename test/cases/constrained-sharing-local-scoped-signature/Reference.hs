@@ -1,6 +1,11 @@
-module Generated (Bindings, initialize, observedM) where
+module Generated (observedM) where
 
 import qualified Memorist.Memorist as M
+
+-- Keep source-global sharing private to the reasoning model. The enclosing
+-- thunk gives every global a negative ancestry, disjoint from caller roots.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 -- Only the Int instantiation of the local scoped function is observed.
 newtype Bindings = Bindings (M.Th Int)
@@ -17,8 +22,11 @@ costlyM argument = do
 ignoreM :: M.Th unused -> M.Th Int -> M.MemoristM Int
 ignoreM _ argument = M.tick >> M.force argument
 
-observedM :: Bindings -> M.Th Int -> M.MemoristM Int
-observedM (Bindings shared) argument = do
+observedM :: M.Th Int -> M.MemoristM Int
+observedM = observedWithBindings globalBindings
+
+observedWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+observedWithBindings (Bindings shared) argument = do
     M.tick
     let go value = do
             M.tick

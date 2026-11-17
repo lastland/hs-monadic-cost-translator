@@ -86,30 +86,32 @@ It prints `True` and `1`: `doubleM` produces the expected result and charges one
 
 ### Modules with Top-Level Value Bindings
 
-Functions that do not refer to top-level values, directly or through other
-functions, remain ordinary module-level bindings. Adding an unused top-level
-value does not add a setup argument to these functions.
-
-Top-level values (such as `seed = double 5`) and functions that depend on them
-currently use a `Bindings` record and an initializer:
+Every translated source function is an ordinary module-level function. Top-level
+values become monadic actions, including values used by several functions:
 
 ```haskell
-initialize :: MemoristM Bindings
+seedM :: MemoristM Int
+firstM :: Th Int -> MemoristM Int
 ```
 
-Call `initialize` once when using those dependent functions so their top-level
-thunks remain shared within the same `MemoristM` computation. This remains a
-limitation of the direct-call interface. For example, after translating
-[`examples/Shared.hs`](examples/Shared.hs):
+No initializer or module environment argument is required. For example, after
+translating [`examples/Shared.hs`](examples/Shared.hs):
 
 ```haskell
 program :: MemoristM Int
 program = do
-    bindings <- initialize
-    a <- fromPure1 (firstM bindings) (5 :: Int)
-    b <- fromPure1 (secondM bindings) (5 :: Int)
+    a <- fromPure1 firstM (5 :: Int)
+    b <- fromPure1 secondM (5 :: Int)
     pure (a + b)
 ```
+
+Executing a global action again does not retain its earlier result. Memorist
+therefore does not currently recover source-global sharing costs through this
+interface: the worked `work/shared/f/g/test` example costs 5 rather than the
+source-model 4. This runtime limitation is tracked in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2).
+The source cost model is unchanged; the translator does not introduce a separate
+global cache or evaluate computations to compensate for the discrepancy.
 
 ## Cost Model
 
@@ -151,15 +153,19 @@ For each source datatype `Tree a`, the generated module emits:
 
 ### Call-by-Need Thunk Sharing
 
-Shared bindings evaluate on demand and reuse their thunks. Passing an existing thunk as an argument or field does not create a forwarding thunk. Variable and wildcard patterns do not force their subject; constructor and literal patterns inspect it only when reached.
+Local shared bindings evaluate on demand and reuse their thunks. Passing an existing thunk as an argument or field does not create a forwarding thunk. Variable and wildcard patterns do not force their subject; constructor and literal patterns inspect it only when reached.
 
-Unconstrained polymorphic values share across type instantiations. Constrained polymorphic values share when the types determining their dictionaries agree; other unconstrained type parameters do not split sharing. [`examples/Shared.hs`](examples/Shared.hs) demonstrates this behavior.
+Unconstrained polymorphic local values share across type instantiations.
+Constrained local values share when the types determining their dictionaries
+agree; other unconstrained type parameters do not split sharing. Top-level
+actions use the dictionaries selected at each use but do not retain a shared
+result across uses.
 
 For unconstrained local values whose generalized result is a type variable or
 nested lists, the translator uses one native allocation. Pure representation
 conversions retain the root and field thunk identities across type
 instantiations. Each function invocation still allocates fresh local thunks.
-Other generalized result shapes and dictionary-sensitive values retain legacy
+Other generalized local result shapes and dictionary-sensitive locals retain legacy
 evaluator helpers; those outputs do not yet meet the construction-only contract
 enforced by the test suite.
 

@@ -6,6 +6,14 @@ have no internal lazy structure, but computing a field can still diverge or fail
 Reusing runtime usage-set accounting only works if the translator preserves thunk
 identity rather than reallocating a binding at each reference.
 
+Module-level zero-argument values are currently emitted as ordinary monadic
+actions so every source function remains directly callable without an initializer
+or environment argument. Executing those actions again does not retain their
+earlier results. Source-global sharing costs are a temporarily accepted Memorist
+limitation tracked in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2), not a
+change to the source cost model or permission to weaken local sharing.
+
 For function applications, use resolved definitions, inferred types, explicit
 parameter counts, supplied argument counts, and supported library conventions.
 Log syntactic counts and adaptations. Do not require annotations or arity files:

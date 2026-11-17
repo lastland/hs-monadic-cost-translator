@@ -55,6 +55,25 @@ The `top-level-independent-functions` fixture also checks transitive calls among
 such functions, suspended fields, repeated demands, and fresh invocations. Its
 relative-name and caller-allocation observations reject hidden initialization
 inside an otherwise ordinary-looking function.
+The `top-level-value-actions` fixture also calls functions that use a global
+literal and calls the global action itself through `MemoristM Int`. The literal
+has no producer entry tick, so its direct, uncached, and explicitly cached probes
+can compare exact source costs without relying on global work sharing. An unused
+bottom global remains safe; demanding it must fail.
+
+Global work sharing is a known Memorist limitation tracked in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2).
+The `top-level-function-sharing` reference retains the source costs 4/7/4 and
+cross-export cost 3. Ordinary generated actions currently produce 5/10/5 and 4
+respectively. These are genuine comparison failures, not passing source-cost
+assertions. Comparisons remain strict, so selectors affected by this accepted
+runtime limitation still fail; their costs have not been changed or exempted.
+
+Handwritten references expose the same direct caller interface while retaining
+private shared contexts for the ideal source-global model. Those contexts use
+reference-only reasoning operations, enclosing all global allocations beneath a
+negative root so they cannot collide with ordinary caller allocations. Generated
+bindings must not use this reference-model technique.
 
 The `generated-functions` selector checks small positive and negative parser
 specimens and the shared lifecycle. Its lifecycle test runs the ordinary

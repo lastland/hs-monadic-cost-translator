@@ -1,6 +1,11 @@
-module Generated (Bindings, initialize, asIntM, asIntegerM) where
+module Generated (asIntM, asIntegerM) where
 
 import qualified Memorist.Memorist as M
+
+-- Keep source-global sharing private to the reasoning model. The enclosing
+-- thunk gives every global a negative ancestry, disjoint from caller roots.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 data Bindings = Bindings
     { intShared :: M.Th Int
@@ -25,15 +30,21 @@ expensiveM argument = do
         result <- expensiveM zero
         pure (result + 1)
 
-asIntM :: Bindings -> M.Th Int -> M.MemoristM Int
-asIntM bindings argument = do
+asIntM :: M.Th Int -> M.MemoristM Int
+asIntM = asIntWithBindings globalBindings
+
+asIntWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+asIntWithBindings bindings argument = do
     M.tick
     shared <- M.force (intShared bindings)
     x <- M.force argument
     pure (shared + x)
 
-asIntegerM :: Bindings -> M.Th Integer -> M.MemoristM Integer
-asIntegerM bindings argument = do
+asIntegerM :: M.Th Integer -> M.MemoristM Integer
+asIntegerM = asIntegerWithBindings globalBindings
+
+asIntegerWithBindings :: Bindings -> M.Th Integer -> M.MemoristM Integer
+asIntegerWithBindings bindings argument = do
     M.tick
     shared <- M.force (integerShared bindings)
     x <- M.force argument

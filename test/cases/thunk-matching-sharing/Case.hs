@@ -22,52 +22,39 @@ probes =
         totals <- replicateM (repeats s) $ mapM observeLocal pairs
         pure (sum (concat totals))
     , demanded "poly/top-case/partial"
-        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Int])) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (polyCaseM bindings) (number s)
+        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Int])) pairDemand $ \s ->
+        M.fromPure1 polyCaseM (number s)
     , demanded "poly/top-guard/partial"
-        (projectPair (\x -> M.abstract x :: [Bool]) (\x -> M.abstract x :: [Bool])) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (polyGuardM bindings) (other s)
+        (projectPair (\x -> M.abstract x :: [Bool]) (\x -> M.abstract x :: [Bool])) pairDemand $ \s ->
+        M.fromPure1 polyGuardM (other s)
     , demanded "poly/local-case/partial"
-        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Bool])) pairDemand $ \_ -> do
-        bindings <- initialize
-        M.fromPure1 (localPolyCaseM bindings) (undefined :: Int)
+        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Bool])) pairDemand $ \_ ->
+        M.fromPure1 localPolyCaseM (undefined :: Int)
     , demanded "poly/local-guard/partial"
-        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Bool])) pairDemand $ \_ -> do
-        bindings <- initialize
-        M.fromPure1 (localPolyGuardM bindings) (undefined :: Bool)
+        (projectPair (\x -> M.abstract x :: [Int]) (\x -> M.abstract x :: [Bool])) pairDemand $ \_ ->
+        M.fromPure1 localPolyGuardM (undefined :: Bool)
     , snapshot "identities/top-polymorphic" $ \s ->
         names (concatMap pairNames (M.value (M.eval1 (topPairs s))))
     , snapshot "identities/local-polymorphic-freshness" $ \s ->
         names (concatMap pairNames (M.value (M.eval1 (localPairs s))))
-    , scalarSource "numeric/case" (\s -> sumSourcePair id id (Source.sameCase (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (sameCaseM bindings) (number s) >>= observeBoth id id
-    , scalarSource "numeric/guard" (\s -> sumSourcePair id id (Source.sameGuard (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (sameGuardM bindings) (number s) >>= observeBoth id id
-    , scalarSource "numeric/different-dictionaries" (\s -> sumSourcePair id fromInteger (Source.different (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (differentM bindings) (number s) >>= observeBoth id fromInteger
-    , scalarSource "numeric/scoped-case-int" (\s -> sumSourcePair id id (Source.scopedCase (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedCaseM bindings) (number s) >>= observeBoth id id
-    , scalarSource "numeric/scoped-case-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.scopedCase (toInteger (other s)))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedCaseM bindings) (toInteger (other s)) >>= observeBoth fromInteger fromInteger
-    , scalarSource "numeric/scoped-guard-int" (\s -> sumSourcePair id id (Source.scopedGuard (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedGuardM bindings) (number s) >>= observeBoth id id
-    , scalarSource "numeric/scoped-guard-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.scopedGuard (toInteger (other s)))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedGuardM bindings) (toInteger (other s)) >>= observeBoth fromInteger fromInteger
-    , scalarSource "numeric/local-scoped-int" (\s -> sumSourcePair id id (Source.localScoped (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (localScopedM bindings) (number s) >>= observeBoth id id
-    , scalarSource "numeric/local-scoped-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.localScoped (toInteger (other s)))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (localScopedM bindings) (toInteger (other s)) >>= observeBoth fromInteger fromInteger
+    , scalarSource "numeric/case" (\s -> sumSourcePair id id (Source.sameCase (number s))) $ \s ->
+        M.fromPure1 sameCaseM (number s) >>= observeBoth id id
+    , scalarSource "numeric/guard" (\s -> sumSourcePair id id (Source.sameGuard (number s))) $ \s ->
+        M.fromPure1 sameGuardM (number s) >>= observeBoth id id
+    , scalarSource "numeric/different-dictionaries" (\s -> sumSourcePair id fromInteger (Source.different (number s))) $ \s ->
+        M.fromPure1 differentM (number s) >>= observeBoth id fromInteger
+    , scalarSource "numeric/scoped-case-int" (\s -> sumSourcePair id id (Source.scopedCase (number s))) $ \s ->
+        M.fromPure1 scopedCaseM (number s) >>= observeBoth id id
+    , scalarSource "numeric/scoped-case-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.scopedCase (toInteger (other s)))) $ \s ->
+        M.fromPure1 scopedCaseM (toInteger (other s)) >>= observeBoth fromInteger fromInteger
+    , scalarSource "numeric/scoped-guard-int" (\s -> sumSourcePair id id (Source.scopedGuard (number s))) $ \s ->
+        M.fromPure1 scopedGuardM (number s) >>= observeBoth id id
+    , scalarSource "numeric/scoped-guard-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.scopedGuard (toInteger (other s)))) $ \s ->
+        M.fromPure1 scopedGuardM (toInteger (other s)) >>= observeBoth fromInteger fromInteger
+    , scalarSource "numeric/local-scoped-int" (\s -> sumSourcePair id id (Source.localScoped (number s))) $ \s ->
+        M.fromPure1 localScopedM (number s) >>= observeBoth id id
+    , scalarSource "numeric/local-scoped-integer" (\s -> sumSourcePair fromInteger fromInteger (Source.localScoped (toInteger (other s)))) $ \s ->
+        M.fromPure1 localScopedM (toInteger (other s)) >>= observeBoth fromInteger fromInteger
     , scalarSource "numeric/repeated-observations" numericSource $ \s -> do
         (a,b,c,d,e,f) <- numericPairs s
         totals <- replicateM (repeats s) $ do
@@ -90,44 +77,32 @@ probes =
             fv <- observeSelected s toInteger toInteger f
             pure (sum [av,bv,cv,dv,ev,fv])
         pure (sum totals)
-    , demanded "numeric/case/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (sameCaseM bindings) (number s)
-    , demanded "numeric/guard/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (sameGuardM bindings) (number s)
-    , demanded "numeric/different-dictionaries/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (differentM bindings) (number s)
-    , demanded "numeric/scoped-case-int/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedCaseM bindings) (number s)
-    , demanded "numeric/scoped-case-integer/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedCaseM bindings) (toInteger (other s))
-    , demanded "numeric/scoped-guard-int/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedGuardM bindings) (number s)
-    , demanded "numeric/scoped-guard-integer/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (scopedGuardM bindings) (toInteger (other s))
-    , demanded "numeric/local-scoped-int/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (localScopedM bindings) (number s)
-    , demanded "numeric/local-scoped-integer/partial" (projectPair id id) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (localScopedM bindings) (toInteger (other s))
+    , demanded "numeric/case/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 sameCaseM (number s)
+    , demanded "numeric/guard/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 sameGuardM (number s)
+    , demanded "numeric/different-dictionaries/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 differentM (number s)
+    , demanded "numeric/scoped-case-int/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 scopedCaseM (number s)
+    , demanded "numeric/scoped-case-integer/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 scopedCaseM (toInteger (other s))
+    , demanded "numeric/scoped-guard-int/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 scopedGuardM (number s)
+    , demanded "numeric/scoped-guard-integer/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 scopedGuardM (toInteger (other s))
+    , demanded "numeric/local-scoped-int/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 localScopedM (number s)
+    , demanded "numeric/local-scoped-integer/partial" (projectPair id id) pairDemand $ \s ->
+        M.fromPure1 localScopedM (toInteger (other s))
     , snapshot "identities/dictionaries" $ \s ->
         names (numericNames (M.value (M.eval1 (numericPairs s))))
-    , scalarSource "wide/bool" (\s -> sumSourcePair fst fst (Source.wideBool (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideBoolM bindings) (number s) >>= observeWide id
-    , scalarSource "wide/int" (\s -> sumSourcePair fst fst (Source.wideInt (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideIntM bindings) (number s) >>= observeWide id
-    , scalarSource "wide/integer" (\s -> sumSourcePair (fromInteger . fst) (fromInteger . fst) (Source.wideInteger (number s))) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideIntegerM bindings) (number s) >>= observeWide fromInteger
+    , scalarSource "wide/bool" (\s -> sumSourcePair fst fst (Source.wideBool (number s))) $ \s ->
+        M.fromPure1 wideBoolM (number s) >>= observeWide id
+    , scalarSource "wide/int" (\s -> sumSourcePair fst fst (Source.wideInt (number s))) $ \s ->
+        M.fromPure1 wideIntM (number s) >>= observeWide id
+    , scalarSource "wide/integer" (\s -> sumSourcePair (fromInteger . fst) (fromInteger . fst) (Source.wideInteger (number s))) $ \s ->
+        M.fromPure1 wideIntegerM (number s) >>= observeWide fromInteger
     , scalarSource "wide/repeated-observations" wideSource $ \s -> do
         (a,b,c) <- widePairs s
         totals <- replicateM (repeats s) $ do
@@ -137,50 +112,38 @@ probes =
             pure (av + bv + cv)
         pure (sum totals)
     , demanded "wide/bool/partial"
-        (projectPair (\x -> M.abstract x :: (Int,[Bool])) (\x -> M.abstract x :: (Int,[Bool]))) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideBoolM bindings) (number s)
+        (projectPair (\x -> M.abstract x :: (Int,[Bool])) (\x -> M.abstract x :: (Int,[Bool]))) pairDemand $ \s ->
+        M.fromPure1 wideBoolM (number s)
     , demanded "wide/int/partial"
-        (projectPair (\x -> M.abstract x :: (Int,[Int])) (\x -> M.abstract x :: (Int,[Int]))) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideIntM bindings) (number s)
+        (projectPair (\x -> M.abstract x :: (Int,[Int])) (\x -> M.abstract x :: (Int,[Int]))) pairDemand $ \s ->
+        M.fromPure1 wideIntM (number s)
     , demanded "wide/integer/partial"
-        (projectPair (\x -> M.abstract x :: (Integer,[Bool])) (\x -> M.abstract x :: (Integer,[Bool]))) pairDemand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (wideIntegerM bindings) (number s)
+        (projectPair (\x -> M.abstract x :: (Integer,[Bool])) (\x -> M.abstract x :: (Integer,[Bool]))) pairDemand $ \s ->
+        M.fromPure1 wideIntegerM (number s)
     , snapshot "identities/wide-dictionary-only-keys" $ \s ->
         names (wideNames (M.value (M.eval1 (widePairs s))))
-    , scalarSource "ignored/concrete" (\s -> Source.ignoredConcrete (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (ignoredConcreteM bindings) (number s)
-    , scalarSource "ignored/scoped-int" (\s -> Source.ignoredScoped (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (ignoredScopedM bindings) (number s)
-    , scalarSource "ignored/scoped-integer" (\s -> fromInteger (Source.ignoredScoped (toInteger (other s)))) $ \s -> do
-        bindings <- initialize
-        fromInteger <$> M.fromPure1 (ignoredScopedM bindings) (toInteger (other s))
-    , scalarSource "ignored/defaulted" (\s -> Source.ignoredDefault (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (ignoredDefaultM bindings) (number s)
-    , scalarSource "ignored/local-scoped-int" (\s -> Source.ignoredLocalScoped (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (ignoredLocalScopedM bindings) (number s)
-    , scalarSource "ignored/local-scoped-integer" (\s -> fromInteger (Source.ignoredLocalScoped (toInteger (other s)))) $ \s -> do
-        bindings <- initialize
-        fromInteger <$> M.fromPure1 (ignoredLocalScopedM bindings) (toInteger (other s))
-    , scalarSource "defaulted/case" (\s -> Source.defaultedCase (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (defaultedCaseM bindings) (number s)
-    , scalarSource "defaulted/guard" (\s -> Source.defaultedGuard (number s)) $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (defaultedGuardM bindings) (number s)
+    , scalarSource "ignored/concrete" (\s -> Source.ignoredConcrete (number s)) $ \s ->
+        M.fromPure1 ignoredConcreteM (number s)
+    , scalarSource "ignored/scoped-int" (\s -> Source.ignoredScoped (number s)) $ \s ->
+        M.fromPure1 ignoredScopedM (number s)
+    , scalarSource "ignored/scoped-integer" (\s -> fromInteger (Source.ignoredScoped (toInteger (other s)))) $ \s ->
+        fromInteger <$> M.fromPure1 ignoredScopedM (toInteger (other s))
+    , scalarSource "ignored/defaulted" (\s -> Source.ignoredDefault (number s)) $ \s ->
+        M.fromPure1 ignoredDefaultM (number s)
+    , scalarSource "ignored/local-scoped-int" (\s -> Source.ignoredLocalScoped (number s)) $ \s ->
+        M.fromPure1 ignoredLocalScopedM (number s)
+    , scalarSource "ignored/local-scoped-integer" (\s -> fromInteger (Source.ignoredLocalScoped (toInteger (other s)))) $ \s ->
+        fromInteger <$> M.fromPure1 ignoredLocalScopedM (toInteger (other s))
+    , scalarSource "defaulted/case" (\s -> Source.defaultedCase (number s)) $ \s ->
+        M.fromPure1 defaultedCaseM (number s)
+    , scalarSource "defaulted/guard" (\s -> Source.defaultedGuard (number s)) $ \s ->
+        M.fromPure1 defaultedGuardM (number s)
     , scalarSource "defaulted/repeated-shared-dictionary"
         (\s -> sum (replicate (repeats s) (Source.defaultedCase (number s) + Source.defaultedGuard (number s)))) $ \s -> do
-        bindings <- initialize
         argument <- M.lazy (pure (number s))
         results <- replicateM (repeats s) $ do
-            a <- defaultedCaseM bindings argument
-            b <- defaultedGuardM bindings argument
+            a <- defaultedCaseM argument
+            b <- defaultedGuardM argument
             pure (a + b)
         pure (sum results)
     , scalarSource "bottom/local-case/source" (\s -> fst (Source.bottomCase (number s))) $ \s ->
@@ -221,21 +184,13 @@ firstProjection _ (M.PairT a _) = M.tval a
 firstDemand :: Sample -> M.PairT Int Int -> M.PairD Int Int
 firstDemand _ (M.PairT a _) = M.PairD (M.fullDemand a) M.Skip
 
-bottomCaseProgram s = do
-    bindings <- initialize
-    M.fromPure1 (bottomCaseM bindings) (number s)
+bottomCaseProgram s = M.fromPure1 bottomCaseM (number s)
 
-bottomGuardProgram s = do
-    bindings <- initialize
-    M.fromPure1 (bottomGuardM bindings) (number s)
+bottomGuardProgram s = M.fromPure1 bottomGuardM (number s)
 
-computedBottomCaseProgram s = do
-    bindings <- initialize
-    M.fromPure1 (computedBottomCaseM bindings) (number s)
+computedBottomCaseProgram s = M.fromPure1 computedBottomCaseM (number s)
 
-computedBottomGuardProgram s = do
-    bindings <- initialize
-    M.fromPure1 (computedBottomGuardM bindings) (number s)
+computedBottomGuardProgram s = M.fromPure1 computedBottomGuardM (number s)
 
 firstField (M.PairT a _) = M.force a
 secondField (M.PairT _ b) = M.force b
@@ -260,19 +215,17 @@ observeWide convert (M.PairT a b) = do
     pure (convert x + convert y)
 
 topPairs s = do
-    bindings <- initialize
     argument <- M.lazy (pure ())
     replicateM (repeats s) $ do
-        a <- polyCaseM bindings argument
-        b <- polyGuardM bindings argument
+        a <- polyCaseM argument
+        b <- polyGuardM argument
         pure (a,b)
 
 localPairs s = do
-    bindings <- initialize
     argument <- M.lazy (pure ())
     replicateM (repeats s) $ do
-        a <- localPolyCaseM bindings argument
-        b <- localPolyGuardM bindings argument
+        a <- localPolyCaseM argument
+        b <- localPolyGuardM argument
         pure (a,b)
 
 observeTop (M.PairT a b,M.PairT c d) = do
@@ -300,16 +253,15 @@ localSource s = sum $ replicate (repeats s) $ sum $ replicate (repeats s) $
     listPairLength (Source.localPolyCase ()) + listPairLength (Source.localPolyGuard ())
 
 numericPairs s = do
-    bindings <- initialize
     unitArgument <- M.lazy (pure ())
     argument <- M.lazy (pure (number s))
     integerArgument <- M.lazy (pure (toInteger (other s)))
-    a <- sameCaseM bindings unitArgument
-    b <- sameGuardM bindings unitArgument
-    c <- differentM bindings unitArgument
-    d <- scopedCaseM bindings argument
-    e <- scopedGuardM bindings integerArgument
-    f <- localScopedM bindings argument
+    a <- sameCaseM unitArgument
+    b <- sameGuardM unitArgument
+    c <- differentM unitArgument
+    d <- scopedCaseM argument
+    e <- scopedGuardM integerArgument
+    f <- localScopedM argument
     pure (a,b,c,d,e,f)
 
 numericSource s = sum $ replicate (repeats s) $ sum
@@ -322,11 +274,10 @@ numericSource s = sum $ replicate (repeats s) $ sum
     ]
 
 widePairs s = do
-    bindings <- initialize
     argument <- M.lazy (pure ())
-    a <- wideBoolM bindings argument
-    b <- wideIntM bindings argument
-    c <- wideIntegerM bindings argument
+    a <- wideBoolM argument
+    b <- wideIntM argument
+    c <- wideIntegerM argument
     pure (a,b,c)
 
 wideSource s = sum $ replicate (repeats s) $ sum

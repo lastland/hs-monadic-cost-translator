@@ -1,7 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Generated (Bindings, initialize, observedM) where
+module Generated (observedM) where
 
 import qualified Memorist.Memorist as M
+
+-- Keep source-global sharing private to the reasoning model. The enclosing
+-- thunk gives every global a negative ancestry, disjoint from caller roots.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 -- This fixture observes only the Int dictionary specialization.
 newtype Bindings = Bindings (M.Th Int)
@@ -20,8 +25,11 @@ workM argument = do
         result <- workM zero
         pure (result + 1)
 
-observedM :: Bindings -> M.Th Int -> M.MemoristM Int
-observedM (Bindings shared) _ = do
+observedM :: M.Th Int -> M.MemoristM Int
+observedM = observedWithBindings globalBindings
+
+observedWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+observedWithBindings (Bindings shared) _ = do
     M.tick
     let inner :: forall a. M.Th a -> M.MemoristM Int
         inner _ = do

@@ -1,7 +1,12 @@
-module Generated (Bindings, initialize, asListM, asMaybeM) where
+module Generated (asListM, asMaybeM) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
+
+-- Keep source-global sharing private to the reasoning model. The enclosing
+-- thunk gives every global a negative ancestry, disjoint from caller roots.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 data Bindings = Bindings
     { listShared :: M.Th (M.PairT Int (L.ListT Int))
@@ -28,16 +33,22 @@ workM argument = do
     n <- M.force argument
     pure (n + 1)
 
-asListM :: Bindings -> M.Th Int -> M.MemoristM Int
-asListM bindings argument = do
+asListM :: M.Th Int -> M.MemoristM Int
+asListM = asListWithBindings globalBindings
+
+asListWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+asListWithBindings bindings argument = do
     M.tick
     M.PairT number _ <- M.force (listShared bindings)
     n <- M.force number
     x <- M.force argument
     pure (n + x)
 
-asMaybeM :: Bindings -> M.Th Int -> M.MemoristM Int
-asMaybeM bindings argument = do
+asMaybeM :: M.Th Int -> M.MemoristM Int
+asMaybeM = asMaybeWithBindings globalBindings
+
+asMaybeWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+asMaybeWithBindings bindings argument = do
     M.tick
     M.PairT number _ <- M.force (maybeShared bindings)
     n <- M.force number

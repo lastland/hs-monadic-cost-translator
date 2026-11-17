@@ -9,21 +9,17 @@ import ReferenceSupport
 
 probes :: [Probe]
 probes =
-    [ scalarSource "work/source" (Source.work . number) $ \sample -> do
-        bindings <- initialize
-        M.fromPure1 (workM bindings) (number sample)
+    [ scalarSource "work/source" (Source.work . number) $ \sample ->
+        M.fromPure1 workM (number sample)
     , demanded "same/selected" pairProjection pairDemand $ \_ -> do
-        bindings <- initialize
         u <- M.lazy (error "unused same argument evaluated" :: M.MemoristM Int)
-        sameM bindings u
+        sameM u
     , scalarSource "same/source" (\sample -> let (a,b) = Source.same (number sample) in a+b) $ \_ -> do
-        bindings <- initialize
         u <- M.lazy (pure ())
-        sameM bindings u >>= forcePair
+        sameM u >>= forcePair
     , demanded "different/selected" differentProjection differentDemand $ \_ -> do
-        bindings <- initialize
         u <- M.lazy (error "unused different argument evaluated" :: M.MemoristM Int)
-        differentM bindings u
+        differentM u
     , scalarSource "different/source"
         (\sample -> let (a,b) = Source.different (number sample) in a + fromInteger b) $ \_ -> do
         (_, M.PairT a b) <- observeShared
@@ -39,11 +35,10 @@ probes =
         pairs <- observeShared
         sum <$> replicateM (repeats sample) (toInteger <$> forceShared pairs)
     , integer "shared/repeated-calls" $ \sample -> do
-        bindings <- initialize
         u <- M.lazy (pure ())
         let one index = do
-                same <- sameM bindings u
-                different <- differentM bindings u
+                same <- sameM u
+                different <- differentM u
                 if even (index + variant sample)
                     then toInteger <$> forceShared (same, different)
                     else do
@@ -57,24 +52,20 @@ probes =
         (\sample -> let (a,b) = Source.local (number sample) in a+b)
         (\sample -> localInput sample >>= forcePair)
     , scalarSource "local/fixed-repeated"
-        (\_ -> let (a,b) = Source.local (5 :: Int) in a+b) $ \_ -> do
-        bindings <- initialize
-        M.fromPure1 (localM bindings) (5 :: Int) >>= forcePair
+        (\_ -> let (a,b) = Source.local (5 :: Int) in a+b) $ \_ ->
+        M.fromPure1 localM (5 :: Int) >>= forcePair
     , scalar "local/repeated-demands" $ \sample -> do
         pair <- localInput sample
         sum <$> replicateM (repeats sample) (forcePair pair)
     , scalar "local/repeated-calls" $ \sample -> do
-        bindings <- initialize
         x <- input sample
-        sum <$> replicateM (repeats sample) (localM bindings x >>= forcePair)
+        sum <$> replicateM (repeats sample) (localM x >>= forcePair)
     , demanded "local/skipped-error" (const (const ())) (const (const (M.PairD M.Skip M.Skip))) $ \_ -> do
-        bindings <- initialize
         x <- M.lazy (error "unused local input evaluated" :: M.MemoristM Int)
-        localM bindings x
+        localM x
     , failure "local/demanded-error" $ \_ -> do
-        bindings <- initialize
         x <- M.lazy (error "demanded local input")
-        M.PairT _ b <- localM bindings x
+        M.PairT _ b <- localM x
         M.force b
     , snapshot "local/preparation-resources" localResources
     ]
@@ -84,16 +75,14 @@ input sample = M.lazy (replicateM_ (width sample + 1) M.tick >> pure (number sam
 
 localInput :: Sample -> M.MemoristM (M.PairT Int Int)
 localInput sample = do
-    bindings <- initialize
     x <- input sample
-    localM bindings x
+    localM x
 
 observeShared :: M.MemoristM (M.PairT Int Int, M.PairT Int Integer)
 observeShared = do
-    bindings <- initialize
     u <- M.lazy (pure ())
-    a <- sameM bindings u
-    b <- differentM bindings u
+    a <- sameM u
+    b <- differentM u
     pure (a,b)
 
 forcePair :: M.PairT Int Int -> M.MemoristM Int
@@ -137,10 +126,9 @@ sharedResources =
 localResources :: Sample -> ([Bool], Integer)
 localResources sample =
     let result = M.eval1 $ do
-            bindings <- initialize
             x <- input sample
-            first <- localM bindings x
-            second <- localM bindings x
+            first <- localM x
+            second <- localM x
             pure (first, second)
         (M.PairT a b, M.PairT c d) = M.value result
     in ([M.tname a == M.tname b, M.tname c == M.tname d, M.tname a /= M.tname c],

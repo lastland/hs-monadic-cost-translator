@@ -8,30 +8,28 @@ import qualified Memorist.Memorist as M
 import ReferenceSupport
 import qualified ThunkMatching as Source
 
-type PairFunction = Bindings -> M.Th Int -> M.MemoristM (M.PairT Int Int)
-type PairAction = M.Th Int -> M.MemoristM (M.PairT Int Int)
+type PairFunction = M.Th Int -> M.MemoristM (M.PairT Int Int)
 type ScalarAction = M.Th Int -> M.MemoristM Int
 
 probes :: [Probe]
--- Instantiate the generated post-Bindings forall before storing a catalog
--- callback. The result annotations make that instantiation explicit.
+-- Instantiate polymorphic functions before storing the catalog callbacks.
 probes = concatMap pairChecks
-    [("case/plain", Source.plain, \bindings -> plainM bindings :: PairAction),
-     ("case/parenthesized", Source.parenthesized, \bindings -> parenthesizedM bindings :: PairAction),
-     ("case/annotated", Source.annotated, \bindings -> annotatedM bindings :: PairAction),
-     ("case/as-pattern", Source.asPattern, \bindings -> asPatternM bindings :: PairAction),
-     ("guard/plain", Source.guardAlias, \bindings -> guardAliasM bindings :: PairAction),
-     ("guard/parenthesized", Source.guardParenthesized, \bindings -> guardParenthesizedM bindings :: PairAction),
-     ("guard/annotated", Source.guardAnnotated, \bindings -> guardAnnotatedM bindings :: PairAction),
-     ("guard/as-pattern", Source.guardAs, \bindings -> guardAsM bindings :: PairAction),
-     ("computed/case", Source.computedCase, \bindings -> computedCaseM bindings :: PairAction),
-     ("computed/guard", Source.computedGuard, \bindings -> computedGuardM bindings :: PairAction),
-     ("local/computed", Source.local, \bindings -> localM bindings :: PairAction),
-     ("local/explicit-anchor", Source.sourceLet, \bindings -> sourceLetM bindings :: PairAction)] ++
+    [("case/plain", Source.plain, plainM :: PairFunction),
+     ("case/parenthesized", Source.parenthesized, parenthesizedM :: PairFunction),
+     ("case/annotated", Source.annotated, annotatedM :: PairFunction),
+     ("case/as-pattern", Source.asPattern, asPatternM :: PairFunction),
+     ("guard/plain", Source.guardAlias, guardAliasM :: PairFunction),
+     ("guard/parenthesized", Source.guardParenthesized, guardParenthesizedM :: PairFunction),
+     ("guard/annotated", Source.guardAnnotated, guardAnnotatedM :: PairFunction),
+     ("guard/as-pattern", Source.guardAs, guardAsM :: PairFunction),
+     ("computed/case", Source.computedCase, computedCaseM :: PairFunction),
+     ("computed/guard", Source.computedGuard, computedGuardM :: PairFunction),
+     ("local/computed", Source.local, localM :: PairFunction),
+     ("local/explicit-anchor", Source.sourceLet, sourceLetM :: PairFunction)] ++
     [ scalarSource "ignored/case" (Source.ignoredCase . number)
-        (runScalar (\bindings -> ignoredCaseM bindings :: ScalarAction))
+        (runScalar (ignoredCaseM :: ScalarAction))
     , scalarSource "ignored/guard" (Source.ignoredGuard . number)
-        (runScalar (\bindings -> ignoredGuardM bindings :: ScalarAction))
+        (runScalar (ignoredGuardM :: ScalarAction))
     , scalarSource "failure/unused-subject" (fst . Source.suspendedFailure . number) $ \s -> do
         M.PairT a _ <- runPair suspendedPair s
         M.force a
@@ -40,18 +38,15 @@ probes = concatMap pairChecks
     , failure "failure/demanded-subject" $ \s -> do
         M.PairT _ b <- runPair suspendedPair s
         M.force b
-    , failure "bad/direct" $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (badM bindings) (number s)
+    , failure "bad/direct" $ \s ->
+        M.fromPure1 badM (number s)
     , scalarSource "work/value" (Source.work . number)
-        (runScalar (\bindings -> workM bindings :: ScalarAction))
+        (runScalar (workM :: ScalarAction))
     , scalarSource "dictionaries/repeated" numericSource numericProgram
-    , demanded "dictionaries/same-selected" projection demand $ \s -> do
-        bindings <- initialize
-        M.fromPure1 (sameCaseM bindings) (number s)
+    , demanded "dictionaries/same-selected" projection demand $ \s ->
+        M.fromPure1 sameCaseM (number s)
     , integer "dictionaries/different-selected" $ \s -> do
-        bindings <- initialize
-        M.PairT a b <- M.fromPure1 (differentM bindings) (number s)
+        M.PairT a b <- M.fromPure1 differentM (number s)
         left <- if leftDemand s then toInteger <$> M.force a else pure 0
         right <- if rightDemand s then M.force b else pure 0
         pure (left + right)
@@ -59,8 +54,7 @@ probes = concatMap pairChecks
     , scalarSource "polymorphic/repeated" polymorphicSource polymorphicProgram
     , snapshot "polymorphic/identities-and-local-freshness" (const polymorphicIdentities)
     , scalarSource "empty/ignored-bottom" (const (length (Source.empty (undefined :: Int) :: [Bool]))) $ \_ -> do
-        bindings <- initialize
-        value <- M.fromPure1 (emptyM bindings) (undefined :: Int)
+        value <- M.fromPure1 emptyM (undefined :: Int)
         lengthList (value :: L.ListT Bool)
     ]
 
@@ -69,34 +63,29 @@ pairChecks (label, source, make) =
     [ demanded (label ++ "/selected") projection demand (runPair make)
     , scalarSource (label ++ "/value") (uncurry (+) . source . number) (runPair make >=> sumPair)
     , scalarSource (label ++ "/unused-bottom") (const (case source undefined of (_, _) -> 1)) $ \_ -> do
-        bindings <- initialize
         x <- M.lazy (error "unused matching input")
-        M.PairT _ _ <- make bindings x
+        M.PairT _ _ <- make x
         pure 1
     , scalar (label ++ "/repeated") $ \s -> do
         pair <- runPair make s
         sum <$> replicateM (repeats s) (sumPair pair)
     , failure (label ++ "/demanded-bottom") $ \_ -> do
-        bindings <- initialize
         x <- M.lazy (error "demanded matching input")
-        M.PairT _ b <- make bindings x
+        M.PairT _ b <- make x
         M.force b
     , snapshot (label ++ "/aliases-and-caller-allocation") (const (pairResources make))
     ]
 
 runPair :: PairFunction -> Sample -> M.MemoristM (M.PairT Int Int)
 runPair make s = do
-    bindings <- initialize
     x <- M.lazy (replicateM_ (width s + 1) M.tick >> pure (number s))
-    make bindings x
+    make x
 
 suspendedPair :: PairFunction
-suspendedPair bindings = suspendedFailureM bindings :: PairAction
+suspendedPair = suspendedFailureM
 
-runScalar :: (Bindings -> M.Th Int -> M.MemoristM Int) -> Sample -> M.MemoristM Int
-runScalar call s = do
-    bindings <- initialize
-    M.fromPure1 (call bindings) (number s)
+runScalar :: ScalarAction -> Sample -> M.MemoristM Int
+runScalar call s = M.fromPure1 call (number s)
 
 sumPair :: M.PairT Int Int -> M.MemoristM Int
 sumPair (M.PairT a b) = (+) <$> M.force a <*> M.force b
@@ -114,9 +103,8 @@ demand s (M.PairT a b) = M.PairD
 pairResources :: PairFunction -> ([Bool], Integer)
 pairResources make =
     let (result, next) = M.runM (do
-            bindings <- initialize
             x <- M.lazy (error "identity observation forced input")
-            M.PairT a b <- make bindings x
+            M.PairT a b <- make x
             pure (M.tname x, M.tname a, M.tname b)) M.nzero
         (inputName, firstName, secondName) = M.value result
     in ([firstName == inputName, secondName == inputName, firstName == secondName,
@@ -131,15 +119,14 @@ numericSource s = repeats s *
 
 numericProgram :: Sample -> M.MemoristM Int
 numericProgram s = do
-    bindings <- initialize
     unit <- M.lazy (pure ())
     totals <- replicateM (repeats s) $ do
-        a <- sameCaseM bindings unit >>= sumPair
-        b <- sameGuardM bindings unit >>= sumPair
-        M.PairT c d <- differentM bindings unit
+        a <- sameCaseM unit >>= sumPair
+        b <- sameGuardM unit >>= sumPair
+        M.PairT c d <- differentM unit
         cv <- M.force c
         dv <- M.force d
-        M.PairT e rest <- localDictionariesM bindings unit
+        M.PairT e rest <- localDictionariesM unit
         ev <- M.force e
         M.PairT f g <- M.force rest
         fv <- M.force f
@@ -149,14 +136,13 @@ numericProgram s = do
 
 numericIdentities :: [Bool]
 numericIdentities = M.value (M.eval1 $ do
-    bindings <- initialize
     unit <- M.lazy (pure ())
-    M.PairT a b <- sameCaseM bindings unit
-    M.PairT c d <- sameGuardM bindings unit
-    M.PairT e f <- differentM bindings unit
-    M.PairT g rest <- localDictionariesM bindings unit
+    M.PairT a b <- sameCaseM unit
+    M.PairT c d <- sameGuardM unit
+    M.PairT e f <- differentM unit
+    M.PairT g rest <- localDictionariesM unit
     M.PairT h i <- M.force rest
-    M.PairT j _ <- localDictionariesM bindings unit
+    M.PairT j _ <- localDictionariesM unit
     pure [M.tname a == M.tname b, M.tname a == M.tname c, M.tname c == M.tname d,
           M.tname a == M.tname e, M.tname e /= M.tname f,
           M.tname g == M.tname h, M.tname g /= M.tname i,
@@ -170,11 +156,10 @@ polymorphicSource s = repeats s *
 
 polymorphicProgram :: Sample -> M.MemoristM Int
 polymorphicProgram s = do
-    bindings <- initialize
     unit <- M.lazy (error "polymorphic empty forced its input" :: M.MemoristM ())
     totals <- replicateM (repeats s) $ do
-        top <- polymorphicM bindings unit
-        localPair <- localPolymorphicM bindings unit
+        top <- polymorphicM unit
+        localPair <- localPolymorphicM unit
         a <- observeEmptyPair top
         b <- observeEmptyPair localPair
         pure (a + b)
@@ -192,11 +177,10 @@ lengthList (L.ConsT _ xs) = (1 +) <$> (M.force xs >>= lengthList)
 
 polymorphicIdentities :: [Bool]
 polymorphicIdentities = M.value (M.eval1 $ do
-    bindings <- initialize
     unit <- M.lazy (pure ())
-    M.PairT a b <- polymorphicM bindings unit
-    M.PairT c _ <- polymorphicM bindings unit
-    M.PairT d e <- localPolymorphicM bindings unit
-    M.PairT f _ <- localPolymorphicM bindings unit
+    M.PairT a b <- polymorphicM unit
+    M.PairT c _ <- polymorphicM unit
+    M.PairT d e <- localPolymorphicM unit
+    M.PairT f _ <- localPolymorphicM unit
     pure [M.tname a == M.tname b, M.tname a == M.tname c,
           M.tname d == M.tname e, M.tname d /= M.tname a, M.tname d /= M.tname f])

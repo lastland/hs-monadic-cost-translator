@@ -1,7 +1,12 @@
-module Generated (Bindings, initialize, intsM, boolsM) where
+module Generated (intsM, boolsM) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
+
+-- Keep source-global sharing private to the reasoning model. The enclosing
+-- thunk gives every global a negative ancestry, disjoint from caller roots.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 -- Only the empty constructor is observed. Its element type is irrelevant,
 -- so one ordinary, type-safe thunk can serve both exported scalar facades.
@@ -18,16 +23,22 @@ emptyM argument = do
     n <- M.force argument
     pure (if n > 0 then L.NilT else L.NilT)
 
-intsM :: Bindings -> M.Th Int -> M.MemoristM Int
-intsM (Bindings shared) argument = do
+intsM :: M.Th Int -> M.MemoristM Int
+intsM = intsWithBindings globalBindings
+
+intsWithBindings :: Bindings -> M.Th Int -> M.MemoristM Int
+intsWithBindings (Bindings shared) argument = do
     M.tick
     list <- M.force shared
     case list of
         L.NilT -> M.force argument
         L.ConsT _ _ -> M.force argument
 
-boolsM :: Bindings -> M.Th Bool -> M.MemoristM Bool
-boolsM (Bindings shared) argument = do
+boolsM :: M.Th Bool -> M.MemoristM Bool
+boolsM = boolsWithBindings globalBindings
+
+boolsWithBindings :: Bindings -> M.Th Bool -> M.MemoristM Bool
+boolsWithBindings (Bindings shared) argument = do
     M.tick
     list <- M.force shared
     case list of

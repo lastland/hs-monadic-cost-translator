@@ -2,7 +2,9 @@
 
 -- Both source variants differ only in bound type-variable spelling. This
 -- reference instead captures the outer value directly in the local closure.
-module Generated where
+module Generated
+    ( workM, ignoreM, caseParameterM, guardParameterM, caseFactoryM, guardFactoryM
+    ) where
 
 import qualified Memorist.Memorist as M
 
@@ -16,6 +18,11 @@ initialize = do
     int <- M.lazy $ M.lazy (pure (fromInteger 18446744073709551616 :: Int)) >>= workValue
     integer <- M.lazy $ M.lazy (pure (18446744073709551616 :: Integer)) >>= workValue
     pure (Bindings int integer)
+
+-- Keep the source-sharing model outside the caller's ordinary allocator. The
+-- enclosing suspension keeps every cached name beneath the negative root.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
 
 workValue :: (Num a, Eq a) => M.Th a -> M.MemoristM a
 workValue argument = do
@@ -31,27 +38,27 @@ workValue argument = do
             recursive <- workValue difference
             pure (recursive + 1)
 
-workM :: (Num a, Eq a) => Bindings -> M.Th a -> M.MemoristM a
-workM _ = workValue
+workM :: (Num a, Eq a) => M.Th a -> M.MemoristM a
+workM = workValue
 
-ignoreM :: Bindings -> M.Th a -> M.MemoristM Int
-ignoreM _ _ = M.tick >> pure 1
+ignoreM :: M.Th a -> M.MemoristM Int
+ignoreM _ = M.tick >> pure 1
 
-caseParameterM :: Bindings -> M.Th a -> M.MemoristM Int
-caseParameterM bindings argument = do
+caseParameterM :: M.Th a -> M.MemoristM Int
+caseParameterM argument = do
     M.tick
     let inner _ = do
             M.tick
-            ignoreM bindings argument
+            ignoreM argument
     true <- M.lazy (pure True)
     inner true
 
-guardParameterM :: Bindings -> M.Th a -> M.MemoristM Int
-guardParameterM bindings argument = do
+guardParameterM :: M.Th a -> M.MemoristM Int
+guardParameterM argument = do
     M.tick
     let inner _ = do
             M.tick
-            ignoreM bindings argument
+            ignoreM argument
     true <- M.lazy (pure True)
     inner true
 
@@ -66,8 +73,11 @@ instance NumericCache Int where
 instance NumericCache Integer where
     sharedNumeric = integerCache
 
-caseFactoryM :: forall a. NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
-caseFactoryM bindings _ = do
+caseFactoryM :: NumericCache a => M.Th a -> M.MemoristM Int
+caseFactoryM = caseFactoryWith globalBindings
+
+caseFactoryWith :: forall a. NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
+caseFactoryWith bindings _ = do
     M.tick
     let captured = sharedNumeric bindings :: M.Th a
         inner _ = do
@@ -77,8 +87,11 @@ caseFactoryM bindings _ = do
     true <- M.lazy (pure True)
     inner true
 
-guardFactoryM :: forall a. NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
-guardFactoryM bindings _ = do
+guardFactoryM :: NumericCache a => M.Th a -> M.MemoristM Int
+guardFactoryM = guardFactoryWith globalBindings
+
+guardFactoryWith :: forall a. NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
+guardFactoryWith bindings _ = do
     M.tick
     let captured = sharedNumeric bindings :: M.Th a
         inner _ = do

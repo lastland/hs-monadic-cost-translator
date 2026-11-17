@@ -5,7 +5,7 @@ import GHC
 import Control.Monad (unless, when, zipWithM)
 import Control.Monad.IO.Class (liftIO)
 import GHC.Builtin.Types (unitDataCon)
-import GHC.Data.Bag (bagToList, listToBag)
+import GHC.Data.Bag (bagToList)
 import GHC.Paths (libdir)
 import GHC.Driver.Session (xopt)
 import qualified GHC.LanguageExtensions.Type as Extension
@@ -110,24 +110,12 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                  ++ " arity " ++ show (arity ms) | b@(L _ (FunBind _ n ms)) <- allBinds] ++
                 concatMap (logExpression logEnv) (expressions group))
         result = do
+            mapM_ checkRecursiveValues topLevelGroups
             (datatypeSupport, kindSupport, datatypeDeclarations) <- emitDatatypeSections datatypes
-            fields <- mapM bindingField binds
-            standalone <- concat <$> sequence [do
+            declarations <- concat <$> mapM (\binding -> do
+                (name, ty) <- bindingSignature binding
                 code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts binding }) binding
-                pure [O.sig name ty, code] |
-                (binding, (name, ty)) <- zip binds fields, independentBinding binding]
-            declarations <- if any (\case L _ (FunBind _ _ ms) -> arity ms == 0; _ -> False) binds
-                then do
-                    signatures <- sequence [(,) (unLoc n) <$> locatedAt (getLocA n) (translatedSignatureUsing
-                        (unLoc n `Set.member` reflected) (arity ms == 0 && not (null (constrainedVariables ty))) datatypes (arity ms) ty) |
-                        L _ (FunBind _ n ms) <- binds, Just ty <- [Map.lookup (unLoc n) types]]
-                    initializer <- withTypedValBinds (Map.fromList signatures) independentEnv initializedBinds $ \scope -> do
-                        values <- mapM (bindingValue scope) (filter (not . independentBinding) binds)
-                        pure (O.ret (O.call "Bindings" values))
-                    pure (standalone ++ [O.recordD "Bindings" [field | (binding, field) <- zip binds fields, not (independentBinding binding)],
-                           O.sig "initialize" (O.tc "M.MemoristM" [O.t "Bindings"]), O.val "initialize" [] initializer]
-                         )
-                else pure standalone
+                pure [O.sig name ty, code]) binds
             let hasDatatypes = not (null datatypes)
                 hasReflection = not (Set.null reflected)
                 hasPolymorphicBindings = not (all (null . fst . splitForAllTyVars) (Map.elems types))
@@ -179,45 +167,31 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                                    (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
                                    (planNames reservedNames constructorLayouts group)
     constructorLayouts = Map.fromList [(n,fields') | (n,_,_,fields') <- constructors datatypes]
-    topLevelBinds = case hs_valds group of
-        XValBindsLR (NValBinds groups _) -> concatMap (bagToList . snd) groups
-        ValBinds _ bs _ -> bagToList bs
-    valueNames = Set.fromList [unLoc name | L _ (FunBind _ name matches) <- topLevelBinds, arity matches == 0]
-    capturedBindings = captureClosure valueNames
-    captureClosure known =
-        let next = known `Set.union` Set.fromList
-                [unLoc name | binding@(L _ (FunBind _ name _)) <- topLevelBinds,
-                 any (`Set.member` known) [unLoc reference | L _ (HsVar _ reference) <- expressions binding]]
-        in if next == known then known else captureClosure next
-    independentBinding (L _ (FunBind _ name matches)) = arity matches > 0 && unLoc name `Set.notMember` capturedBindings
-    independentBinding _ = False
-    independentEnv = extendEnv
-        [(unLoc name, Function (generatedName "M" (unLoc name)) (arity matches)) |
-         binding@(L _ (FunBind _ name matches)) <- topLevelBinds, independentBinding binding] constructorEnv
-    initializedBinds = case hs_valds group of
-        XValBindsLR (NValBinds groups signatures) -> XValBindsLR (NValBinds
-            [(recursive, listToBag remaining) | (recursive, bindings) <- groups,
-             let remaining = filter (not . independentBinding) (bagToList bindings), not (null remaining)] signatures)
-        bindings -> bindings
+    topLevelGroups = case hs_valds group of
+        XValBindsLR (NValBinds groups _) -> [(recursive, bagToList bindings) | (recursive, bindings) <- groups]
+        ValBinds _ bs _ -> [(NonRecursive, bagToList bs)]
+    topLevelBinds = concatMap snd topLevelGroups
+    topLevelNames = Set.fromList [unLoc name | L _ (FunBind _ name _) <- topLevelBinds]
+    checkRecursiveValues (Recursive, bindings@(binding:_))
+        | any (\case L _ (FunBind _ _ matches) -> arity matches == 0; _ -> False) bindings =
+            locatedAt (getLocA binding) (Left "recursive value bindings are unsupported")
+    checkRecursiveValues _ = Right ()
     reservedNames = Set.fromList ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- topLevelBinds] ++
         map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
+        unLoc n `Set.notMember` topLevelNames,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
     closure known = let next = known `Set.union` Set.fromList
                             [unLoc n | b@(L _ (FunBind _ n _)) <- sourceBinds,
                              any (`Set.member` known) [unLoc v | L _ (HsVar _ v) <- expressions b]]
                     in if next == known then known else closure next
-    bindingField (L _ (FunBind _ name matches)) = do
+    bindingSignature (L _ (FunBind _ name matches)) = do
         ty <- maybe (Left "missing inferred binding type") Right (Map.lookup (unLoc name) types)
-        signature <- either (Left . ((showSDocUnsafe (ppr (getLocA name)) ++ ": ") ++)) Right (translatedSignatureWith (unLoc name `Set.member` reflected) datatypes (arity matches) ty)
+        signature <- locatedAt (getLocA name) (translatedSignatureAs (unLoc name `Set.member` reflected)
+            (\resultType -> O.tc "M.MemoristM" [resultType]) datatypes (arity matches) ty)
         pure (generatedName "M" (unLoc name), signature)
-    bindingField b = bindingError b
-    bindingValue scope (L _ (FunBind _ name _)) = case lookupEnv (unLoc name) scope of
-        Just (Thunk n) -> Right n
-        Just (Function n _) -> Right (O.v n)
-        _ -> Left "missing initialized binding"
-    bindingValue _ b = bindingError b
+    bindingSignature b = bindingError b
 
 bindingError :: LHsBind GhcRn -> Either String a
 bindingError located = Left (showSDocUnsafe (ppr (getLocA located)) ++ ": " ++ detail)
@@ -259,11 +233,15 @@ logExpression env expr = case unLoc expr of
     _ -> []
   where location = showSDocUnsafe (ppr (getLocA expr)) ++ ": "
 
-translatedSignatureWith :: Bool -> [TyCon] -> Int -> Type -> Either String O.Ty
-translatedSignatureWith reflected = translatedSignatureUsing reflected False
-
 translatedSignatureUsing :: Bool -> Bool -> [TyCon] -> Int -> Type -> Either String O.Ty
-translatedSignatureUsing reflected factory datatypes count ty = do
+translatedSignatureUsing reflected factory datatypes count = translatedSignatureAs reflected wrapResult datatypes count
+  where
+    wrapResult resultType
+        | count == 0 = O.arrows [O.t "()" | factory] (O.tc "M.Th" [resultType])
+        | otherwise = O.tc "M.MemoristM" [resultType]
+
+translatedSignatureAs :: Bool -> (O.Ty -> O.Ty) -> [TyCon] -> Int -> Type -> Either String O.Ty
+translatedSignatureAs reflected wrapResult datatypes count ty = do
     let (vars, body) = splitForAllTyVars ty
         (scaledArgs, result) = splitFunTys body
         (constraints, args) = span isPredTy (map scaledThing scaledArgs)
@@ -274,8 +252,7 @@ translatedSignatureUsing reflected factory datatypes count ty = do
     argTypes <- mapM (renderType datatypes) args
     resultType <- renderType datatypes result
     pure $ O.forallT quantified $ O.qualified renderedConstraints $
-        if count == 0 then O.arrows [O.t "()" | factory] (O.tc "M.Th" [resultType])
-        else O.arrows (map (\a -> O.tc "M.Th" [a]) argTypes) (O.tc "M.MemoristM" [resultType])
+        O.arrows (map (\a -> O.tc "M.Th" [a]) argTypes) (wrapResult resultType)
 
 translatedConstraint :: Type -> Either String [O.Ty]
 translatedConstraint ty = case splitTyConApp_maybe ty of
@@ -361,14 +338,12 @@ occupiedNames env = fixedReservedNames `Set.union` Set.fromList
 emitBind :: Env -> LHsBind GhcRn -> Either String O.Decl
 emitBind outer binding = case unLoc binding of
     FunBind _ name matches -> do
-        unless (arity matches > 0) $
-            Left (showSDocUnsafe (ppr (getLocA binding)) ++ ": top-level shared value initialization not implemented yet")
         let params = parameterNames outer (unLoc name) matches
         body <- emitMatches outer (map O.v params) (unLoc (mg_alts matches))
         fname <- case lookupEnv (unLoc name) outer of
             Just (Function n _) -> Right n
             _ -> Left "expected function binding"
-        pure (O.val fname (map O.p params) (O.doE [O.thenS tick] body))
+        pure (O.val fname (map O.p params) (O.doE [O.thenS tick | arity matches > 0] body))
     _ -> bindingError binding
 
 emitMatches :: Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
@@ -677,6 +652,7 @@ emitExpr env located = case unLoc located of
         pure (O.doE [O.bind "operand" action] (O.ret (O.call "negate" [O.v "operand"])))
     HsVar _ name -> annotate False <$> case resolve env (unLoc name) of
         Just (Thunk thunk) -> Right (O.call "M.force" [thunk])
+        Just (Function fn 0) -> Right (O.v fn)
         Just (Function fn _) -> Right (O.ret (O.v fn))
         Just (Adapter fn _) -> Right (O.ret fn)
         Just (Constructor con 0 _) -> Right (O.ret (O.v con))

@@ -1,7 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- The reference captures the outer thunk directly; it never repeats a scoped
 -- source annotation in the inner closure.
-module Generated where
+module Generated
+    ( workM, ignoreM, caseParameterM, guardParameterM, caseParameterRenamedM
+    , caseFactoryM, guardFactoryM, guardFactoryRenamedM
+    ) where
 
 import qualified Memorist.Memorist as M
 
@@ -16,6 +19,11 @@ initialize = do
     integer <- M.lazy (M.lazy (pure large) >>= workValue)
     pure (Bindings int integer)
 
+-- Keep all model cache allocations beneath a negative root, separate from the
+-- caller's ordinary nonnegative names.
+globalBindings :: Bindings
+globalBindings = M.tval (M.value (M.eval (M.lazy initialize) (M.fromInt (-1))))
+
 workValue :: (Num a, Eq a) => M.Th a -> M.MemoristM a
 workValue argument = do
     M.tick
@@ -28,23 +36,23 @@ workValue argument = do
         result <- workValue zero
         pure (result + 1)
 
-workM :: (Num a, Eq a) => Bindings -> M.Th a -> M.MemoristM a
-workM _ = workValue
+workM :: (Num a, Eq a) => M.Th a -> M.MemoristM a
+workM = workValue
 
-ignoreM :: Bindings -> M.Th a -> M.MemoristM Int
-ignoreM _ _ = M.tick >> pure 1
+ignoreM :: M.Th a -> M.MemoristM Int
+ignoreM _ = M.tick >> pure 1
 
 caseParameterM, guardParameterM, caseParameterRenamedM
-    :: Bindings -> M.Th a -> M.MemoristM Int
+    :: M.Th a -> M.MemoristM Int
 caseParameterM = parameter
 guardParameterM = parameter
 caseParameterRenamedM = parameter
 
-parameter :: Bindings -> M.Th a -> M.MemoristM Int
-parameter bindings argument = do
+parameter :: M.Th a -> M.MemoristM Int
+parameter argument = do
     M.tick
     let inner :: M.Th Bool -> M.MemoristM Int
-        inner _ = M.tick >> ignoreM bindings argument
+        inner _ = M.tick >> ignoreM argument
     true <- M.lazy (pure True)
     inner true
 
@@ -60,10 +68,10 @@ instance NumericCache Integer where
     sharedNumeric = integerCache
 
 caseFactoryM, guardFactoryM, guardFactoryRenamedM
-    :: NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
-caseFactoryM = factory
-guardFactoryM = factory
-guardFactoryRenamedM = factory
+    :: NumericCache a => M.Th a -> M.MemoristM Int
+caseFactoryM = factory globalBindings
+guardFactoryM = factory globalBindings
+guardFactoryRenamedM = factory globalBindings
 
 factory :: forall a. NumericCache a => Bindings -> M.Th a -> M.MemoristM Int
 factory bindings _ = do
