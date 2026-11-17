@@ -213,6 +213,20 @@ total. An undefined count remains safe through outer-root demand, while demandin
 the inner root raises. Separate broken-inner and broken-leaf cases check that
 each enclosing constructor can be demanded without forcing the next field.
 
+The `constrained-maybe-list` fixture starts from a shared `Just [expensive 5]`
+used twice at one scoped abstract type. Generic callers retain only `Eq`, `Num`,
+and `Scalar`. Full demand returns a sum of four at cost three: one caller entry
+and two payload-work entries. Demanding the `Maybe` root or list spine costs one;
+constructor allocation and the literal list's spine are unticked. Relative
+identity probes compare the `Maybe` root, list root, head, and tail thunks.
+Repeated fresh calls cost three ticks each; repeated demands on a cached call
+cost three in total. A separate recursive producer charges one entry per list
+cell and one for `[]`: a fully demanded shared list of length `k` costs
+`3*k + 2`, while spine-only demand costs `k + 2`. On nonempty lists, first-spine
+and first-head demands cost two and four respectively, without forcing the tail.
+Bottom counts remain safe through `Maybe`-root demand. Broken-head and
+broken-tail probes distinguish demanded fields from suspended failures.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

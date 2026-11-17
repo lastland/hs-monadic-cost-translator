@@ -172,13 +172,13 @@ has unambiguous type evidence. When that parameter is the whole result, closed
 scalar references receive one thunk per type and source binding. References all
 using one abstract type also share a native thunk when that type is available in
 the declaration's enclosing function scope, including explicitly typed and
-inferred helpers. Locals returning `Maybe a` or nested `Maybe` results follow the
-same rule for their innermost type parameter: closed scalar types or one abstract
-type available in the declaration's enclosing function scope. Native allocation
-preserves root and field identities and source laziness at each level. Allocation
-stays where the source value is declared: each helper invocation creates fresh
-helper-local thunks. These bindings need no runtime type keys or added reflection
-constraints.
+inferred helpers. Locals returning lists, `Maybe a`, or combinations such as
+`Maybe [a]` follow the same rule for their innermost type parameter: closed scalar
+types or one abstract type available in the declaration's enclosing function
+scope. Native allocation preserves root and field identities and source laziness
+at each level. Allocation stays where the source value is declared: each helper
+invocation creates fresh helper-local thunks. These bindings need no runtime type
+keys or added reflection constraints.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those

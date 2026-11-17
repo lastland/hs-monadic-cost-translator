@@ -47,13 +47,13 @@ specializedSharing scopeVariables ty uses
     resultParameter = parameter result
     parameter shape value
         | Just _ <- getTyVar_maybe shape = Just value
-        | Just element <- maybeElement shape = maybeElement value >>= parameter element
+        | Just (constructor, [element]) <- splitTyConApp_maybe shape
+        , constructor `elem` [maybeTyCon, listTyCon]
+        , Just (actualConstructor, [actualElement]) <- splitTyConApp_maybe value
+        , actualConstructor == constructor = parameter element actualElement
         | otherwise = Nothing
     closedResult value = maybe False closedScalar (resultParameter value)
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
-    maybeElement value = case splitTyConApp_maybe value of
-        Just (constructor, [element]) | constructor == maybeTyCon -> Just element
-        _ -> Nothing
 
 sharingType :: Map.Map Name String -> Type -> ([TyVar], Type)
 sharingType renamings ty = (renamed, substTyWith vars (map mkTyVarTy renamed) body)
