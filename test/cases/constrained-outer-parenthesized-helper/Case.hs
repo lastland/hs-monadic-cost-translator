@@ -165,14 +165,10 @@ preservationProbes =
         pure (length (nub (map M.tname
             [firstOuterFirstHelper, firstOuterSecondHelper, secondOuterFirstHelper, secondOuterSecondHelper])) == 4 &&
             case (firstNames, secondNames) of
-                (Just ((firstOuterFirstLeft, firstOuterFirstRight), (firstOuterSecondLeft, firstOuterSecondRight)),
-                 Just ((secondOuterFirstLeft, secondOuterFirstRight), (secondOuterSecondLeft, secondOuterSecondRight))) ->
-                    firstOuterFirstLeft == firstOuterFirstRight &&
-                    firstOuterFirstLeft == firstOuterSecondLeft &&
-                    firstOuterFirstLeft == firstOuterSecondRight &&
-                    secondOuterFirstLeft == secondOuterFirstRight &&
-                    secondOuterFirstLeft == secondOuterSecondLeft &&
-                    secondOuterFirstLeft == secondOuterSecondRight &&
+                (Just firstOuterNames@((firstOuterFirstLeft, _), _),
+                 Just secondOuterNames@((secondOuterFirstLeft, _), _)) ->
+                    sameSharedFields firstOuterNames &&
+                    sameSharedFields secondOuterNames &&
                     all (`notElem` secondOuterFirstLeft) firstOuterFirstLeft
                 _ -> False)
     , scalarSource "cached-helper/int/full"
@@ -183,9 +179,7 @@ preservationProbes =
         result@(M.PairT firstHelper secondHelper) <- genericCachedHelper input n
         names <- twiceFieldNames result
         pure (M.tname firstHelper == M.tname secondHelper && case names of
-            Just ((firstHelperLeft, firstHelperRight), (secondHelperLeft, secondHelperRight)) ->
-                firstHelperLeft == firstHelperRight && firstHelperLeft == secondHelperLeft &&
-                firstHelperLeft == secondHelperRight
+            Just sharedNames -> sameSharedFields sharedNames
             _ -> False)
     , scalarSource "separate/int/full"
         (const (sourceTwiceSum (Source.separate (undefined :: Int) undefined))) $ \_ ->
@@ -256,6 +250,10 @@ twiceFieldNames (M.PairT first second) = do
     left <- M.force first >>= fieldNames
     right <- M.force second >>= fieldNames
     pure ((,) <$> left <*> right)
+
+sameSharedFields :: (([M.ThName], [M.ThName]), ([M.ThName], [M.ThName])) -> Bool
+sameSharedFields ((firstLeft, firstRight), (secondLeft, secondRight)) =
+    firstLeft == firstRight && firstLeft == secondLeft && firstLeft == secondRight
 
 selectedBrokenHead :: Sample -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))))
 selectedBrokenHead _ = withUnusedArguments genericBrokenHead
