@@ -201,7 +201,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     specializedBindings = Map.fromList
         [(unLoc name, instantiations) | L _ (FunBind _ name matches) <- sourceBinds, arity matches == 0,
          unLoc name `Set.notMember` topLevelNames, Just ty <- [Map.lookup (unLoc name) types],
-         Just instantiations <- [specializedSharing (Map.findWithDefault [] (unLoc name) allocationVariables)
+         Just instantiations <- [specializedSharing datatypes (Map.findWithDefault [] (unLoc name) allocationVariables)
              ty (Map.findWithDefault [] (unLoc name) useTypes)]]
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         unLoc n `Set.notMember` topLevelNames,

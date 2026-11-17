@@ -27,8 +27,8 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
 
-specializedSharing :: [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
-specializedSharing scopeVariables ty uses
+specializedSharing :: [TyCon] -> [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
+specializedSharing datatypes scopeVariables ty uses
     | [variable] <- vars
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
@@ -57,7 +57,7 @@ specializedSharing scopeVariables ty uses
         , captured `elem` scopeVariables, shape `eqType` value = Just []
         | isEmptyVarSet (tyCoVarsOfType shape), shape `eqType` value = Just []
         | Just (constructor, elements) <- splitTyConApp_maybe shape
-        , constructor `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2]
+        , constructor `elem` (datatypes ++ [maybeTyCon, listTyCon, tupleTyCon Boxed 2])
         , Just (actualConstructor, actualElements) <- splitTyConApp_maybe value
         , actualConstructor == constructor
         , length actualElements == length elements =

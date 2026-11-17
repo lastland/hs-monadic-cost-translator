@@ -275,6 +275,24 @@ captured thunk performs one tick, these costs become `3*r + 1` and four; repeate
 captured-only demands cost `r + 1` and two. Bottom captured arguments and broken
 abstract fields remain safe when skipped, and demanded failures raise.
 
+The `constrained-user-pair` fixture preserves a source-declared `data Pair a b =
+Pair a b` and a local `Just (Pair (expensive 5) fixed)` shared twice. Its generic
+caller requires only `Eq`, `Num`, and `Scalar` on `a`, with no constraints on `b`.
+The independent reference defines its own `PairT` and demand equations. Full
+demand with a pure captured `Int` value `n` returns `4 + 2*n` at cost three;
+constructor-only and captured-only demands cost one. The generated inner type
+is the source datatype's `PairT a b`, not the runtime's boxed-pair type.
+Native matching admits the same checked datatype inventory used by datatype
+translation, requires the source and use constructors to agree at every level,
+and retains complete instantiated types as sharing keys.
+Relative identity probes distinguish fresh local roots and abstract work from
+the reused caller thunk. Fresh and cached full calls cost `3*r` and three; a
+one-tick captured argument changes those costs to `3*r + 1` and four. Protected
+captured bottoms, abstract-field failures, and a broken `Pair` root test each
+suspension boundary. A separate homogeneous `Pair a a` computes two equal-valued
+fields independently: full demand costs five, either position costs three, and
+the fields have distinct identities despite their equal right-hand sides.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

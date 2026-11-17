@@ -172,9 +172,11 @@ has unambiguous type evidence. When that parameter is the whole result, closed
 scalar references receive one thunk per type and source binding. References all
 using one abstract type also share a native thunk when that type is available in
 the declaration's enclosing function scope, including explicitly typed and
-inferred helpers. Lists, `Maybe`, and boxed pairs can wrap that same generalized
-parameter, as in `Maybe [a]` or `Maybe (a, a)`. Fixed closed fields are also
-supported, as in `Maybe (a, Int)`, and must retain the same type at every use.
+inferred helpers. Lists, `Maybe`, boxed pairs, and translated source datatypes can
+wrap that same generalized parameter, as in `Maybe [a]`, `Maybe (a, a)`, or
+`Maybe (Pair a b)` for a source-declared `Pair`. Matching uses the checked type
+constructor identities and retains every type argument. Fixed closed fields are
+also supported, as in `Maybe (a, Int)`, and must retain the same type at every use.
 A field may instead be a captured type variable, as in `Maybe (a, b)`, when its
 checked binder is available where the value is declared. That field must retain
 the same lexical binder at every use; capturing it adds no caller constraints.
