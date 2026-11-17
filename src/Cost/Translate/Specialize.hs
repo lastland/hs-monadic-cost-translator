@@ -68,8 +68,12 @@ specializeHelpers group checked hints =
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
     useType = expressionTypeAt sourceExpressions hints
     calls = Map.fromListWith (++) [((unLoc name, location function), [length arguments]) |
-        expression@(L _ HsApp {}) <- expressions group,
-        let (function, arguments) = spine expression, HsVar _ name <- [unLoc function]]
+        expression <- expressions group,
+        (function, arguments) <- case unLoc expression of
+            HsApp {} -> [spine expression]
+            OpApp _ left operator right -> [(operator, [left, right])]
+            _ -> [],
+        HsVar _ name <- [unLoc function]]
     planned = discover [] candidates
     adjust = substitute planned
     substitute plan ty = foldl (\current result ->

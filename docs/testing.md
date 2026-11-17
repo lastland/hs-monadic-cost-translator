@@ -326,6 +326,19 @@ capture one another during rendering. The independent reference checks full
 cost four, constructor-only cost two, an undemanded bottom input, and direct
 reuse of the caller's captured thunk.
 
+The `constrained-outer-infix-helper` fixture preserves a binary local helper
+called as ``input `helper` n``. Both operands may be bottom because the helper
+ignores them. Its generic callers retain only `Eq`, `Num`, and `Scalar`, without
+`Typeable`. The independent reference retains one outer shared `Maybe`/list
+producer: one full call returns four at cost four, and two infix calls return
+eight at cost five. The helper-result thunks are distinct, while all four views
+share the `Maybe`, list, head, and tail thunks. Selected helper-result roots cost
+one plus the number selected; inspecting both helper results and their selected
+`Maybe`/list roots costs three. Checked call evidence uses the operator's own
+unique real source span and complete instantiated binary function type, not the
+whole infix expression's span or either operand's type. Partial references and
+sections do not provide saturated-call evidence.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild
