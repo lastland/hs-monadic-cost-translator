@@ -28,26 +28,10 @@ probes =
     , demanded "selected/heads-without-tails"
         (projectLists True False) (demandLists True False) selectedViews
     , snapshot "just-list/maybe-list-head-and-tail-aliases" $ \sample -> M.value $ M.eval1 $ do
-        M.PairT first second <- selectedViews sample
-        left <- M.force first
-        right <- M.force second
-        case (left, right) of
-            (M.JustT leftList, M.JustT rightList) -> do
-                leftValue <- M.force leftList
-                rightValue <- M.force rightList
-                case (leftValue, rightValue) of
-                    (L.ConsT leftHead leftTail, L.ConsT rightHead rightTail) -> do
-                        leftEnd <- M.force leftTail
-                        rightEnd <- M.force rightTail
-                        pure (M.tname first == M.tname second &&
-                            M.tname leftList == M.tname rightList &&
-                            M.tname leftHead == M.tname rightHead &&
-                            M.tname leftTail == M.tname rightTail &&
-                            case (leftEnd, rightEnd) of
-                                (L.NilT, L.NilT) -> True
-                                _ -> False)
-                    _ -> pure False
-            _ -> pure False
+        names <- selectedViews sample >>= fieldNames
+        pure (case names of
+            Just (first, second) -> first == second
+            Nothing -> False)
     , scalarSource "just-list/repeated-fresh-calls"
         (\sample -> repeats sample * sourceSum (undefined :: Int) undefined) $ \sample -> do
         input <- M.lazy (pure (undefined :: Int))
