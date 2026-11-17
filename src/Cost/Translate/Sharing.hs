@@ -1,13 +1,16 @@
-module Cost.Translate.Sharing (constrainedVariables, sharingPaths, sharingSupport) where
+module Cost.Translate.Sharing (constrainedVariables, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
 
 import GHC
+import GHC.Builtin.Types (liftedTypeKind, listTyCon)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyConApp_maybe, splitAppTy_maybe, getTyVar_maybe, isPredTy)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.TyCo.FVs (tyCoVarsOfTypes)
+import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
+import GHC.Core.TyCo.Compare (eqType)
 import GHC.Types.Var.Set (elemVarSet)
 import GHC.Types.Var (tyVarKind)
 import GHC.Types.Name (getOccString)
-import Cost.Translate.Kinds (visibleArguments)
+import Cost.Translate.Datatypes (renderType)
+import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Data.List (minimumBy)
 import Data.Ord (comparing)
 import qualified Cost.Translate.Output as O
@@ -17,6 +20,44 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
   where
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
+
+nativeSharing :: [TyCon] -> Type -> Either String (Maybe (O.Ty, O.Expr))
+nativeSharing datatypes ty
+    | null vars || not (all ((`eqType` liftedTypeKind) . tyVarKind) vars) || not (null arguments) = Right Nothing
+    | otherwise = case mapper result of
+        Nothing -> Right Nothing
+        Just convert -> do
+            quantified <- mapM (renderBinder datatypes) vars
+            rendered <- renderType datatypes result
+            pure (Just (O.forallT quantified (O.tc "M.MemoristM" [rendered]), convert))
+  where
+    (vars, body) = splitForAllTyVars ty
+    (arguments, result) = splitFunTys body
+    mapper value
+        | not (any (`elemVarSet` tyCoVarsOfType value) vars) = Just (O.v "id")
+        | Just variable <- getTyVar_maybe value, variable `elem` vars = Just (O.v "Void.absurd")
+        | Just (constructor, [element]) <- splitTyConApp_maybe value, constructor == listTyCon =
+            O.call "mapListT" . (:[]) <$> mapper element
+        | otherwise = Nothing
+
+nativeSharingSupport :: Bool -> [O.Decl]
+nativeSharingSupport lists =
+    [ O.sig "mapThunk" (O.arrows [O.arrow a b, th a] (th b))
+    , O.val "mapThunk" [O.p "convert", O.conP "M.Th" (map O.p ["name", "payload", "annotation"])]
+        (O.call "M.Th" [O.v "name", O.call "convert" [O.v "payload"], O.v "annotation"])
+    ] ++ if not lists then [] else
+    [ O.sig "mapListT" (O.arrows [O.arrow a b, list a] (list b))
+    , O.val "mapListT" (map O.p ["convert", "list"]) (O.caseE (O.v "list")
+        [(O.conP "L.NilT" [], O.v "L.NilT"),
+         (O.conP "L.ConsT" (map O.p ["headThunk", "tailThunk"]),
+          O.call "L.ConsT" [O.call "mapThunk" [O.v "convert", O.v "headThunk"],
+              O.call "mapThunk" [O.call "mapListT" [O.v "convert"], O.v "tailThunk"]])])
+    ]
+  where
+    a = O.t "a"
+    b = O.t "b"
+    th value = O.tc "M.Th" [value]
+    list value = O.tc "L.ListT" [value]
 
 sharingPaths :: Type -> Either String (Maybe O.Ty)
 sharingPaths ty = case constrainedVariables ty of

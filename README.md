@@ -86,13 +86,21 @@ It prints `True` and `1`: `doubleM` produces the expected result and charges one
 
 ### Modules with Top-Level Value Bindings
 
-When a source module defines zero-arity top-level values (such as `seed = double 5`), allocating their thunks requires monadic effects. Instead of emitting standalone top-level declarations, the translator packages all top-level thunks and translated functions into a `Bindings` record and emits an initializer:
+Functions that do not refer to top-level values, directly or through other
+functions, remain ordinary module-level bindings. Adding an unused top-level
+value does not add a setup argument to these functions.
+
+Top-level values (such as `seed = double 5`) and functions that depend on them
+currently use a `Bindings` record and an initializer:
 
 ```haskell
 initialize :: MemoristM Bindings
 ```
 
-Call `initialize` once and use the returned record so top-level thunks remain shared across calls within the same `MemoristM` computation. For example, after translating [`examples/Shared.hs`](examples/Shared.hs):
+Call `initialize` once when using those dependent functions so their top-level
+thunks remain shared within the same `MemoristM` computation. This remains a
+limitation of the direct-call interface. For example, after translating
+[`examples/Shared.hs`](examples/Shared.hs):
 
 ```haskell
 program :: MemoristM Int
@@ -146,6 +154,14 @@ For each source datatype `Tree a`, the generated module emits:
 Shared bindings evaluate on demand and reuse their thunks. Passing an existing thunk as an argument or field does not create a forwarding thunk. Variable and wildcard patterns do not force their subject; constructor and literal patterns inspect it only when reached.
 
 Unconstrained polymorphic values share across type instantiations. Constrained polymorphic values share when the types determining their dictionaries agree; other unconstrained type parameters do not split sharing. [`examples/Shared.hs`](examples/Shared.hs) demonstrates this behavior.
+
+For unconstrained local values whose generalized result is a type variable or
+nested lists, the translator uses one native allocation. Pure representation
+conversions retain the root and field thunk identities across type
+instantiations. Each function invocation still allocates fresh local thunks.
+Other generalized result shapes and dictionary-sensitive values retain legacy
+evaluator helpers; those outputs do not yet meet the construction-only contract
+enforced by the test suite.
 
 ## Architecture Overview
 

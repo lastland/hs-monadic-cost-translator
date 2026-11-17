@@ -8,8 +8,13 @@ import ReferenceSupport
 
 probes :: [Probe]
 probes =
-    [ scalarSource "polymorphic-local" (Source.local . number) (\s -> M.fromPure1 localM (number s))
+    [ scalarSource "polymorphic-local" (Source.local . number) (M.fromPure1 localM . number)
     , scalar "unused-bottom-input" (\_ -> M.fromPure1 localM (undefined :: Int))
+    , scalarSource "two-fresh-polymorphic-locals" ((2 *) . Source.local . number) $ \s -> do
+        input <- M.lazy (pure (number s))
+        first <- localM input
+        second <- localM input
+        pure (first + second)
     , demanded "empty-integer-list" (\_ _ -> ([] :: [Int])) (\_ _ -> L.NilD)
         (\s -> M.fromPure1 emptyM (number s) :: M.MemoristM (L.ListT Int))
     , demanded "empty-boolean-list" (\_ _ -> ([] :: [Bool])) (\_ _ -> L.NilD)

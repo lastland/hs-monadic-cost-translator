@@ -51,6 +51,10 @@ does not prove ordinary calling types or the absence of hidden setup: direct
 caller compilation and behavioral comparisons check separate contracts. The
 `top-level-function-interface` fixture uses the same ordinary caller and
 handwritten reference with and without an unused top-level value.
+The `top-level-independent-functions` fixture also checks transitive calls among
+such functions, suspended fields, repeated demands, and fresh invocations. Its
+relative-name and caller-allocation observations reject hidden initialization
+inside an otherwise ordinary-looking function.
 
 The `generated-functions` selector checks small positive and negative parser
 specimens and the shared lifecycle. Its lifecycle test runs the ordinary
@@ -93,6 +97,19 @@ sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-argument
 
 The guard checks references to these runtime definitions. It is not a proof
 against arbitrary reimplementations of an interpreter.
+
+The `polymorphic-local-value` and `polymorphic-local-demand` fixtures exercise
+native allocation for unconstrained local values with type-variable or nested-list
+results. Their independent references retain the reasoning operations permitted
+on the reference side. The generated implementations allocate once and convert
+representations without changing native thunk names or annotations. The probes
+check costs across type instantiations, fresh invocations, suspended bottom
+elements, partial spine demands, and relative root/field identities.
+
+`polymorphic-local-demand/Example.hs` deliberately shadows an outer `forall b`
+with a local `forall b`. Its `-Wno-name-shadowing` pragma preserves that scope
+regression; the handwritten reference and caller need no warning exception.
+This does not expand the bounded generated-output warning checks.
 
 ## Private Runtime Allocator
 

@@ -102,7 +102,10 @@ stack exec -- ghc -v0 -package MemoristANT -package QuickCheck \
 
 It prints `True` and `1`.
 
-If a source module defines top-level zero-arity value bindings (`Datatypes.hs`, `Shared.hs`, `ThunkMatching.hs`, `ScopedAnnotations.hs`), the generated module exports a `Bindings` record and `initialize :: MemoristM Bindings`, and each translated source function takes `Bindings` as its first argument.
+Modules with top-level value bindings export `Bindings` and
+`initialize :: MemoristM Bindings`. Only functions that depend on those values,
+directly or through other functions, take `Bindings` as their first argument.
+Other functions retain their ordinary interface and need no initialization.
 
 **Cost model summary**: Every translated function call (and generated record selector) charges 1 tick on entry, constructor allocation charges 0 ticks, and scalar operators add 0 entry ticks. All costs below are measured under `fullDemand` unless stated otherwise.
 
@@ -154,13 +157,13 @@ infcost' (fromPure1 streamM (5 :: Int))
 
 ### `Datatypes.hs`
 
-`Datatypes.hs` defines `Tree`, the non-regular datatype `Nested`, and the infinite producer `grow`. Because it also defines the top-level value `sample`, its generated functions are accessed through `Bindings`:
+`Datatypes.hs` defines `Tree`, the non-regular datatype `Nested`, and the infinite
+producer `grow`. Its functions do not depend on the top-level value `sample`, so
+they are directly callable:
 
 ```haskell
 totalCheck :: MemoristM Int
-totalCheck = do
-    bindings <- initialize
-    fromPure1 (totalM bindings) (5 :: Int)
+totalCheck = fromPure1 totalM (5 :: Int)
 
 -- correct totalCheck (5 :: Int) == True
 -- infcost totalCheck fullDemand == Cost 4
@@ -168,8 +171,8 @@ totalCheck = do
 
 | Call | Value | Cost |
 | :--- | :--- | :--- |
-| `totalM` at `5` (via `initialize`) | `5` | `4` |
-| `deepM` at `5` (via `initialize`) | `11` | `6` |
+| `totalM` at `5` | `5` | `4` |
+| `deepM` at `5` | `11` | `6` |
 | `growM` at `5` under `NodeD (Need 5) Skip Skip` | — | `1` |
 
 Constructor application is free, so `grow` charges one tick per demanded node. Source values convert to thunked representations with `reprM` and back with `abstract`:
@@ -268,18 +271,20 @@ let (sameA, sameB, xName) = value res in (sameA, sameB, next == nnext xName, MT.
 - Computed match subjects (`work x`, `bad x`) and explicit `let` bindings (`let bound = x`) allocate fresh `M.lazy` suspensions shared across uses of the bound variable.
 - Unconstrained polymorphic values (`sharedEmpty :: [a]`) reuse a single thunk across `[Int]` and `[Bool]` instantiations, while dictionary-constrained values (`shared :: Num a => a`) share across uses of `Int` (`sameCaseM`, `sameGuardM`) and separate `Int` from `Integer` (`differentM`).
 
-Because `ThunkMatching.hs` defines top-level values (`shared` and `sharedEmpty`), initialize `Bindings` first:
+`plainM`, `guardAliasM`, and `computedCaseM` do not depend on the top-level
+values and need no initialization. `sameCaseM`, `sameGuardM`, and `differentM`
+use `shared`, so their calls still use `Bindings`:
 
 ```haskell
-let (res, next) = runM (do bindings <- initialize; x <- lazy (error "unused" :: MemoristM Int); PairT a b <- plainM bindings x; pure (tname x, tname a, tname b)) nzero
+let (res, next) = runM (do x <- lazy (error "unused" :: MemoristM Int); PairT a b <- plainM x; pure (tname x, tname a, tname b)) nzero
 let (xName, aName, bName) = value res in (aName == xName, bName == xName, next == nnext xName, MT.toInteger (costAnnot res))
 -- (True, True, True, 1)
 
-let (gRes, gNext) = runM (do bindings <- initialize; x <- lazy (error "unused" :: MemoristM Int); PairT a b <- guardAliasM bindings x; pure (tname x, tname a, tname b)) nzero
+let (gRes, gNext) = runM (do x <- lazy (error "unused" :: MemoristM Int); PairT a b <- guardAliasM x; pure (tname x, tname a, tname b)) nzero
 let (gxName, gaName, gbName) = value gRes in (gaName == gxName, gbName == gxName, gNext == nnext gxName, MT.toInteger (costAnnot gRes))
 -- (True, True, True, 1)
 
-runInt (do bindings <- initialize; PairT a b <- fromPure1 (computedCaseM bindings) (5 :: Int); (+) <$> force a <*> force b)
+runInt (do PairT a b <- fromPure1 computedCaseM (5 :: Int); (+) <$> force a <*> force b)
 -- (20, 2)
 
 value (eval1 (do bindings <- initialize; u <- lazy (pure ()); PairT a b <- sameCaseM bindings u; PairT c d <- sameGuardM bindings u; PairT e f <- differentM bindings u; pure (tname a == tname b, tname a == tname c, tname c == tname d, tname a == tname e, tname e /= tname f)))
@@ -293,16 +298,17 @@ value (eval1 (do bindings <- initialize; u <- lazy (pure ()); PairT a b <- sameC
 - The generated code binds the annotated subject in a plain Haskell `let` (`let caseThunk0 = (x :: M.Th a)`) at the match boundary outside the inner `forall a`, preventing the inner binder from capturing the outer type variable `a`.
 - Because `caseThunk0` is a plain Haskell alias rather than `M.lazy (M.force x)`, it preserves `tname`, adds no thunk allocation, force, or tick, leaves unused bottom arguments suspended, and keeps the outer dictionary selection (`Int` vs. `Integer`).
 
-Because `ScopedAnnotations.hs` defines the top-level value `shared`, initialize `Bindings` first:
+The parameter-only functions are directly callable. The factory functions refer
+to `shared` and still require `Bindings`:
 
 ```haskell
-runInt (do bindings <- initialize; fromPure1 (caseParameterM bindings) (5 :: Int))
+runInt (fromPure1 caseParameterM (5 :: Int))
 -- (1, 3)
-runInt (do bindings <- initialize; fromPure1 (guardParameterM bindings) (5 :: Int))
+runInt (fromPure1 guardParameterM (5 :: Int))
 -- (1, 3)
-runInt (do bindings <- initialize; fromPure1 (caseParameterM bindings) (undefined :: Int))
+runInt (fromPure1 caseParameterM (undefined :: Int))
 -- (1, 3)
-runInt (do bindings <- initialize; fromPure1 (guardParameterM bindings) (undefined :: Int))
+runInt (fromPure1 guardParameterM (undefined :: Int))
 -- (1, 3)
 
 runInt (do bindings <- initialize; fromPure1 (caseFactoryM bindings) (5 :: Int))

@@ -1,4 +1,4 @@
-module Generated (testM) where
+module Generated (fM, gM, testM) where
 
 import qualified Memorist.Memorist as M
 
@@ -7,6 +7,9 @@ import qualified Memorist.Memorist as M
 -- retained thunk contributes work's tick once; each call contributes the
 -- three entry ticks of test, f, and g. The fully demanded total is four.
 -- A second uncached test call pays those three entry ticks again, giving seven.
+-- An explicitly cached test call retains all three entries, so two forces
+-- still cost four including the shared work.
+-- Independent f/g calls pay their two entries and the shared work, giving three.
 shared :: M.Th Int
 shared = M.value (M.eval (M.lazy (M.fromPure1 workM (5 :: Int))) (M.fromInt (-1)))
 
