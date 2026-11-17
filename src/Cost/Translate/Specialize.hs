@@ -67,11 +67,11 @@ specializeHelpers group checked hints =
     uses = Map.fromListWith (++) [(unLoc name, [(location expression, useType expression)]) |
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
     useType = expressionTypeAt sourceExpressions hints
-    calls = Map.fromListWith (++) [((unLoc name, location function), [length arguments]) |
+    calls = Map.fromListWith (++) [((unLoc name, location function), [(length arguments, prefix)]) |
         expression <- expressions group,
-        (function, arguments) <- case unLoc expression of
-            HsApp {} -> [spine expression]
-            OpApp _ left operator right -> [(operator, [left, right])]
+        (function, arguments, prefix) <- case unLoc expression of
+            HsApp {} -> let (function, arguments) = spine expression in [(function, arguments, True)]
+            OpApp _ left operator right -> [(operator, [left, right], False)]
             _ -> [],
         HsVar _ name <- [unLoc function]]
     planned = discover [] candidates
@@ -93,7 +93,9 @@ specializeHelpers group checked hints =
         unless (tyVarKind variable `eqType` liftedTypeKind && tyVarKind owned `eqType` liftedTypeKind &&
             variable `elem` constrainedVariables ty && length (fst (splitFunTys tau)) == count) Nothing
         unless (all (\(other, otherInfo) -> other == name || owned `notElem` functionVariables otherInfo) (Map.toList checked)) Nothing
-        unless (not (null references) && all (\(site, _) -> Map.lookup (name, site) calls == Just [count]) references) Nothing
+        unless (not (null references) && all (\(site, _) -> case Map.lookup (name, site) calls of
+            Just [(provided, prefix)] -> provided > 0 && provided <= count && (prefix || provided == count)
+            _ -> False) references) Nothing
         actualTypes <- mapM (fmap normalize . snd) references
         [actualType] <- pure (nubBy eqType actualTypes)
         actual <- match variable tau actualType

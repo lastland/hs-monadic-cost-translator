@@ -349,6 +349,22 @@ sharing boundaries. A suspended head failure is safe through both list spines
 at cost three; a suspended root failure is safe through both helper results at
 cost three. Full demand raises in each case.
 
+The `constrained-outer-partial-helper` fixture preserves
+`map (helper input) [0]` and maps the same partial helper over varied list lengths.
+The independent reference uses the public runtime's `mapMM`: each list
+constructor, including `[]`, costs one entry, and each callback waits until its
+mapped result is demanded. Creating `helper input` charges no helper entry.
+One full singleton result returns four at cost six: one outer entry, two map
+entries, one helper entry, and two entries for shared work. For a list of length
+`r`, full demand returns `4*r` at cost two when empty, otherwise `2*r + 4`.
+Spine-only demand costs `r + 2`; demanding every helper-result root costs
+`2*r + 2`. The helper ignores both the captured input and each list element, so
+bottoms in either position remain safe. Relative identities distinguish each
+mapped result thunk while preserving one shared `Maybe`/list/head/tail vector.
+Generic callers require only `Eq`, `Num`, and `Scalar`, without `Typeable`.
+The singleton source is intentionally not simplified to a direct call: that
+would remove the partial application and its two source-level map entries.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild
