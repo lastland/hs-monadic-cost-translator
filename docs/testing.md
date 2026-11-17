@@ -259,6 +259,22 @@ computed fixed field raises full cost to five, with either position alone
 costing three; recognizing its fixed type neither discards its work nor forces
 it early.
 
+The `constrained-maybe-captured-field` fixture shares `Just (expensive 5, fixed)`
+at `Maybe (a, b)`. Its generic caller constrains only `a` with `Eq`, `Num`, and
+`Scalar`; `b` is unconstrained. With a pure captured `Int` value `n`, full demand
+returns `4 + 2*n` at cost three. Abstract-field demand costs three; captured-field
+or constructor-only demand costs one. The reference passes the caller's captured
+thunk directly into the tuple. Relative names check that both views reuse that
+thunk without reallocating it or forcing either field merely to inspect names.
+An undemanded function field remains safe without requiring a demand instance
+for the function type.
+Fresh calls allocate distinct local roots, tuples, and abstract work, but keep
+the captured field's identity when the caller reuses its argument. Repeating
+`r` full calls costs `3*r`, versus three for a cached call. If the caller's
+captured thunk performs one tick, these costs become `3*r + 1` and four; repeated
+captured-only demands cost `r + 1` and two. Bottom captured arguments and broken
+abstract fields remain safe when skipped, and demanded failures raise.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

@@ -175,6 +175,9 @@ the declaration's enclosing function scope, including explicitly typed and
 inferred helpers. Lists, `Maybe`, and boxed pairs can wrap that same generalized
 parameter, as in `Maybe [a]` or `Maybe (a, a)`. Fixed closed fields are also
 supported, as in `Maybe (a, Int)`, and must retain the same type at every use.
+A field may instead be a captured type variable, as in `Maybe (a, b)`, when its
+checked binder is available where the value is declared. That field must retain
+the same lexical binder at every use; capturing it adds no caller constraints.
 Within each use, all occurrences of the generalized parameter must agree on one
 closed scalar type or one abstract type available in the declaration's enclosing
 function scope. Native allocation preserves root and field identities and source
@@ -182,6 +185,8 @@ laziness at each level, including separately computed tuple fields with equal
 right-hand sides. Allocation stays where the source value is declared: each
 helper invocation creates fresh helper-local thunks. These bindings need no
 runtime type keys or added reflection constraints.
+Captured argument thunks keep their existing identities, including when callers
+reuse them between invocations.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those

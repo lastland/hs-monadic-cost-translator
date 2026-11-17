@@ -52,7 +52,9 @@ specializedSharing scopeVariables ty uses
             [element] -> Just element
             _ -> Nothing
     parameters shape value
-        | Just _ <- getTyVar_maybe shape = Just [value]
+        | Just variable <- getTyVar_maybe shape, variable `elem` vars = Just [value]
+        | Just captured <- getTyVar_maybe shape
+        , captured `elem` scopeVariables, shape `eqType` value = Just []
         | isEmptyVarSet (tyCoVarsOfType shape), shape `eqType` value = Just []
         | Just (constructor, elements) <- splitTyConApp_maybe shape
         , constructor `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2]
