@@ -67,13 +67,18 @@ specializeHelpers group checked hints =
     uses = Map.fromListWith (++) [(unLoc name, [(location expression, useType expression)]) |
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
     useType = expressionTypeAt sourceExpressions hints
-    calls = Map.fromListWith (++) [((unLoc name, location function), [(length arguments, prefix)]) |
+    applications = [((unLoc name, location function), (length arguments, prefix)) |
         expression <- expressions group,
         (function, arguments, prefix) <- case unLoc expression of
             HsApp {} -> let (function, arguments) = spine expression in [(function, arguments, True)]
             OpApp _ left operator right -> [(operator, [left, right], False)]
             _ -> [],
         HsVar _ name <- [unLoc function]]
+    heads = Set.fromList (map fst applications)
+    calls = Map.fromListWith (++)
+        ([(site, [Just application]) | (site, application) <- applications] ++
+         [(site, [Nothing]) | expression@(L _ (HsVar _ name)) <- expressions group,
+          let site = (unLoc name, location expression), site `Set.notMember` heads])
     planned = discover [] candidates
     adjust = substitute planned
     substitute plan ty = foldl (\current result ->
@@ -94,7 +99,8 @@ specializeHelpers group checked hints =
             variable `elem` constrainedVariables ty && length (fst (splitFunTys tau)) == count) Nothing
         unless (all (\(other, otherInfo) -> other == name || owned `notElem` functionVariables otherInfo) (Map.toList checked)) Nothing
         unless (not (null references) && all (\(site, _) -> case Map.lookup (name, site) calls of
-            Just [(provided, prefix)] -> provided > 0 && provided <= count && (prefix || provided == count)
+            Just [Nothing] -> True
+            Just [Just (provided, prefix)] -> provided > 0 && provided <= count && (prefix || provided == count)
             _ -> False) references) Nothing
         actualTypes <- mapM (fmap normalize . snd) references
         [actualType] <- pure (nubBy eqType actualTypes)

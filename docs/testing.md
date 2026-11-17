@@ -404,6 +404,23 @@ otherwise; its complete outer spine costs `r + 2` without executing callbacks.
 Mixed wrapped-prefix and saturated-infix calls share the outer producer and
 return eight at cost five.
 
+The `constrained-outer-bare-helper` fixture preserves a bare callback under
+`head (zipWith helper [input] [n])` alongside a saturated infix call of the same
+helper. Both references must retain the same complete checked function type and
+declaration scope. The inventory distinguishes an explicitly observed bare
+reference from a missing entry, and excludes existing application heads from
+the bare inventory. Callback construction charges no helper entry; each demanded
+saturated invocation retains its entry tick.
+The independent reference keeps one outer shared producer. Full demand returns
+eight at cost seven: one outer entry, one `head` entry, one `zipWith` entry, two
+helper entries, and two producer entries. Neither ignored argument is forced.
+For equal input-list lengths `r`, bare-callback zips return `4*r` at cost two when
+empty, otherwise `2*r + 4`. Complete outer-spine demand costs `r + 2`, and
+helper-result-root demand costs `2*r + 2`. Relative names preserve shared
+`Maybe`/list/head/tail fields while distinguishing result thunks. Generic callers
+retain only `Eq`, `Num`, and `Scalar`. The published `head` and its ordinary GHC
+partial-function warning are retained without changing the runner's warning policy.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

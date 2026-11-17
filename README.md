@@ -192,19 +192,22 @@ reuse them between invocations.
 
 For a nonrecursive local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked
-prefix application or saturated infix call at the same verified instantiation.
+prefix application, saturated infix call, or bare function reference at the same
+verified instantiation.
 The instantiation must use a closed scalar or a checked type variable available
 where the helper is declared. A captured outer binding stays outside the helper:
 repeated helper calls share that binding, while each helper call retains its
 entry tick.
 Prefix applications may supply fewer arguments than the helper accepts, but must
-supply at least one. Creating the partial application is unticked; the helper
-charges its entry tick only when its fully applied computation runs.
+supply at least one. A bare reference supplies no arguments and needs the same
+complete checked function type as every other reference. Creating either a bare
+function value or a partial application is unticked; the helper charges its
+entry tick only when its fully applied computation runs.
 Parenthesized named callees retain their checked instantiation when one complete,
 unambiguous parenthesis chain refers to the same function. The translator uses
 that checked type rather than guessing an instantiation from the arguments.
-Bare function values, sections, multiple instantiations, and escaping type
-variables do not qualify for this helper specialization. A helper also stays
+Uninstantiated function values, sections, multiple instantiations, and escaping
+type variables do not qualify for this helper specialization. A helper also stays
 polymorphic when its specialized type cannot be named safely in its local scopes.
 Top-level functions keep their generic interfaces.
 
