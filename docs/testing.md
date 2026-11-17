@@ -420,6 +420,19 @@ helper-result-root demand costs `2*r + 2`. Relative names preserve shared
 `Maybe`/list/head/tail fields while distinguishing result thunks. Generic callers
 retain only `Eq`, `Num`, and `Scalar`. The published `head` and its ordinary GHC
 partial-function warning are retained without changing the runner's warning policy.
+Selecting the mixed call's result roots costs `1 + 3*L + R`: the left result
+needs `head`, one zip entry, and one helper entry; the right needs only its helper.
+Fresh/cached repeated mixed calls return `8*k` at costs `7*k`/seven. For full zip
+cost `F(0) = 2`, `F(r>0) = 2*r + 4`, repeated fresh/cached zips return `4*r*k`
+at `k*F(r)`/`F(r)`, reusing caller thunks but retaining fresh outer identities.
+Two independent zips return `8*r` at cost three when empty, otherwise `4*r + 5`;
+an explicitly cached zip returns the same value at cost `F(r)` with shared result
+identities. Distinct equal-RHS bindings instead cost two when empty or `2*r + 6`
+otherwise, with disjoint field vectors. Protected failure probes use nonempty
+lists of length `s` and cost `2*s + 2`; full demands raise. Empty-left zips leave
+the entire right list unforced, and empty-right zips leave left elements and tail
+unforced after inspecting its first constructor. Both cost two. A parenthesized
+bare callback retains the same full zip costs and generic interface.
 
 ## Private Runtime Allocator
 

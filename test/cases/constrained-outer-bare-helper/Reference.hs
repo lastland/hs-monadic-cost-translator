@@ -1,5 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Generated (Scalar, oneM, manyM) where
+module Generated (Scalar, oneM, manyM, twiceZipM, cachedZipM, separateManyM, brokenHeadM, brokenRootM, wrappedM) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Example.List as ML
@@ -53,3 +53,63 @@ manyM inputs counts = do
         helper _ _ = M.tick >> pure (M.PairT shared shared)
     callback <- M.lazy (pure helper)
     ML.zipWithM callback inputs counts
+
+twiceZipM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))) (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))))
+twiceZipM inputs counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    firstMap <- M.lazy $ do
+        callback <- M.lazy (pure helper)
+        ML.zipWithM callback inputs counts
+    secondMap <- M.lazy $ do
+        callback <- M.lazy (pure helper)
+        ML.zipWithM callback inputs counts
+    pure (M.PairT firstMap secondMap)
+
+cachedZipM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))) (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))))
+cachedZipM inputs counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure helper)
+    result <- M.lazy (ML.zipWithM callback inputs counts)
+    pure (M.PairT result result)
+
+separateManyM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+separateManyM inputs counts = do
+    M.tick
+    leftShared <- M.lazy sharedBody
+    rightShared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT leftShared rightShared)
+    callback <- M.lazy (pure helper)
+    ML.zipWithM callback inputs counts
+
+brokenHeadM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenHeadM inputs counts = do
+    M.tick
+    shared <- M.lazy $ do
+        list <- M.lazy $ do
+            headThunk <- M.lazy (error "bare-helper head failure")
+            tailThunk <- M.lazy (pure L.NilT)
+            pure (L.ConsT headThunk tailThunk)
+        pure (M.JustT list)
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure helper)
+    ML.zipWithM callback inputs counts
+
+brokenRootM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenRootM inputs counts = do
+    M.tick
+    shared <- M.lazy (error "bare-helper root failure")
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure helper)
+    ML.zipWithM callback inputs counts
+
+wrappedM :: forall a. (Eq a, Num a) => M.Th (L.ListT a) -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+wrappedM = manyM
