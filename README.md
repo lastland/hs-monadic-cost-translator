@@ -190,6 +190,17 @@ runtime type keys or added reflection constraints.
 Captured argument thunks keep their existing identities, including when callers
 reuse them between invocations.
 
+For a nonrecursive local helper with one generalized dictionary parameter, the
+translator can specialize its generated type when every reference is a complete
+call at the same verified instantiation. The instantiation must use a closed
+scalar or a checked type variable available where the helper is declared. This
+keeps a captured outer binding allocated outside the helper: repeated helper
+calls share that binding, while each helper call retains its entry tick.
+Partial calls, multiple instantiations, and escaping type variables do not qualify
+for this helper specialization. A helper also stays polymorphic when its
+specialized type cannot be named safely in its local scopes. Top-level functions
+keep their generic interfaces.
+
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those
 outputs do not yet meet the construction-only contract enforced by the test

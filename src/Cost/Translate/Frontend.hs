@@ -28,6 +28,7 @@ import Cost.Translate.Callable (callArity, emitCallable, isComposition, spine)
 import Cost.Translate.Diagnostic (Diagnostic(..))
 import Cost.Translate.Typed (hasFreeVariables, hasFreshAnnotationVariables)
 import qualified Cost.Translate.Typed as Typed
+import Cost.Translate.Specialize (specializeHelpers)
 import Data.Bifunctor (first)
 import Cost.Translate.Foldable (foldableSupport)
 import Cost.Translate.Validation (validateComparisons, scalarSupport)
@@ -70,12 +71,9 @@ generate file targetModule = runGhc (Just libdir) $ do
                             [(showSDocUnsafe (ppr (getLocA expression)), name) | expression@(L _ (HsOverLit _ literal)) <- collect (tm_typechecked_source checked) :: [LHsExpr GhcTc],
                              Just (tc,[]) <- [splitTyConApp_maybe (overLitType literal)],
                              let name = getOccString tc, name `elem` ["Int","Integer","Float","Double"]]
-                        expressionTypes = Map.fromList
-                            [(location, (ty, rendered)) |
-                             (location,ty) <- Map.toList hints, Right rendered <- [renderType datatypes ty]]
                         (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
-                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes expressionTypes
-                             (Typed.scopedVariables checked) group
+                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes hints
+                             (Typed.functionTypes checked) group
                         validation = do
                             when (any (`xopt` ms_hspp_opts summary) [Extension.Strict, Extension.StrictData, Extension.RebindableSyntax])
                                 (Left (file ++ ":1: Strict, StrictData and RebindableSyntax are unsupported"))
@@ -100,8 +98,8 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Type, O.Ty) -> Map.Map Name [TyVar] -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
-emitModule target source magicHash datatypes types literalTypes expressionTypes checkedVariables group =
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String Type -> Map.Map Name Typed.FunctionType -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule target source magicHash datatypes originalTypes literalTypes hints checkedFunctions group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
                           | L _ (FunBind _ n ms) <- binds] constructorEnv
@@ -127,7 +125,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++
-                    [Extension.ScopedTypeVariables | needsNativeSharing || not (Map.null specializedBindings)] ++ enabled
+                    [Extension.ScopedTypeVariables | needsNativeSharing || not (Map.null specializedBindings) || not (Map.null helperTypes)] ++ enabled
                 supportReferences = Set.fromList
                     [occNameString occurrence | HsVar _ (L _ (Unqual occurrence)) <- collect declarations :: [HsExpr GhcPs]]
                 needsSharing = any (`Set.member` supportReferences) ["sharedAt", "sharedAtBy"]
@@ -162,6 +160,12 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
             pure (O.moduleD target imports [], sections, extensions)
     in (result, logs)
   where
+    (helperTypes, adjustType) = specializeHelpers group checkedFunctions hints
+    types = helperTypes `Map.union` Map.map adjustType originalTypes
+    adjustedHints = Map.map adjustType hints
+    expressionTypes = Map.fromList [(location, (ty, rendered)) |
+        (location, ty) <- Map.toList adjustedHints, Right rendered <- [renderType datatypes ty]]
+    checkedVariables = Map.map Typed.functionVariables (Map.withoutKeys checkedFunctions (Map.keysSet helperTypes))
     isPreludeExport name = name `elem`
         ["mapM", "mapM_", "sequence", "sequence_", "foldr", "foldl", "filter", "zipWith", "concatMap"]
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
@@ -187,7 +191,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     useTypes = Map.fromListWith (++)
         [(unLoc name, [useType expression]) | expression@(L _ (HsVar _ name)) <- sourceExpressions]
     useType expression = case getLocA expression of
-        RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> fst <$> Map.lookup location expressionTypes
+        RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> Map.lookup location adjustedHints
         _ -> Nothing
       where location = showSDocUnsafe (ppr (getLocA expression))
     allocationVariables = Map.fromList (allocationScopes [] group)

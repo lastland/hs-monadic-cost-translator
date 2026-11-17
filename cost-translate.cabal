@@ -69,6 +69,7 @@ library
         Cost.Translate.Callable
         Cost.Translate.Diagnostic
         Cost.Translate.Typed
+        Cost.Translate.Specialize
         Cost.Translate.Output
     build-depends:
         base >=4.18 && <5,

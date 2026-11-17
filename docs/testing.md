@@ -293,6 +293,39 @@ suspension boundary. A separate homogeneous `Pair a a` computes two equal-valued
 fields independently: full demand costs five, either position costs three, and
 the fields have distinct identities despite their equal right-hand sides.
 
+The `constrained-outer-helper` fixture declares a polymorphic shared value outside
+a locally polymorphic helper. The helper uses the value twice, and its callers
+use one checked enclosing type without `Typeable`. One full helper call returns
+four at cost four: one outer entry, one helper entry, and two producer entries.
+Two helper calls within one outer invocation return eight at cost five, because
+they share the same outer producer. The two helper-result thunks are distinct,
+but their `Maybe`, list, head, and tail thunks must agree. Moving the shared
+allocation into the helper would instead cost seven and break these aliases.
+Selecting helper-result roots costs one outer entry plus one entry for each
+selected helper; inspecting `Maybe` or list roots through both helpers costs
+three without forcing the scalar work.
+Repeated outer calls reuse caller inputs but allocate disjoint four-name vectors:
+with `k` repetitions, fresh and cached `one` calls cost `4*k` and four, while
+fresh and cached `twice` calls cost `5*k` and five. An explicitly cached helper
+result returns eight at cost four and shares its result thunk. Two separate
+equal-RHS source bindings instead return eight at cost seven; each binding keeps
+its aliases across helper calls without sharing with the other binding.
+For `r = max 0 (width sample)`, `many` returns `4*r`. Full demand costs two when
+empty, otherwise `2*r + 4`: one outer entry, `r + 1` loop entries, `r` helper
+entries, and two shared producer entries. List-spine demand costs `r + 2`, while
+demanding every helper-result root costs `2*r + 2`. Relative identities check
+distinct helper-result thunks and one shared four-name vector throughout the
+list. A suspended head failure remains safe through both list spines at cost
+three; a suspended `Maybe`-root failure remains safe through both helper results
+at cost three. Full demand raises in both cases.
+
+The `constrained-outer-helper-hygiene` fixture preserves an inner signed `forall
+a` whose other field captures the helper's `b`. Its enclosing function also
+quantifies `a`. Specializing the helper must not make those distinct binders
+capture one another during rendering. The independent reference checks full
+cost four, constructor-only cost two, an undemanded bottom input, and direct
+reuse of the caller's captured thunk.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

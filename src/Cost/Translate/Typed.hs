@@ -1,7 +1,12 @@
-module Cost.Translate.Typed (expressionTypes, scopedVariables, hasFreeVariables, hasFreshAnnotationVariables) where
+module Cost.Translate.Typed
+    ( expressionTypes, FunctionType(..), functionTypes, scopedVariables
+    , hasFreeVariables, hasFreshAnnotationVariables
+    ) where
 
 import GHC hiding (exprType)
 import GHC.Core.Utils (exprType)
+import GHC.Core.Type (mkVisFunTy)
+import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Var (Var)
@@ -29,18 +34,32 @@ expressionTypes session checked source typed = do
     interesting ExprWithTySig {} = True
     interesting _ = False
 
-scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
-scopedVariables checked = Map.fromList
-    [(getName (abe_poly export), variables abstraction export wrapper) |
+data FunctionType = FunctionType
+    { functionDeclaredType :: Type
+    , functionVariables :: [TyVar]
+    , functionBodyType :: Type
+    }
+
+functionTypes :: TypecheckedModule -> Map.Map Name FunctionType
+functionTypes checked = Map.mapMaybe unique $ Map.fromListWith (++)
+    [(getName (abe_poly export), [FunctionType (idType (abe_poly export))
+        (variables abstraction export wrapper) (bodyType (mg_ext matches))]) |
      abstraction <- checkedAbstractions (tm_typechecked_source checked),
      export <- abs_exports abstraction,
-     L _ (FunBind (wrapper,_) identifier _) <- bagToList (abs_binds abstraction),
+     L _ (FunBind (wrapper,_) identifier matches) <- bagToList (abs_binds abstraction),
      unLoc identifier == abe_mono export]
   where
+    unique [function] = Just function
+    unique _ = Nothing
     variables abstraction export wrapper
         | abs_sig abstraction = wrapperVariables wrapper
         | otherwise = [variable | variable <- abs_tvs abstraction,
             variable `elemVarSet` tyCoVarsOfType (idType (abe_mono export))]
+    bodyType matches = foldr (\argument -> mkVisFunTy (scaledMult argument) (scaledThing argument))
+        (mg_res_ty matches) (mg_arg_tys matches)
+
+scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
+scopedVariables = Map.map functionVariables . functionTypes
 
 checkedAbstractions :: Data a => a -> [AbsBinds]
 checkedAbstractions value
