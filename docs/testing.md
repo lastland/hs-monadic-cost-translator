@@ -153,8 +153,18 @@ existing `Eq`, `Num`, and `Scalar` constraints, not `Typeable`. The independent
 native reference checks shared field identities, invocation freshness, unused
 bottom inputs, and partial demands. At both `Int` and `Integer`, full demand
 costs three ticks: one function entry and two producer entries. Skipping both
-fields costs one. Eligibility follows the checked owner's type-lambda binder,
-not its printed name; a helper's fresh quantified variable is not that binder.
+fields costs one. Eligibility follows checked lexical type-lambda binders, not
+their printed names. A helper's fresh quantified variable cannot determine an
+allocation declared outside that helper.
+
+The `constrained-helper-abstract` fixture declares the shared value inside a
+signed local helper and uses it only at that helper's abstract type. Generic
+callers still require no `Typeable`. One helper call costs four ticks including
+the outer entry; two helper calls within one outer invocation cost seven, not
+five. The nested result probes require aliases within each call and disjoint
+identities between helper calls. They also check partial demand: skipping both
+helper results costs one tick, while demanding their roots without scalar fields
+costs three. The original single-helper probes retain their separate expectations.
 
 ## Private Runtime Allocator
 

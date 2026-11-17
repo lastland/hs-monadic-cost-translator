@@ -190,14 +190,17 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
         RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> fst <$> Map.lookup location expressionTypes
         _ -> Nothing
       where location = showSDocUnsafe (ppr (getLocA expression))
-    allocationVariables = Map.fromList
-        [(unLoc name, variables) |
-         binding@(L _ (FunBind _ owner matches)) <- topLevelBinds, arity matches > 0,
-         unLoc owner `Set.member` explicitOwners, Just variables <- [Map.lookup (unLoc owner) checkedVariables],
-         L _ (FunBind _ name _) <- collect binding :: [LHsBind GhcRn]]
+    allocationVariables = Map.fromList (allocationScopes [] group)
     explicitOwners = Set.fromList
         [unLoc name | L _ (TypeSig _ names signature) <- collect group :: [LSig GhcRn],
          HsOuterExplicit {} <- [sig_bndrs (unLoc (hswc_body signature))], name <- names]
+    allocationScopes :: Data a => [TyVar] -> a -> [(Name, [TyVar])]
+    allocationScopes variables syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
+        Just binding@(L _ (FunBind _ name matches)) ->
+            let scoped = if arity matches > 0 && unLoc name `Set.member` explicitOwners
+                    then Map.findWithDefault [] (unLoc name) checkedVariables else []
+            in (unLoc name, variables) : concat (gmapQ (allocationScopes (variables ++ scoped)) (unLoc binding))
+        _ -> concat (gmapQ (allocationScopes variables) syntax)
     specializedBindings = Map.fromList
         [(unLoc name, instantiations) | L _ (FunBind _ name matches) <- sourceBinds, arity matches == 0,
          unLoc name `Set.notMember` topLevelNames, Just ty <- [Map.lookup (unLoc name) types],
