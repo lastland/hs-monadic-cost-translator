@@ -105,6 +105,8 @@ on the reference side. The generated implementations allocate once and convert
 representations without changing native thunk names or annotations. The probes
 check costs across type instantiations, fresh invocations, suspended bottom
 elements, partial spine demands, and relative root/field identities.
+Both explicit local quantifiers and inferred polymorphic locals must preserve
+annotations that refer to outer scoped type variables.
 
 `polymorphic-local-demand/Example.hs` deliberately shadows an outer `forall b`
 with a local `forall b`. Its `-Wno-name-shadowing` pragma preserves that scope

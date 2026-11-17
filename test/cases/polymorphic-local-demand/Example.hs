@@ -23,3 +23,15 @@ views _ n =
     let shared :: forall b. [b]
         shared = (producer n :: [b])
     in (shared, shared)
+
+inferred :: forall a. a -> ([Int], [Bool])
+inferred input =
+    let shared = if ignore (input :: a) == 1 then [] else producer 1
+    in (shared, shared)
+
+inferredSiblings :: forall a a'. a -> a' -> ([a], ([Int], [Bool]))
+inferredSiblings input sibling =
+    let kept = [input :: a]
+        first = if ignore (input :: a) == 1 then [] else producer 1
+        second = if ignore (sibling :: a') == 1 then first else producer 1
+    in (kept, (first, second))

@@ -2,17 +2,20 @@ module Cost.Translate.Sharing (constrainedVariables, nativeSharing, nativeSharin
 
 import GHC
 import GHC.Builtin.Types (liftedTypeKind, listTyCon)
-import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyConApp_maybe, splitAppTy_maybe, getTyVar_maybe, isPredTy)
+import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyConApp_maybe, splitAppTy_maybe, getTyVar_maybe, isPredTy, mkTyVarTy, substTyWith)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Types.Var.Set (elemVarSet)
-import GHC.Types.Var (tyVarKind)
-import GHC.Types.Name (getOccString)
+import GHC.Types.Var (setVarName, tyVarKind)
+import GHC.Types.Name (getOccString, mkInternalName)
+import GHC.Types.Name.Occurrence (mkTyVarOcc)
+import GHC.Types.Unique (getUnique)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Data.List (minimumBy)
 import Data.Ord (comparing)
+import qualified Data.Map.Strict as Map
 import qualified Cost.Translate.Output as O
 
 constrainedVariables :: Type -> [TyVar]
@@ -21,18 +24,23 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
 
-nativeSharing :: [TyCon] -> Type -> Either String (Maybe (O.Ty, O.Expr))
-nativeSharing datatypes ty
+nativeSharing :: [TyCon] -> Map.Map Name String -> Type -> Either String (Maybe (O.Ty, O.Expr))
+nativeSharing datatypes renamings ty
     | null vars || not (all ((`eqType` liftedTypeKind) . tyVarKind) vars) || not (null arguments) = Right Nothing
     | otherwise = case mapper result of
         Nothing -> Right Nothing
         Just convert -> do
-            quantified <- mapM (renderBinder datatypes) vars
-            rendered <- renderType datatypes result
+            let renamed = map rename vars
+            quantified <- mapM (renderBinder datatypes) renamed
+            rendered <- renderType datatypes (substTyWith vars (map mkTyVarTy renamed) result)
             pure (Just (O.forallT quantified (O.tc "M.MemoristM" [rendered]), convert))
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
+    rename variable = case Map.lookup (getName variable) renamings of
+        Nothing -> variable
+        Just occurrence -> setVarName variable (mkInternalName (getUnique variable)
+            (mkTyVarOcc occurrence) (nameSrcSpan (getName variable)))
     mapper value
         | not (any (`elemVarSet` tyCoVarsOfType value) vars) = Just (O.v "id")
         | Just variable <- getTyVar_maybe value, variable `elem` vars = Just (O.v "Void.absurd")

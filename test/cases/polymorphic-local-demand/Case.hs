@@ -24,6 +24,14 @@ probes =
         (observeViews . number)
     , scalarSource "views/empty-two-traversals" (const (sourceViews (undefined :: Bool) 0))
         (const (observeViews 0))
+    , scalarSource "inferred/outer-bool-scope" (const (sourceInferred (undefined :: Bool)))
+        (const (M.fromPure1 inferredM (undefined :: Bool) >>= sumSpines))
+    , scalarSource "inferred/outer-int-scope" (const (sourceInferred (undefined :: Int)))
+        (const (M.fromPure1 inferredM (undefined :: Int) >>= sumSpines))
+    , scalarSource "inferred/sibling-scopes-bool-int" (const (sourceSiblings (undefined :: Bool) (undefined :: Int)))
+        (const (M.fromPure2 observeSiblings (undefined :: Bool) (undefined :: Int)))
+    , scalarSource "inferred/sibling-scopes-int-bool" (const (sourceSiblings (undefined :: Int) (undefined :: Bool)))
+        (const (M.fromPure2 observeSiblings (undefined :: Int) (undefined :: Bool)))
     , demanded "views/partial-spines-bottom-elements" projectViews demandViews
         (M.fromPure2 viewsM (undefined :: Bool) . number)
     , demanded "views/bottom-count-skipped" (\_ _ -> ()) (\_ _ -> M.PairD M.Skip M.Skip)
@@ -54,8 +62,28 @@ sourceViews input count =
     in Source.spine ints + Source.spine bools
 
 observeViews :: Int -> M.MemoristM Int
-observeViews count = do
-    M.PairT ints bools <- M.fromPure2 viewsM (undefined :: Bool) count
+observeViews count = M.fromPure2 viewsM (undefined :: Bool) count >>= sumSpines
+
+sourceInferred :: a -> Int
+sourceInferred input =
+    let (ints, bools) = Source.inferred input
+    in Source.spine ints + Source.spine bools
+
+sourceSiblings :: a -> b -> Int
+sourceSiblings input sibling =
+    let (kept, (ints, bools)) = Source.inferredSiblings input sibling
+    in Source.spine kept + Source.spine ints + Source.spine bools
+
+observeSiblings :: M.Th a -> M.Th b -> M.MemoristM Int
+observeSiblings input sibling = do
+    M.PairT kept rest <- inferredSiblingsM input sibling
+    count <- spineM kept
+    M.PairT ints bools <- M.force rest
+    sharedCount <- sumSpines (M.PairT ints bools)
+    pure (count + sharedCount)
+
+sumSpines :: M.PairT (L.ListT Int) (L.ListT Bool) -> M.MemoristM Int
+sumSpines (M.PairT ints bools) = do
     left <- spineM ints
     right <- spineM bools
     pure (left + right)

@@ -14,6 +14,8 @@ import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
 import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Core.TyCo.FVs (tyCoVarsOfTypes)
+import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Pretty
@@ -32,7 +34,7 @@ import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe, showSDocOneLine, defaultSDocContext, SDocContext(sdocSuppressUniques))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Data.List (elemIndex, isPrefixOf, nub)
+import Data.List (elemIndex, isPrefixOf, mapAccumL, nub)
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (maybeToList, isJust)
@@ -620,8 +622,10 @@ withTypedValBinds signatures env binds finish = case binds of
                 continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
                 if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
                     then do
-                        native <- locatedAt (getLocA name)
-                            (maybe (Right Nothing) (nativeSharing (sourceDatatypes scope)) bindingType)
+                        native <- locatedAt (getLocA name) $ case bindingType of
+                            Nothing -> Right Nothing
+                            Just ty -> nativeSharing (sourceDatatypes scope)
+                                (bodyTypeRenamings scope (unLoc name) action ty) ty
                         let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
                             allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
                             parameters = [O.conP "()" [] | isJust paths]
@@ -649,6 +653,19 @@ withTypedValBinds signatures env binds finish = case binds of
         declaration <- emitBind scope b
         pure (maybeToList (O.sig (localName scope (unLoc name)) <$> Map.lookup (unLoc name) signatures) ++ [declaration])
     typedBind _ b = bindingError b
+    bodyTypeRenamings scope name action ty
+        | name `Map.member` signatures = Map.empty
+        | otherwise = Map.fromList (snd (mapAccumL fresh used (fst (splitForAllTyVars ty))))
+      where
+        types = Map.elems (inferredBindings scope)
+        variables = concatMap (fst . splitForAllTyVars) types ++ nonDetEltsUniqSet (tyCoVarsOfTypes types)
+        used = Set.fromList (map getOccString variables ++
+            [occNameString (rdrNameOcc occurrence) |
+             occurrence <- collect (action, Map.elems signatures, Map.elems (inferredExpressions scope)) :: [RdrName],
+             isTvOcc (rdrNameOcc occurrence)])
+        fresh occupied variable =
+            let occurrence = freshPrimed occupied (getOccString variable)
+            in (Set.insert occurrence occupied, (getName variable, occurrence))
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitExpr env located = case unLoc located of
