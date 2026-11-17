@@ -19,3 +19,62 @@ twice input n =
         helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
         helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
     in ((helper) input n, (helper) input n)
+
+cachedHelper :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+cachedHelper input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+        result = (helper) input n
+    in (result, result)
+
+separate :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+separate input n =
+    let leftShared :: forall c. (Eq c, Num c) => Maybe [c]
+        leftShared = Just [expensive 5]
+        rightShared :: forall c. (Eq c, Num c) => Maybe [c]
+        rightShared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (leftShared :: Maybe [b], rightShared :: Maybe [b])
+    in ((helper) input n, (helper) input n)
+
+brokenHead :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+brokenHead input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [error "parenthesized-helper head failure"]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in ((helper) input n, (helper) input n)
+
+brokenRoot :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+brokenRoot input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = error "parenthesized-helper root failure"
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in ((helper) input n, (helper) input n)
+
+nested :: forall a. (Eq a, Num a) => a -> Int -> (Maybe [a], Maybe [a])
+nested input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in ((helper)) input n
+
+mapped :: forall a. (Eq a, Num a) => a -> [Int] -> [(Maybe [a], Maybe [a])]
+mapped input counts =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in map ((helper) input) counts
+
+mixed :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+mixed input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in ((helper) input n, input `helper` n)

@@ -1,7 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Generated (Scalar, oneM, twiceM) where
+module Generated (Scalar, oneM, twiceM, cachedHelperM, separateM, brokenHeadM, brokenRootM, nestedM, mappedM, mixedM) where
 
 import qualified Memorist.Data.List as L
+import qualified Memorist.Example.List as ML
 import qualified Memorist.Memorist as M
 
 class Scalar a
@@ -42,3 +43,63 @@ twiceM input n = do
     first <- M.lazy (helper input n)
     second <- M.lazy (helper input n)
     pure (M.PairT first second)
+
+cachedHelperM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+cachedHelperM input n = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    result <- M.lazy (helper input n)
+    pure (M.PairT result result)
+
+separateM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+separateM input n = do
+    M.tick
+    leftShared <- M.lazy sharedBody
+    rightShared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT leftShared rightShared)
+    first <- M.lazy (helper input n)
+    second <- M.lazy (helper input n)
+    pure (M.PairT first second)
+
+brokenHeadM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenHeadM input n = do
+    M.tick
+    shared <- M.lazy $ do
+        list <- M.lazy $ do
+            headThunk <- M.lazy (error "parenthesized-helper head failure")
+            tailThunk <- M.lazy (pure L.NilT)
+            pure (L.ConsT headThunk tailThunk)
+        pure (M.JustT list)
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    first <- M.lazy (helper input n)
+    second <- M.lazy (helper input n)
+    pure (M.PairT first second)
+
+brokenRootM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenRootM input n = do
+    M.tick
+    shared <- M.lazy (error "parenthesized-helper root failure")
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    first <- M.lazy (helper input n)
+    second <- M.lazy (helper input n)
+    pure (M.PairT first second)
+
+nestedM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+nestedM = oneM
+
+mappedM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+mappedM input counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure (helper input))
+    ML.mapMM callback counts
+
+mixedM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+mixedM = twiceM

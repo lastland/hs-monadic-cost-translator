@@ -392,6 +392,17 @@ thunks alias. Selecting helper roots costs one plus the number selected;
 inspecting selected `Maybe`/list roots through both helpers costs three without
 forcing the scalar work. The source parentheses are intentional despite
 HLint's redundant-bracket suggestion.
+Fresh outer calls reuse both caller thunks but allocate disjoint shared-field
+vectors. With positive `k` repetitions, fresh/cached `one` costs are `4*k`/four,
+and fresh/cached `twice` costs are `5*k`/five. An explicitly cached helper result
+returns eight at cost four; two distinct equal-RHS bindings return eight at cost
+seven and retain disjoint identity vectors. Protected broken-head list spines
+and broken-root helper results cost three; full demands raise. Nested callee
+parentheses retain the one-call cost four. A parenthesized partial callee under
+`map` returns `4*r` for `r` elements, costing two when empty or `2*r + 4`
+otherwise; its complete outer spine costs `r + 2` without executing callbacks.
+Mixed wrapped-prefix and saturated-infix calls share the outer producer and
+return eight at cost five.
 
 ## Private Runtime Allocator
 
