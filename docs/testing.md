@@ -146,6 +146,22 @@ generic caller without added reflection constraints, partial demands, unused
 bottoms, and demanded failures. Relative identity probes detect per-reference
 allocation and accidental reuse across bindings without fixing runtime names.
 
+The `constrained-local-two-formals` fixture uses a local `forall a b. (Num a,
+Num b) => (a, b)` twice at `(Int, Int)` and twice at `(Int, Integer)`. Its generic
+callers require only `Num t` for an outer RHS capture, not `Typeable`. The second
+dictionary still separates both roots and their fields when only the common
+`Int` fields are demanded. Full demand returns 96 at cost seven: one outer entry,
+two gate entries, and four work entries. First-field demand returns 40 at cost
+five; right-field demand returns 56 at cost five while skipping failing left
+fields. Skipping all roots costs one; demanding only the roots costs three.
+Both demands leave a bottom count unforced. With positive repeat count `k`, fresh
+calls return `96*k` at cost `7*k`, while a cached call costs seven. A paid caller
+count thunk shared by fresh calls adds one tick in total, not one per call.
+Distinct equal-RHS bindings return 48 at cost seven and keep disjoint root and
+field identities. Relative identity probes also check same-type aliases,
+dictionary separation, and invocation freshness. Three full-demand failures
+cover a negative left count, a zero right count, and a bottom count.
+
 The `constrained-local-abstract` fixture uses one local polymorphic value twice
 at the enclosing function's abstract type. Its generic caller supplies only the
 existing `Eq`, `Num`, and `Scalar` constraints, not `Typeable`. The independent

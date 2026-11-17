@@ -190,6 +190,14 @@ runtime type keys or added reflection constraints.
 Captured argument thunks keep their existing identities, including when callers
 reuse them between invocations.
 
+Native allocation also supports two generalized parameters when both determine
+dictionaries and each instantiates to a closed scalar. The complete result type
+must be closed, using the same container matching rules. Repeated uses at one
+complete type share a thunk; changing either parameter selects a distinct thunk,
+even when only fields of the unchanged parameter are demanded. RHS captures keep
+their enclosing scope and caller constraints. Unconstrained parameters and open
+results do not qualify for this two-parameter path.
+
 For a nonrecursive local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked
 prefix application, saturated infix call, or bare function reference at the same

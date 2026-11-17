@@ -15,7 +15,7 @@ import GHC.Types.Unique (getUnique)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Cost.Translate.Validation (scalarType)
-import Control.Monad (zipWithM)
+import Control.Monad (unless, zipWithM)
 import Data.List (minimumBy, nubBy)
 import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
@@ -29,6 +29,14 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
 
 specializedSharing :: [TyCon] -> [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
 specializedSharing datatypes scopeVariables ty uses
+    | length vars == 2
+    , all ((`eqType` liftedTypeKind) . tyVarKind) vars
+    , all (`elem` constrainedVariables ty) vars
+    , all (isPredTy . scaledThing) arguments
+    , not (null uses) = do
+        types <- sequence uses
+        mapM_ closedInstantiation types
+        pure (nubBy eqType types)
     | [variable] <- vars
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
@@ -46,13 +54,18 @@ specializedSharing datatypes scopeVariables ty uses
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
+    closedInstantiation value = do
+        matches <- parameters result value
+        replacements <- mapM (`lookup` matches) vars
+        unless (isEmptyVarSet (tyCoVarsOfType value) && all closedScalar replacements &&
+            substTyWith vars replacements result `eqType` value) Nothing
     resultParameter value = do
-        distinctParameters <- nubBy eqType <$> parameters result value
+        distinctParameters <- nubBy eqType . map snd <$> parameters result value
         case distinctParameters of
             [element] -> Just element
             _ -> Nothing
     parameters shape value
-        | Just variable <- getTyVar_maybe shape, variable `elem` vars = Just [value]
+        | Just variable <- getTyVar_maybe shape, variable `elem` vars = Just [(variable, value)]
         | Just captured <- getTyVar_maybe shape
         , captured `elem` scopeVariables, shape `eqType` value = Just []
         | isEmptyVarSet (tyCoVarsOfType shape), shape `eqType` value = Just []
