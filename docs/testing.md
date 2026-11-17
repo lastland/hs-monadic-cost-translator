@@ -243,6 +243,22 @@ between invocations. Separate broken-tuple, broken-left, and broken-right cases
 check that each constructor and unaffected field can be demanded safely, while
 demanding the broken field raises.
 
+The `constrained-maybe-constant-field` fixture shares `Just (expensive 5, 7)`
+twice at one scoped abstract type. Its generic callers retain only `Eq`, `Num`,
+and `Scalar`; the fixed field remains `Int`. Full demand returns eighteen at cost
+three: one caller entry and two entries for the abstract field's work. Demanding
+only the fixed fields returns fourteen at cost one. `Maybe` and tuple-root
+demands also cost one. Fixed closed fields must match their source types but do
+not contribute an instantiation for the generalized parameter. The complete
+`Maybe (a, Int)` type remains the specialization key.
+Fresh calls cost three ticks each; repeated demands on a cached call cost three
+in total. Relative identity probes check corresponding fields, distinct tuple
+positions, and disjoint invocations. Broken-tuple, broken-abstract, and
+broken-fixed cases protect constructors and unaffected fields. A separately
+computed fixed field raises full cost to five, with either position alone
+costing three; recognizing its fixed type neither discards its work nor forces
+it early.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

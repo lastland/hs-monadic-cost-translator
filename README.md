@@ -173,14 +173,15 @@ scalar references receive one thunk per type and source binding. References all
 using one abstract type also share a native thunk when that type is available in
 the declaration's enclosing function scope, including explicitly typed and
 inferred helpers. Lists, `Maybe`, and boxed pairs can wrap that same generalized
-parameter, as in `Maybe [a]` or `Maybe (a, a)`. Every leaf must be that parameter;
-at each use, the leaves must agree on one closed scalar type or one abstract type
-available in the declaration's enclosing function scope. Native allocation
-preserves root and field identities and source laziness at each level, including
-separately computed tuple fields with equal right-hand sides. Allocation stays
-where the source value is declared: each helper invocation creates fresh
-helper-local thunks. These bindings need no runtime type keys or added reflection
-constraints.
+parameter, as in `Maybe [a]` or `Maybe (a, a)`. Fixed closed fields are also
+supported, as in `Maybe (a, Int)`, and must retain the same type at every use.
+Within each use, all occurrences of the generalized parameter must agree on one
+closed scalar type or one abstract type available in the declaration's enclosing
+function scope. Native allocation preserves root and field identities and source
+laziness at each level, including separately computed tuple fields with equal
+right-hand sides. Allocation stays where the source value is declared: each
+helper invocation creates fresh helper-local thunks. These bindings need no
+runtime type keys or added reflection constraints.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those

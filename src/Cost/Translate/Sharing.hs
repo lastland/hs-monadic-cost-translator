@@ -46,18 +46,20 @@ specializedSharing scopeVariables ty uses
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
-    resultParameter = parameter result
-    parameter shape value
-        | Just _ <- getTyVar_maybe shape = Just value
+    resultParameter value = do
+        distinctParameters <- nubBy eqType <$> parameters result value
+        case distinctParameters of
+            [element] -> Just element
+            _ -> Nothing
+    parameters shape value
+        | Just _ <- getTyVar_maybe shape = Just [value]
+        | isEmptyVarSet (tyCoVarsOfType shape), shape `eqType` value = Just []
         | Just (constructor, elements) <- splitTyConApp_maybe shape
         , constructor `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2]
         , Just (actualConstructor, actualElements) <- splitTyConApp_maybe value
         , actualConstructor == constructor
-        , length actualElements == length elements = do
-            parameters <- nubBy eqType <$> zipWithM parameter elements actualElements
-            case parameters of
-                [element] -> Just element
-                _ -> Nothing
+        , length actualElements == length elements =
+            concat <$> zipWithM parameters elements actualElements
         | otherwise = Nothing
     closedResult value = maybe False closedScalar (resultParameter value)
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
