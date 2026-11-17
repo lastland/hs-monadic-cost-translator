@@ -5,7 +5,7 @@ module Cost.Translate.Typed
 
 import GHC hiding (exprType)
 import GHC.Core.Utils (exprType)
-import GHC.Core.Type (mkVisFunTy)
+import GHC.Core.Type (mkVisFunTy, splitFunTys)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Data.Bag (bagToList)
@@ -14,17 +14,25 @@ import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types.Evidence (HsWrapper(..))
+import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import Data.Data (Data, cast, gmapQ)
+import Data.List (isSuffixOf, maximumBy)
 import Data.Maybe (isJust)
+import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
 expressionTypes :: HscEnv -> TypecheckedModule -> [LHsExpr GhcRn] -> [LHsExpr GhcTc] -> IO (Map.Map String Type)
 expressionTypes session checked source typed = do
     let locations = Set.fromList [location e | e <- source, interesting (unLoc e)]
-        selected = Map.fromListWith (\_ outer -> outer)
+        original = Map.fromListWith (\_ outer -> outer)
             [(location e,e) | e <- typed, location e `Set.member` locations]
+        names = Map.fromListWith (++) [(location e, [(unLoc name,getLocA e)]) | e@(L _ (HsVar _ name)) <- source]
+        occurrences = Map.fromListWith (+) [(location e, 1 :: Int) | e <- typed]
+        references = Map.fromListWith (++) [(showSDocUnsafe (ppr (last path)), [(name,path,e)]) |
+            e <- typed, Just (name,path) <- [reference e]]
+        selected = Map.mapMaybeWithKey (recover names occurrences references) original
     (_, result) <- initDs session (fst (tm_internals_ checked)) $
         traverse (fmap exprType . dsLExpr) selected
     maybe (fail "GHC type-evidence desugaring failed") pure result
@@ -33,6 +41,33 @@ expressionTypes session checked source typed = do
     interesting HsVar {} = True
     interesting ExprWithTySig {} = True
     interesting _ = False
+    recover names occurrences references site original = case Map.lookup site references of
+        Just candidates | any (\(_,path,_) -> length path > 1) candidates -> do
+            [(name,sourceSpan)] <- Map.lookup site names
+            let (_,outerPath,outer) = maximumBy (comparing (\(_,path,_) -> length path)) candidates
+            if last outerPath == sourceSpan &&
+                all (\(checkedName,path,_) -> checkedName == name && path `isSuffixOf` outerPath) candidates &&
+                length candidates == length outerPath &&
+                all (\span' -> Map.lookup (showSDocUnsafe (ppr span')) occurrences == Just 1) outerPath
+                then Just outer else Nothing
+        _ -> Just original
+    reference expression = case getLocA expression of
+        RealSrcSpan {} -> do
+            (name,path) <- nested (unLoc expression)
+            pure (name,getLocA expression : path)
+        _ -> Nothing
+    nested (HsVar _ name)
+        | let (_,_,tau) = tcSplitSigmaTy (idType (unLoc name)), not (null (fst (splitFunTys tau))) =
+            Just (getName (unLoc name), [])
+    nested (HsPar _ expression) = reference expression
+    nested (XExpr (WrapExpr (HsWrap wrapper expression)))
+        | applications wrapper = nested expression
+    nested _ = Nothing
+    applications (WpCompose left right) = applications left && applications right
+    applications WpTyApp {} = True
+    applications WpEvApp {} = True
+    applications WpHole = True
+    applications _ = False
 
 expressionTypeAt :: [LHsExpr GhcRn] -> Map.Map String Type -> LHsExpr GhcRn -> Maybe Type
 expressionTypeAt source hints = select

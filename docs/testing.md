@@ -379,6 +379,20 @@ only helper roots, or skipping a broken head while traversing both inner
 spines, costs `2*s + 2`. Full demand raises. Together, empty, singleton, and
 longer maps distinguish callback creation from each saturation-time entry.
 
+The `constrained-outer-parenthesized-helper` fixture preserves the published
+`(helper) input n` call. GHC instantiates the enclosing parenthesis wrapper while
+the inner variable retains its polymorphic type. Callee evidence must come from
+one complete checked parenthesis chain ending at the exact renamed reference,
+with matching names and real source spans; application arguments or residual
+result types are not substitutes. Generic callers retain only `Eq`, `Num`, and
+`Scalar`. One full call returns four at cost four, and two calls sharing one
+outer binding return eight at cost five. Both ignored arguments may be bottom.
+Helper-result thunks remain distinct while their `Maybe`, list, head, and tail
+thunks alias. Selecting helper roots costs one plus the number selected;
+inspecting selected `Maybe`/list roots through both helpers costs three without
+forcing the scalar work. The source parentheses are intentional despite
+HLint's redundant-bracket suggestion.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

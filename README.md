@@ -200,6 +200,9 @@ entry tick.
 Prefix applications may supply fewer arguments than the helper accepts, but must
 supply at least one. Creating the partial application is unticked; the helper
 charges its entry tick only when its fully applied computation runs.
+Parenthesized named callees retain their checked instantiation when one complete,
+unambiguous parenthesis chain refers to the same function. The translator uses
+that checked type rather than guessing an instantiation from the arguments.
 Bare function values, sections, multiple instantiations, and escaping type
 variables do not qualify for this helper specialization. A helper also stays
 polymorphic when its specialized type cannot be named safely in its local scopes.
