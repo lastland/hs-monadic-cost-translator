@@ -79,8 +79,10 @@ generic :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT
 generic = oneM
 
 sourceSum :: (Eq a, Num a) => a -> Int -> a
-sourceSum input n = case Source.one input n of
-    (first, second) -> payloadSum first + payloadSum second
+sourceSum input n = sourceViewsSum (Source.one input n)
+
+sourceViewsSum :: Num a => (Maybe (a, Int), Maybe (a, Int)) -> a
+sourceViewsSum (first, second) = payloadSum first + payloadSum second
   where
     payloadSum Nothing = 0
     payloadSum (Just (first, second)) = first + fromIntegral second
@@ -210,11 +212,7 @@ paidViews _ = do
     genericPaid input n
 
 paidSourceSum :: (Eq a, Num a) => a -> Int -> a
-paidSourceSum input n = case Source.paid input n of
-    (first, second) -> payloadSum first + payloadSum second
-  where
-    payloadSum Nothing = 0
-    payloadSum (Just (first, second)) = first + fromIntegral second
+paidSourceSum input n = sourceViewsSum (Source.paid input n)
 
 projectLeafSum :: Bool -> Bool -> Sample -> M.PairT (M.MaybeT (M.PairT Int Int)) (M.MaybeT (M.PairT Int Int)) -> Int
 projectLeafSum wantLeft wantRight sample views = case projectTuples wantLeft wantRight sample views of
