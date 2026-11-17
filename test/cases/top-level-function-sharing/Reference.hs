@@ -6,6 +6,7 @@ import qualified Memorist.Memorist as M
 -- outside the observer's ordinary nonnegative allocation roots. Its one
 -- retained thunk contributes work's tick once; each call contributes the
 -- three entry ticks of test, f, and g. The fully demanded total is four.
+-- A second uncached test call pays those three entry ticks again, giving seven.
 shared :: M.Th Int
 shared = M.value (M.eval (M.lazy (M.fromPure1 workM (5 :: Int))) (M.fromInt (-1)))
 

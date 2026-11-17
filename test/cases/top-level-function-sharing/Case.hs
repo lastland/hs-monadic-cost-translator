@@ -12,4 +12,6 @@ probes :: [Probe]
 probes =
     [ scalarSource "fixed-top-level-sharing" (const (Source.test ()))
         (const (M.fromPure1 direct ()))
+    , scalarSource "uncached-top-level-calls" (const (Source.test () + Source.test ()))
+        (const ((+) <$> M.fromPure1 direct () <*> M.fromPure1 direct ()))
     ]
