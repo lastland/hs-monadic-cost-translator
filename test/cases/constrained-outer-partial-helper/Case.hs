@@ -260,29 +260,23 @@ genericBrokenHead = brokenHeadM
 genericBrokenRoot :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
 genericBrokenRoot = brokenRootM
 
-selectedTwice :: Sample -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))) (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))))
-selectedTwice sample = do
+withCounts :: (M.Th Int -> M.Th (L.ListT Int) -> M.MemoristM result) -> Sample -> M.MemoristM result
+withCounts caller sample = do
     input <- M.lazy (pure (undefined :: Int))
     counts <- M.lazy (countList (countValues sample))
-    genericTwice input counts
+    caller input counts
+
+selectedTwice :: Sample -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))) (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))))
+selectedTwice = withCounts genericTwice
 
 selectedCachedMap :: Sample -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))) (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))))
-selectedCachedMap sample = do
-    input <- M.lazy (pure (undefined :: Int))
-    counts <- M.lazy (countList (countValues sample))
-    genericCachedMap input counts
+selectedCachedMap = withCounts genericCachedMap
 
 selectedSeparateMany :: Sample -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))))
-selectedSeparateMany sample = do
-    input <- M.lazy (pure (undefined :: Int))
-    counts <- M.lazy (countList (countValues sample))
-    genericSeparateMany input counts
+selectedSeparateMany = withCounts genericSeparateMany
 
 selectedMixed :: Sample -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int)))))
-selectedMixed sample = do
-    input <- M.lazy (pure (undefined :: Int))
-    counts <- M.lazy (countList (countValues sample))
-    genericMixed input counts
+selectedMixed = withCounts genericMixed
 
 selectedBrokenHead :: Sample -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))))
 selectedBrokenHead sample = do
