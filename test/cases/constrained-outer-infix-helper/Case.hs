@@ -169,8 +169,15 @@ preservationProbes =
         secondNames <- twiceFieldNames second
         pure (length (nub (map M.tname [firstLeft, firstRight, secondLeft, secondRight])) == 4 &&
             case (firstNames, secondNames) of
-                (Just ((a, b), (c, d)), Just ((e, f), (g, h))) ->
-                    a == b && a == c && a == d && e == f && e == g && e == h && all (`notElem` e) a
+                (Just ((firstOuterFirstLeft, firstOuterFirstRight), (firstOuterSecondLeft, firstOuterSecondRight)),
+                 Just ((secondOuterFirstLeft, secondOuterFirstRight), (secondOuterSecondLeft, secondOuterSecondRight))) ->
+                    firstOuterFirstLeft == firstOuterFirstRight &&
+                    firstOuterFirstLeft == firstOuterSecondLeft &&
+                    firstOuterFirstLeft == firstOuterSecondRight &&
+                    secondOuterFirstLeft == secondOuterFirstRight &&
+                    secondOuterFirstLeft == secondOuterSecondLeft &&
+                    secondOuterFirstLeft == secondOuterSecondRight &&
+                    all (`notElem` secondOuterFirstLeft) firstOuterFirstLeft
                 _ -> False)
     , scalarSource "cached-helper/int/full"
         (const (sourceTwiceSum (Source.cachedHelper (undefined :: Int) undefined))) $ \_ -> do
@@ -183,7 +190,9 @@ preservationProbes =
         result@(M.PairT first second) <- genericCachedHelper input n
         names <- twiceFieldNames result
         pure (M.tname first == M.tname second && case names of
-            Just ((a, b), (c, d)) -> a == b && a == c && a == d
+            Just ((firstHelperLeft, firstHelperRight), (secondHelperLeft, secondHelperRight)) ->
+                firstHelperLeft == firstHelperRight && firstHelperLeft == secondHelperLeft &&
+                firstHelperLeft == secondHelperRight
             _ -> False)
     , scalarSource "separate/int/full"
         (const (sourceTwiceSum (Source.separate (undefined :: Int) undefined))) $ \_ -> do
@@ -228,7 +237,9 @@ preservationProbes =
         result@(M.PairT first second) <- genericMixed input n
         names <- twiceFieldNames result
         pure (M.tname first /= M.tname second && case names of
-            Just ((a, b), (c, d)) -> a == b && a == c && a == d
+            Just ((firstHelperLeft, firstHelperRight), (secondHelperLeft, secondHelperRight)) ->
+                firstHelperLeft == firstHelperRight && firstHelperLeft == secondHelperLeft &&
+                firstHelperLeft == secondHelperRight
             _ -> False)
     ]
 

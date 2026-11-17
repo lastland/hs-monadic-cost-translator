@@ -89,19 +89,7 @@ brokenRootM input n = do
     pure (M.PairT first second)
 
 symbolicM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
-symbolicM input n = do
-    M.tick
-    shared <- M.lazy sharedBody
-    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
-        helper _ _ = M.tick >> pure (M.PairT shared shared)
-    helper input n
+symbolicM = oneM
 
 mixedM :: forall a. (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
-mixedM input n = do
-    M.tick
-    shared <- M.lazy sharedBody
-    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
-        helper _ _ = M.tick >> pure (M.PairT shared shared)
-    first <- M.lazy (helper input n)
-    second <- M.lazy (helper input n)
-    pure (M.PairT first second)
+mixedM = twiceM
