@@ -1,5 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Generated (Scalar, oneM, manyM) where
+module Generated (Scalar, oneM, manyM, twiceM, cachedMapM, separateManyM, mixedM, brokenHeadM, brokenRootM) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Example.List as ML
@@ -43,6 +43,76 @@ manyM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM 
 manyM input counts = do
     M.tick
     shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure (helper input))
+    ML.mapMM callback counts
+
+twiceM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))) (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))))
+twiceM input counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    firstMap <- M.lazy $ do
+        callback <- M.lazy (pure (helper input))
+        ML.mapMM callback counts
+    secondMap <- M.lazy $ do
+        callback <- M.lazy (pure (helper input))
+        ML.mapMM callback counts
+    pure (M.PairT firstMap secondMap)
+
+cachedMapM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (M.PairT (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))) (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))))
+cachedMapM input counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure (helper input))
+    result <- M.lazy (ML.mapMM callback counts)
+    pure (M.PairT result result)
+
+separateManyM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+separateManyM input counts = do
+    M.tick
+    leftShared <- M.lazy sharedBody
+    rightShared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT leftShared rightShared)
+    callback <- M.lazy (pure (helper input))
+    ML.mapMM callback counts
+
+mixedM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))))
+mixedM input counts = do
+    M.tick
+    shared <- M.lazy sharedBody
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    zero <- M.lazy (pure 0)
+    first <- M.lazy (helper input zero)
+    rest <- M.lazy $ do
+        callback <- M.lazy (pure (helper input))
+        ML.mapMM callback counts
+    pure (M.PairT first rest)
+
+brokenHeadM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenHeadM input counts = do
+    M.tick
+    shared <- M.lazy $ do
+        list <- M.lazy $ do
+            headThunk <- M.lazy (error "partial-helper head failure")
+            tailThunk <- M.lazy (pure L.NilT)
+            pure (L.ConsT headThunk tailThunk)
+        pure (M.JustT list)
+    let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+        helper _ _ = M.tick >> pure (M.PairT shared shared)
+    callback <- M.lazy (pure (helper input))
+    ML.mapMM callback counts
+
+brokenRootM :: forall a. (Eq a, Num a) => M.Th a -> M.Th (L.ListT Int) -> M.MemoristM (L.ListT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+brokenRootM input counts = do
+    M.tick
+    shared <- M.lazy (error "partial-helper root failure")
     let helper :: M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
         helper _ _ = M.tick >> pure (M.PairT shared shared)
     callback <- M.lazy (pure (helper input))

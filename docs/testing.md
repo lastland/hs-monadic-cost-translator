@@ -364,6 +364,20 @@ mapped result thunk while preserving one shared `Maybe`/list/head/tail vector.
 Generic callers require only `Eq`, `Num`, and `Scalar`, without `Typeable`.
 The singleton source is intentionally not simplified to a direct call: that
 would remove the partial application and its two source-level map entries.
+Fresh and cached outer calls reuse both caller thunks. Let `F(0) = 2` and
+`F(r>0) = 2*r + 4`. With positive `k` repetitions, both return `4*r*k` at
+costs `k*F(r)` and `F(r)`, respectively. Each outer invocation has disjoint
+shared-field identities.
+Two separate maps within one invocation return `8*r` at cost three when empty,
+otherwise `4*r + 5`; their result thunks remain distinct while their shared
+fields alias. Explicitly caching the map instead costs `F(r)` and shares the
+map result. Separate equal-RHS bindings cost two when empty, otherwise
+`2*r + 6`, and retain disjoint field vectors. A fully applied helper mixed with
+a partial-map callback returns `4*(r + 1)` at cost `2*r + 5`.
+Protected failure probes use a nonempty count list of length `s`: demanding
+only helper roots, or skipping a broken head while traversing both inner
+spines, costs `2*s + 2`. Full demand raises. Together, empty, singleton, and
+longer maps distinguish callback creation from each saturation-time entry.
 
 ## Private Runtime Allocator
 
