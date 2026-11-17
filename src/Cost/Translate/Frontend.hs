@@ -23,7 +23,7 @@ import Cost.Translate.Pretty
     (Section(..), prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
-import Cost.Translate.Sharing (constrainedVariables, closedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport)
+import Cost.Translate.Sharing (constrainedVariables, specializedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport)
 import Cost.Translate.Callable (callArity, emitCallable, isComposition, spine)
 import Cost.Translate.Diagnostic (Diagnostic(..))
 import Cost.Translate.Typed (hasFreeVariables, hasFreshAnnotationVariables)
@@ -74,7 +74,8 @@ generate file targetModule = runGhc (Just libdir) $ do
                             [(location, (ty, rendered)) |
                              (location,ty) <- Map.toList hints, Right rendered <- [renderType datatypes ty]]
                         (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
-                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes expressionTypes group
+                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes expressionTypes
+                             (Typed.scopedVariables checked) group
                         validation = do
                             when (any (`xopt` ms_hspp_opts summary) [Extension.Strict, Extension.StrictData, Extension.RebindableSyntax])
                                 (Left (file ++ ":1: Strict, StrictData and RebindableSyntax are unsupported"))
@@ -99,8 +100,8 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Type, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
-emitModule target source magicHash datatypes types literalTypes expressionTypes group =
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Type, O.Ty) -> Map.Map Name [TyVar] -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule target source magicHash datatypes types literalTypes expressionTypes checkedVariables group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
                           | L _ (FunBind _ n ms) <- binds] constructorEnv
@@ -115,7 +116,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
             (datatypeSupport, kindSupport, datatypeDeclarations) <- emitDatatypeSections datatypes
             declarations <- concat <$> mapM (\binding -> do
                 (name, ty) <- bindingSignature binding
-                code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts closedBindings binding }) binding
+                code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts specializedBindings binding }) binding
                 pure [O.sig name ty, code]) binds
             let hasDatatypes = not (null datatypes)
                 hasReflection = not (Set.null reflected)
@@ -126,7 +127,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++
-                    [Extension.ScopedTypeVariables | needsNativeSharing || not (Map.null closedBindings)] ++ enabled
+                    [Extension.ScopedTypeVariables | needsNativeSharing || not (Map.null specializedBindings)] ++ enabled
                 supportReferences = Set.fromList
                     [occNameString occurrence | HsVar _ (L _ (Unqual occurrence)) <- collect declarations :: [HsExpr GhcPs]]
                 needsSharing = any (`Set.member` supportReferences) ["sharedAt", "sharedAtBy"]
@@ -166,7 +167,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
                                    [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
                                    (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
-                                   (planNames reservedNames constructorLayouts closedBindings group)
+                                   (planNames reservedNames constructorLayouts specializedBindings group)
     constructorLayouts = Map.fromList [(n,fields') | (n,_,_,fields') <- constructors datatypes]
     topLevelGroups = case hs_valds group of
         XValBindsLR (NValBinds groups _) -> [(recursive, bagToList bindings) | (recursive, bindings) <- groups]
@@ -189,13 +190,22 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
         RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> fst <$> Map.lookup location expressionTypes
         _ -> Nothing
       where location = showSDocUnsafe (ppr (getLocA expression))
-    closedBindings = Map.fromList
+    allocationVariables = Map.fromList
+        [(unLoc name, variables) |
+         binding@(L _ (FunBind _ owner matches)) <- topLevelBinds, arity matches > 0,
+         unLoc owner `Set.member` explicitOwners, Just variables <- [Map.lookup (unLoc owner) checkedVariables],
+         L _ (FunBind _ name _) <- collect binding :: [LHsBind GhcRn]]
+    explicitOwners = Set.fromList
+        [unLoc name | L _ (TypeSig _ names signature) <- collect group :: [LSig GhcRn],
+         HsOuterExplicit {} <- [sig_bndrs (unLoc (hswc_body signature))], name <- names]
+    specializedBindings = Map.fromList
         [(unLoc name, instantiations) | L _ (FunBind _ name matches) <- sourceBinds, arity matches == 0,
          unLoc name `Set.notMember` topLevelNames, Just ty <- [Map.lookup (unLoc name) types],
-         Just instantiations <- [closedSharing ty (Map.findWithDefault [] (unLoc name) useTypes)]]
+         Just instantiations <- [specializedSharing (Map.findWithDefault [] (unLoc name) allocationVariables)
+             ty (Map.findWithDefault [] (unLoc name) useTypes)]]
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         unLoc n `Set.notMember` topLevelNames,
-        unLoc n `Map.notMember` closedBindings,
+        unLoc n `Map.notMember` specializedBindings,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
     closure known = let next = known `Set.union` Set.fromList
                             [unLoc n | b@(L _ (FunBind _ n _)) <- sourceBinds,
@@ -631,9 +641,10 @@ withTypedValBinds signatures env binds finish = case binds of
                             let bodyName = Map.findWithDefault (n ++ "body") (unLoc name) (plannedBodies (namePlan scope))
                                 body = [O.sig bodyName bodyType, O.val bodyName [] action]
                             allocations <- sequence [do
-                                rendered <- renderType (sourceDatatypes scope) instanceType
-                                pure (O.bind target (O.call "M.lazy"
-                                    [O.ann (O.v bodyName) (O.tc "M.MemoristM" [rendered])])) |
+                                producer <- if hasFreeVariables instanceType then pure (O.v bodyName) else do
+                                    rendered <- renderType (sourceDatatypes scope) instanceType
+                                    pure (O.ann (O.v bodyName) (O.tc "M.MemoristM" [rendered]))
+                                pure (O.bind target (O.call "M.lazy" [producer])) |
                                 (instanceType, target) <- needed]
                             pure (O.letE body (O.doE allocations continuation))
                     Nothing -> do
@@ -834,7 +845,7 @@ argumentNames env key count = Map.findWithDefault
     [key ++ "_" ++ show i | i <- [0 .. count - 1]] key (plannedArguments (namePlan env))
 
 planNames :: Data a => Set.Set String -> Map.Map Name [Name] -> Map.Map Name [Type] -> a -> NamePlan
-planNames globalNames constructorLayouts closedBindings syntax = NamePlan locals parameters arguments actions fields matchNames anchors bodies specializations
+planNames globalNames constructorLayouts specializedBindings syntax = NamePlan locals parameters arguments actions fields matchNames anchors bodies specializations
   where
     binds = collect syntax :: [LHsBind GhcRn]
     binders = nub ([unLoc name | L _ (FunBind _ name _) <- binds] ++
@@ -865,7 +876,7 @@ planNames globalNames constructorLayouts closedBindings syntax = NamePlan locals
     (anchors, afterAnchors) = assignBindingNames "anchor" locals afterMatches bindingNames
     (bodies, afterBodies) = assignBindingNames "body" locals afterAnchors bindingNames
     (specializations, _) = assignSpecializations locals afterBodies
-        [(name, types) | name <- bindingNames, Just types <- [Map.lookup name closedBindings]]
+        [(name, types) | name <- bindingNames, Just types <- [Map.lookup name specializedBindings]]
 
     parametersFor (L _ (FunBind _ name functionMatches)) =
         [((unLoc name,i), patternName pattern') |

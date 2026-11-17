@@ -167,13 +167,17 @@ conversions retain the root and field thunk identities across type
 instantiations. Each function invocation still allocates fresh local thunks.
 
 Dictionary-sensitive locals also use native allocation when their single
-generalized type parameter is the whole result and every reference has an
-unambiguous closed scalar type. The translator allocates one thunk per type and
-source binding, reuses it across matching references, and allocates fresh thunks
-on the next invocation. These bindings need no runtime type key. Generic constrained
-uses and other unsupported generalized result shapes still emit legacy evaluator
-helpers; those outputs do not yet meet the construction-only contract enforced
-by the test suite. The remaining polymorphic-local limitation is tracked in
+generalized type parameter is the whole result and every reference has
+unambiguous type evidence. Closed scalar references receive one thunk per type
+and source binding. References all using one abstract type also share a native
+thunk when that type belongs to the enclosing top-level function's explicit
+`forall`. Each invocation allocates fresh thunks, without runtime type keys or
+added reflection constraints.
+
+Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
+and other generalized result shapes still emit legacy evaluator helpers; those
+outputs do not yet meet the construction-only contract enforced by the test
+suite. The remaining polymorphic-local limitation is tracked in
 [issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3).
 
 ## Architecture Overview

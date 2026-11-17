@@ -1,11 +1,13 @@
-module Cost.Translate.Typed (expressionTypes, hasFreeVariables, hasFreshAnnotationVariables) where
+module Cost.Translate.Typed (expressionTypes, scopedVariables, hasFreeVariables, hasFreshAnnotationVariables) where
 
 import GHC hiding (exprType)
 import GHC.Core.Utils (exprType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
+import GHC.Data.Bag (bagToList)
 import GHC.Types.Var.Set (isEmptyVarSet)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
+import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -23,6 +25,20 @@ expressionTypes session checked source typed = do
     interesting HsVar {} = True
     interesting ExprWithTySig {} = True
     interesting _ = False
+
+scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
+scopedVariables checked = Map.fromList
+    [(getName (abe_poly export), wrapperVariables wrapper) |
+     L _ (XHsBindsLR abstraction) <- bagToList (tm_typechecked_source checked),
+     abs_sig abstraction,
+     export <- abs_exports abstraction,
+     L _ (FunBind (wrapper,_) identifier _) <- bagToList (abs_binds abstraction),
+     unLoc identifier == abe_mono export]
+
+wrapperVariables :: HsWrapper -> [TyVar]
+wrapperVariables (WpCompose left right) = wrapperVariables left ++ wrapperVariables right
+wrapperVariables (WpTyLam variable) = [variable]
+wrapperVariables _ = []
 
 hasFreeVariables :: Type -> Bool
 hasFreeVariables = not . isEmptyVarSet . tyCoVarsOfType

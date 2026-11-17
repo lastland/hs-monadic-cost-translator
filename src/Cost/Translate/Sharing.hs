@@ -1,4 +1,4 @@
-module Cost.Translate.Sharing (constrainedVariables, closedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
+module Cost.Translate.Sharing (constrainedVariables, specializedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
 
 import GHC
 import GHC.Builtin.Types (liftedTypeKind, listTyCon)
@@ -25,8 +25,8 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
 
-closedSharing :: Type -> [Maybe Type] -> Maybe [Type]
-closedSharing ty uses
+specializedSharing :: [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
+specializedSharing scopeVariables ty uses
     | [variable] <- vars
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
@@ -35,7 +35,10 @@ closedSharing ty uses
     , resultVariable == variable
     , not (null uses) = do
         types <- sequence uses
-        if all closedScalar types then Just (nubBy eqType types) else Nothing
+        let distinct = nubBy eqType types
+        if all closedScalar types then Just distinct else case distinct of
+            [value] | Just scoped <- getTyVar_maybe value, scoped `elem` scopeVariables -> Just distinct
+            _ -> Nothing
     | otherwise = Nothing
   where
     (vars, body) = splitForAllTyVars ty

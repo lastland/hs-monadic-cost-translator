@@ -147,6 +147,15 @@ generic caller without added reflection constraints, partial demands, unused
 bottoms, and demanded failures. Relative identity probes detect per-reference
 allocation and accidental reuse across bindings without fixing runtime names.
 
+The `constrained-local-abstract` fixture uses one local polymorphic value twice
+at the enclosing function's abstract type. Its generic caller supplies only the
+existing `Eq`, `Num`, and `Scalar` constraints, not `Typeable`. The independent
+native reference checks shared field identities, invocation freshness, unused
+bottom inputs, and partial demands. At both `Int` and `Integer`, full demand
+costs three ticks: one function entry and two producer entries. Skipping both
+fields costs one. Eligibility follows the checked owner's type-lambda binder,
+not its printed name; a helper's fresh quantified variable is not that binder.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild
