@@ -8,7 +8,7 @@ Building and running the translator with full candidate verification requires:
 
 - **GHC 9.10.3**: This is the only supported compiler version. Cabal rejects other versions during dependency resolution.
 - **Stack (LTS 24.22)**: `stack.yaml` pins LTS 24.22 (GHC 9.10.3) and `QuickCheck-2.17.1.0` to match the target runtime.
-- **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a local checkout of the `MemoristANT` package at `hs-pbt/` in the repository root. This directory is git-ignored and not bundled with the repository.
+- **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a local checkout of the `MemoristANT` package at `hs-pbt/` in the repository root. Apply the [private-allocator patch](patches/README.md) before building. This directory is git-ignored and not bundled with the repository.
 
 `stack.yaml` registers both `.` and `hs-pbt/` so that GHC commands run under `stack run` and `stack test` can load `MemoristANT` and `QuickCheck` when typechecking generated modules. The translator library and executable themselves do not depend on `MemoristANT` at build time; runtime-free builds and policy checks need only Cabal and an installed GHC 9.10.3.
 

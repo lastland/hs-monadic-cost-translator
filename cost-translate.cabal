@@ -27,8 +27,11 @@ data-files:
     test/generated-functions/*.hs
     test/generated-functions/*.sh
     test/generated-construction/*.hs
+    test/runtime-allocator/*.hs
 extra-source-files:
     docs/testing.md
+    patches/README.md
+    patches/memorist-private-allocator.patch
     examples/VALIDATION.md
     scripts/stack-compiler.yaml
     scripts/stack-test.sh
@@ -98,6 +101,7 @@ test-suite cost-translate-test
                      GeneratedFunctions
                      ReferencePolicy
                      ReferenceRunner
+                     RuntimeAllocator
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate
     build-depends:

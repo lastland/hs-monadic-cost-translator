@@ -13,6 +13,7 @@ import ReferenceRunner
     ( ReferenceEnvironment, checkGeneratedConstructionLifecycle, checkGeneratedFunctionLifecycle, checkReferenceHarness
     , prepareReferenceEnvironment, runReferenceCase
     )
+import RuntimeAllocator (checkRuntimeAllocator)
 import System.Directory (copyFile, doesFileExist, getCurrentDirectory, getTemporaryDirectory, listDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, setEnv)
 import System.Exit (ExitCode(..), exitFailure)
@@ -33,6 +34,7 @@ data Group
     | ReferenceHarness
     | GeneratedFunctions
     | GeneratedConstruction
+    | RuntimeAllocator
 
 groupName :: Group -> String
 groupName (Semantic label _) = label
@@ -44,6 +46,7 @@ groupName FixturePolicy = "fixture-policy"
 groupName ReferenceHarness = "reference-harness"
 groupName GeneratedFunctions = "generated-functions"
 groupName GeneratedConstruction = "generated-construction"
+groupName RuntimeAllocator = "runtime-allocator"
 
 main :: IO ()
 main = do
@@ -55,7 +58,7 @@ main = do
     selected <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
-            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction]
+            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator]
         names = map groupName registry
         unknown = nub (filter (`notElem` names) selected)
     unless (null unknown) $ do
@@ -66,17 +69,17 @@ main = do
     -- Validate the entire inventory even when only one group was requested.
     validateReferenceCases
     let requested = filter (\group -> null selected || groupName group `elem` selected) registry
-    environment <- if any needsRuntime requested
+    environment <- if any needsReferenceEnvironment requested
         then Just <$> prepareReferenceEnvironment
         else pure Nothing
     mapM_ (runGroup environment) requested
 
-needsRuntime :: Group -> Bool
-needsRuntime Semantic{} = True
-needsRuntime ReferenceHarness = True
-needsRuntime GeneratedFunctions = True
-needsRuntime GeneratedConstruction = True
-needsRuntime _ = False
+needsReferenceEnvironment :: Group -> Bool
+needsReferenceEnvironment Semantic{} = True
+needsReferenceEnvironment ReferenceHarness = True
+needsReferenceEnvironment GeneratedFunctions = True
+needsReferenceEnvironment GeneratedConstruction = True
+needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
 runGroup environment (Semantic label sources) = do
@@ -97,6 +100,7 @@ runGroup environment GeneratedFunctions = do
 runGroup environment GeneratedConstruction = do
     checkGeneratedConstructionSpecimens
     requireEnvironment environment >>= checkGeneratedConstructionLifecycle
+runGroup _ RuntimeAllocator = checkRuntimeAllocator
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure

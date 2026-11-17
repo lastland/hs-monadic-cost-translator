@@ -1,0 +1,158 @@
+diff --git a/src/Memorist/Base/Core.hs b/src/Memorist/Base/Core.hs
+--- a/src/Memorist/Base/Core.hs
++++ b/src/Memorist/Base/Core.hs
+@@ -1,4 +1,4 @@
+-{-# LANGUAGE MultiParamTypeClasses #-}
++{-# LANGUAGE FunctionalDependencies #-}
+ {-# LANGUAGE FlexibleInstances #-}
+ {-# LANGUAGE UndecidableInstances #-}
+
+@@ -23,7 +23,7 @@
+     (Annotated x a) >>= k = let r = k x in r {annot = a `add` annot r}
+
+ instance MonadWriter Annot Annotated where
+-    tell a = Annotated () a
++    tell = Annotated ()
+     listen (Annotated x a) = Annotated (x, a) a
+     pass (Annotated (x, f) a) = Annotated x (f a)
+
+@@ -72,9 +72,7 @@
+
+ -- NOTE to self: this requires FlexibleInstances and UndecidableInstances
+ instance MonadState s m => MonadState s (AnnotT m) where
+-    get = AnnotT $ do
+-        s <- get
+-        return $ pure s
++    get = AnnotT (pure <$> get)
+
+     put x = AnnotT $ do
+         put x
+@@ -130,7 +128,7 @@
+     tick :: m ()
+     tick = annotate () (fromCost onetick)
+
+-class (MSt s, MonadState s m, MonadMemorist m) => Memorist s m where
++class (MSt s, MonadMemorist m) => Memorist s m | m -> s where
+     runM :: m a -> s -> (Annotated a, s)
+
+
+@@ -158,7 +156,7 @@
+
+ -- NOTE to self: this requires FlexibleInstances
+ instance Monad m => MonadState s (MemoristBaseT s m) where
+-    get = MemoristBaseT $ get
++    get = MemoristBaseT get
+     put = MemoristBaseT . put
+
+ instance Monad m => MonadWriter Annot (MemoristBaseT s m) where
+diff --git a/src/Memorist/Base/ANT.hs b/src/Memorist/Base/ANT.hs
+--- a/src/Memorist/Base/ANT.hs
++++ b/src/Memorist/Base/ANT.hs
+@@ -4,7 +4,12 @@
+ {-# LANGUAGE MultiParamTypeClasses #-}
+ {-# LANGUAGE FlexibleInstances #-}
+
+-module Memorist.Base.ANT where
++module Memorist.Base.ANT
++    ( MemoristM
++    , MemoristT
++    , runMT
++    )
++where
+
+ import Memorist.Base.Thunk
+ import Memorist.Base.Core
+@@ -15,7 +20,10 @@
+
+ type MemoristM = MemoristT Identity
+
+-newtype MemoristT m a = MemoristT { runMT :: MemoristBaseT ThName m a }
++newtype MemoristT m a = MemoristT (MemoristBaseT ThName m a)
++
++runMT :: MemoristT m a -> MemoristBaseT ThName m a
++runMT (MemoristT m) = m
+
+ instance Functor m => Functor (MemoristT m) where
+     fmap f = MemoristT . fmap f . runMT
+@@ -26,10 +34,6 @@
+
+ instance Monad m => Monad (MemoristT m) where
+     m >>= k = MemoristT $ runMT m >>= runMT . k
+-
+-instance Monad m => MonadState ThName (MemoristT m) where
+-    get = MemoristT $ get
+-    put = MemoristT . put
+
+ instance Monad m => MonadWriter Annot (MemoristT m) where
+     tell = MemoristT . tell
+@@ -58,14 +62,14 @@
+
+ enclose :: Monad m => MemoristT m a -> MemoristT m (Annotated a)
+ enclose m = do
+-    n <- get
+-    put $ nshift n
++    n <- MemoristT get
++    MemoristT $ put $ nshift n
+     xa <- wrapA m
+-    put n
++    MemoristT $ put n
+     return xa
+
+ genName :: Monad m => MemoristT m ThName
+ genName = do
+-    n <- get
+-    put $ nnext n
++    n <- MemoristT get
++    MemoristT $ put $ nnext n
+     return n
+diff --git a/src/Memorist/Base/Strict.hs b/src/Memorist/Base/Strict.hs
+--- a/src/Memorist/Base/Strict.hs
++++ b/src/Memorist/Base/Strict.hs
+@@ -6,7 +6,12 @@
+
+ {-# OPTIONS_GHC -Wno-orphans #-}
+
+-module Memorist.Base.Strict where
++module Memorist.Base.Strict
++    ( MemoristM
++    , MemoristT
++    , runMT
++    )
++where
+
+ import Memorist.Base.Thunk
+ import Memorist.Base.Core
+@@ -19,7 +24,10 @@
+
+ -- In the basic version, the thunk name is just a natural number.
+ -- The state is thus of Int type.
+-newtype MemoristT m a = MemoristT { runMT :: MemoristBaseT Int m a }
++newtype MemoristT m a = MemoristT (MemoristBaseT Int m a)
++
++runMT :: MemoristT m a -> MemoristBaseT Int m a
++runMT (MemoristT m) = m
+
+ instance Functor m => Functor (MemoristT m) where
+     fmap f = MemoristT . fmap f . runMT
+@@ -30,10 +38,6 @@
+
+ instance Monad m => Monad (MemoristT m) where
+     m >>= k = MemoristT $ runMT m >>= runMT . k
+-
+-instance Monad m => MonadState Int (MemoristT m) where
+-    get = MemoristT $ get
+-    put = MemoristT . put
+
+ instance Monad m => MonadWriter Annot (MemoristT m) where
+     tell = MemoristT . tell
+@@ -61,8 +65,8 @@
+
+ genName :: Monad m => MemoristT m ThName
+ genName = do
+-    n <- get
+-    put $ n + 1
++    n <- MemoristT get
++    MemoristT $ put $ n + 1
+     return $ toThName n
+
+ instance MSt Int where

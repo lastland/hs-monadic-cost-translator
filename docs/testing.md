@@ -94,6 +94,42 @@ sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-argument
 The guard checks references to these runtime definitions. It is not a proof
 against arbitrary reimplementations of an interpreter.
 
+## Private Runtime Allocator
+
+Apply the [external runtime patch](../patches/README.md) and rebuild
+`MemoristANT:lib` before running runtime-dependent checks. The `runtime-allocator`
+selector compiles clients against that real package with `base`, `MemoristANT`,
+and `mtl` explicitly exposed. The root test executable still has no runtime or
+`mtl` build dependency.
+
+The negative clients must fail for the expected missing capability or private
+name. They cover `get`, `put`, `gets`, `modify`, `modify'`, and `state`; import and
+type aliases; generic and transformer wrappers; the former `Memorist`
+superclass route; and the exact save/reset/allocate/restore helper. Both public
+runtime implementations also reject direct constructor wrapping, record updates,
+safe coercion, and access to allocator helpers. A hidden package, syntax error,
+or unrelated compilation failure does not satisfy the expected diagnostics.
+The runner also rejects unregistered client specimens rather than silently
+skipping them.
+
+At O0/O2, positive clients execute ordinary lazy/strict State operations, native
+allocation in both runtime implementations, and varied scalar inputs with known
+values and demanded costs. Two distinct one-tick computations cost two; repeated
+forces of one retained thunk cost one. Unused bottoms stay suspended, and two
+allocations have distinct names. Observers may inspect results with the existing
+reasoning operations; generated code remains subject to the construction guard.
+A handwritten runtime model also retains the required direct/uncached/cached
+costs 4/7/4; it is a runtime preservation check, not a generated-interface test.
+
+```sh
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="runtime-allocator" --ghc-options='-Wall -Werror'
+```
+
+The restriction protects access to a live allocator through ordinary safe
+construction. It does not assert thunk authenticity or forbid reasoning about
+separate evaluations. It adds no generated state-scoping helper or global naming
+policy, and does not by itself solve direct top-level sharing translation.
+
 ## Manual Regression Examples
 
 The five `manual-*` cases use the actual sources in [`examples/`](../examples/README.md),
