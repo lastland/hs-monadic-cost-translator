@@ -165,9 +165,15 @@ For unconstrained local values whose generalized result is a type variable or
 nested lists, the translator uses one native allocation. Pure representation
 conversions retain the root and field thunk identities across type
 instantiations. Each function invocation still allocates fresh local thunks.
-Other generalized local result shapes and dictionary-sensitive locals retain legacy
-evaluator helpers; those outputs do not yet meet the construction-only contract
-enforced by the test suite.
+
+Dictionary-sensitive locals also use native allocation when their single
+generalized type parameter is the whole result and every reference has an
+unambiguous closed scalar type. The translator allocates one thunk per type and
+source binding, reuses it across matching references, and allocates fresh thunks
+on the next invocation. These bindings need no runtime type key. Generic constrained
+uses and other unsupported generalized result shapes still emit legacy evaluator
+helpers; those outputs do not yet meet the construction-only contract enforced
+by the test suite.
 
 ## Architecture Overview
 

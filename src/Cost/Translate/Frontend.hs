@@ -13,6 +13,7 @@ import GHC.Types.Name (nameModule_maybe, getOccString)
 import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
+import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfTypes)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
@@ -22,7 +23,7 @@ import Cost.Translate.Pretty
     (Section(..), prettyModule, basicExtensions, polymorphicExtensions, reflectionExtensions, requiredExtensions)
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
-import Cost.Translate.Sharing (constrainedVariables, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport)
+import Cost.Translate.Sharing (constrainedVariables, closedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport)
 import Cost.Translate.Callable (callArity, emitCallable, isComposition, spine)
 import Cost.Translate.Diagnostic (Diagnostic(..))
 import Cost.Translate.Typed (hasFreeVariables, hasFreshAnnotationVariables)
@@ -34,7 +35,7 @@ import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe, showSDocOneLine, defaultSDocContext, SDocContext(sdocSuppressUniques))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Data.List (elemIndex, isPrefixOf, mapAccumL, nub)
+import Data.List (elemIndex, find, isPrefixOf, mapAccumL, nub)
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (maybeToList, isJust)
@@ -70,7 +71,7 @@ generate file targetModule = runGhc (Just libdir) $ do
                              Just (tc,[]) <- [splitTyConApp_maybe (overLitType literal)],
                              let name = getOccString tc, name `elem` ["Int","Integer","Float","Double"]]
                         expressionTypes = Map.fromList
-                            [(location, (hasFreeVariables ty, rendered)) |
+                            [(location, (ty, rendered)) |
                              (location,ty) <- Map.toList hints, Right rendered <- [renderType datatypes ty]]
                         (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
                              (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes expressionTypes group
@@ -98,7 +99,7 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Bool, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String (Type, O.Ty) -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
 emitModule target source magicHash datatypes types literalTypes expressionTypes group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
@@ -114,7 +115,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
             (datatypeSupport, kindSupport, datatypeDeclarations) <- emitDatatypeSections datatypes
             declarations <- concat <$> mapM (\binding -> do
                 (name, ty) <- bindingSignature binding
-                code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts binding }) binding
+                code <- emitBind (env { namePlan = planNames reservedNames constructorLayouts closedBindings binding }) binding
                 pure [O.sig name ty, code]) binds
             let hasDatatypes = not (null datatypes)
                 hasReflection = not (Set.null reflected)
@@ -125,7 +126,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
                     else if hasPolymorphicBindings then polymorphicExtensions
                     else basicExtensions
                 addMagicHash enabled = [Extension.MagicHash | magicHash] ++
-                    [Extension.ScopedTypeVariables | needsNativeSharing] ++ enabled
+                    [Extension.ScopedTypeVariables | needsNativeSharing || not (Map.null closedBindings)] ++ enabled
                 supportReferences = Set.fromList
                     [occNameString occurrence | HsVar _ (L _ (Unqual occurrence)) <- collect declarations :: [HsExpr GhcPs]]
                 needsSharing = any (`Set.member` supportReferences) ["sharedAt", "sharedAtBy"]
@@ -165,7 +166,7 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
                                    [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
                                    (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
-                                   (planNames reservedNames constructorLayouts group)
+                                   (planNames reservedNames constructorLayouts closedBindings group)
     constructorLayouts = Map.fromList [(n,fields') | (n,_,_,fields') <- constructors datatypes]
     topLevelGroups = case hs_valds group of
         XValBindsLR (NValBinds groups _) -> [(recursive, bagToList bindings) | (recursive, bindings) <- groups]
@@ -179,8 +180,22 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
     reservedNames = Set.fromList ([generatedName "M" (unLoc n) | L _ (FunBind _ n _) <- topLevelBinds] ++
         map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
+    sourceExpressions = collect group :: [LHsExpr GhcRn]
+    expressionLocations = Map.fromListWith (+)
+        [(showSDocUnsafe (ppr (getLocA expression)), 1 :: Int) | expression <- sourceExpressions]
+    useTypes = Map.fromListWith (++)
+        [(unLoc name, [useType expression]) | expression@(L _ (HsVar _ name)) <- sourceExpressions]
+    useType expression = case getLocA expression of
+        RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> fst <$> Map.lookup location expressionTypes
+        _ -> Nothing
+      where location = showSDocUnsafe (ppr (getLocA expression))
+    closedBindings = Map.fromList
+        [(unLoc name, instantiations) | L _ (FunBind _ name matches) <- sourceBinds, arity matches == 0,
+         unLoc name `Set.notMember` topLevelNames, Just ty <- [Map.lookup (unLoc name) types],
+         Just instantiations <- [closedSharing ty (Map.findWithDefault [] (unLoc name) useTypes)]]
     reflected = closure (Set.fromList [unLoc n | L _ (FunBind _ n ms) <- sourceBinds, arity ms == 0,
         unLoc n `Set.notMember` topLevelNames,
+        unLoc n `Map.notMember` closedBindings,
         Just ty <- [Map.lookup (unLoc n) types], not (null (constrainedVariables ty))])
     closure known = let next = known `Set.union` Set.fromList
                             [unLoc n | b@(L _ (FunBind _ n _)) <- sourceBinds,
@@ -241,13 +256,17 @@ translatedSignatureUsing reflected factory datatypes count = translatedSignature
         | otherwise = O.tc "M.MemoristM" [resultType]
 
 translatedSignatureAs :: Bool -> (O.Ty -> O.Ty) -> [TyCon] -> Int -> Type -> Either String O.Ty
-translatedSignatureAs reflected wrapResult datatypes count ty = do
-    let (vars, body) = splitForAllTyVars ty
+translatedSignatureAs = translatedSignatureAsUsing Map.empty
+
+translatedSignatureAsUsing :: Map.Map Name String -> Bool -> (O.Ty -> O.Ty) -> [TyCon] -> Int -> Type -> Either String O.Ty
+translatedSignatureAsUsing renamings reflected wrapResult datatypes count ty = do
+    let (vars, body) = sharingType renamings ty
         (scaledArgs, result) = splitFunTys body
         (constraints, args) = span isPredTy (map scaledThing scaledArgs)
     quantified <- mapM (renderBinder datatypes) vars
     sourceConstraints <- concat <$> mapM translatedConstraint constraints
-    let renderedConstraints = sourceConstraints ++ [O.tc "Reflection.Typeable" [O.t (getOccString v)] | reflected, v <- constrainedVariables ty]
+    let renderedConstraints = sourceConstraints ++ [O.tc "Reflection.Typeable"
+            [O.t (Map.findWithDefault (getOccString v) (getName v) renamings)] | reflected, v <- constrainedVariables ty]
     unless (length args == count) (Left "function-valued result has no validated calling convention")
     argTypes <- mapM (renderType datatypes) args
     resultType <- renderType datatypes result
@@ -263,12 +282,12 @@ translatedConstraint ty = case splitTyConApp_maybe ty of
         pure (O.tc (getOccString tc) rendered : [O.tc "Scalar" [a] | getOccString tc `elem` ["Eq","Ord"], a <- rendered])
     _ -> Left ("unsupported type constraint: " ++ showSDocUnsafe (ppr ty))
 
-data Binding = Thunk O.Expr | Function String Int | Adapter O.Expr Int | Constructor String Int [Name]
+data Binding = Thunk O.Expr | SpecializedThunks [(Type, O.Expr)] | Function String Int | Adapter O.Expr Int | Constructor String Int [Name]
 data Env = Env
     { envBindings :: Map.Map Name Binding
     , inferredLiterals :: Map.Map String String
     , inferredBindings :: Map.Map Name Type
-    , inferredExpressions :: Map.Map String (Bool, O.Ty)
+    , inferredExpressions :: Map.Map String (Type, O.Ty)
     , sourceDatatypes :: [TyCon]
     , reflectiveBindings :: Set.Set Name
     , singleConstructors :: Set.Set String
@@ -284,6 +303,7 @@ data NamePlan = NamePlan
     , plannedMatches :: Map.Map String String
     , plannedAnchors :: Map.Map Name String
     , plannedBodies :: Map.Map Name String
+    , plannedSpecializations :: Map.Map Name [(Type, String)]
     }
 
 lookupEnv :: Name -> Env -> Maybe Binding
@@ -327,12 +347,13 @@ readableBinder env name = freshPrimed (occupiedNames env) base
 
 occupiedNames :: Env -> Set.Set String
 occupiedNames env = fixedReservedNames `Set.union` Set.fromList
-    ([occNameString (rdrNameOcc name) | Thunk expression <- Map.elems (envBindings env),
+    ([occNameString (rdrNameOcc name) | binding <- Map.elems (envBindings env),
+                                      expression <- case binding of { Thunk thunk -> [thunk]; SpecializedThunks thunks -> map snd thunks; _ -> [] },
                                       name <- collect expression :: [RdrName]] ++
      [name | Function name _ <- Map.elems (envBindings env), simpleIdentifier name] ++
      concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
      Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan) ++
-     Map.elems (plannedBodies plan))
+     Map.elems (plannedBodies plan) ++ concatMap (map snd) (Map.elems (plannedSpecializations plan)))
   where plan = namePlan env
 
 emitBind :: Env -> LHsBind GhcRn -> Either String O.Decl
@@ -591,33 +612,55 @@ withTypedValBinds signatures env binds finish = case binds of
                 action <- withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' -> emitGuards scope' (grhssGRHSs (m_grhss match)) (failureExpr "source guard failure")
                 let n = localName scope (unLoc name)
                     bindingType = Map.lookup (unLoc name) (inferredBindings scope)
-                paths <- locatedAt (getLocA name)
-                    (maybe (Right Nothing) sharingPaths bindingType)
-                let reference = if isJust paths then O.call n [O.tuple []] else O.v n
-                continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
-                if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
-                    then do
-                        native <- locatedAt (getLocA name) $ case bindingType of
-                            Nothing -> Right Nothing
-                            Just ty -> nativeSharing (sourceDatatypes scope)
-                                (bodyTypeRenamings scope (unLoc name) action ty) ty
-                        let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
-                            allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
-                            parameters = [O.conP "()" [] | isJust paths]
-                            anchorName = Map.findWithDefault (n ++ "anchor") (unLoc name) (plannedAnchors (namePlan scope))
-                            monomorphic = maybe False (null . fst . splitForAllTyVars) bindingType
-                            allocation = O.call "M.lazy" [if monomorphic then action else O.ret (O.tuple [])]
-                            declaration = O.val n parameters (if monomorphic then O.v anchorName
-                                else O.app allocate [O.call "M.lazy" [action],O.v anchorName])
-                        case native of
-                            Just (bodyType, convert) -> do
-                                let bodyName = Map.findWithDefault (n ++ "body") (unLoc name) (plannedBodies (namePlan scope))
-                                    body = [O.sig bodyName bodyType, O.val bodyName [] action]
-                                    shared = O.val n [] (O.call "mapThunk" [convert, O.v anchorName])
-                                pure (O.letE body (O.doE [O.bind anchorName (O.call "M.lazy" [O.v bodyName])]
-                                    (O.letE (signature ++ [shared]) continuation)))
-                            Nothing -> pure (O.doE [O.bind anchorName allocation] (O.letE (signature ++ [declaration]) continuation))
-                    else pure continuation
+                case Map.lookup (unLoc name) (plannedSpecializations (namePlan scope)) of
+                    Just instantiations -> do
+                        let scope' = insertEnv (unLoc name)
+                                (SpecializedThunks [(ty, O.v target) | (ty, target) <- instantiations]) scope
+                        continuation <- go scope' rest done
+                        let used = Set.fromList (map (occNameString . rdrNameOcc) (collect continuation :: [RdrName]))
+                            needed = filter ((`Set.member` used) . snd) instantiations
+                        if null needed then pure continuation else do
+                            ty <- maybe (Left "missing specialized local binding type") Right bindingType
+                            bodyType <- locatedAt (getLocA name) (translatedSignatureAsUsing
+                                (bodyTypeRenamings scope (unLoc name) action ty)
+                                (unLoc name `Set.member` reflectiveBindings scope)
+                                (\resultType -> O.tc "M.MemoristM" [resultType]) (sourceDatatypes scope) 0 ty)
+                            let bodyName = Map.findWithDefault (n ++ "body") (unLoc name) (plannedBodies (namePlan scope))
+                                body = [O.sig bodyName bodyType, O.val bodyName [] action]
+                            allocations <- sequence [do
+                                rendered <- renderType (sourceDatatypes scope) instanceType
+                                pure (O.bind target (O.call "M.lazy"
+                                    [O.ann (O.v bodyName) (O.tc "M.MemoristM" [rendered])])) |
+                                (instanceType, target) <- needed]
+                            pure (O.letE body (O.doE allocations continuation))
+                    Nothing -> do
+                        paths <- locatedAt (getLocA name)
+                            (maybe (Right Nothing) sharingPaths bindingType)
+                        let reference = if isJust paths then O.call n [O.tuple []] else O.v n
+                        continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
+                        if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
+                            then do
+                                native <- locatedAt (getLocA name) $ case bindingType of
+                                    Nothing -> Right Nothing
+                                    Just ty -> nativeSharing (sourceDatatypes scope)
+                                        (bodyTypeRenamings scope (unLoc name) action ty) ty
+                                let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) signatures)
+                                    allocate = maybe (O.v "sharedAt") (\path -> O.call "sharedAtBy" [O.ann (O.v "Proxy") (O.tc "Proxy" [path])]) paths
+                                    parameters = [O.conP "()" [] | isJust paths]
+                                    anchorName = Map.findWithDefault (n ++ "anchor") (unLoc name) (plannedAnchors (namePlan scope))
+                                    monomorphic = maybe False (null . fst . splitForAllTyVars) bindingType
+                                    allocation = O.call "M.lazy" [if monomorphic then action else O.ret (O.tuple [])]
+                                    declaration = O.val n parameters (if monomorphic then O.v anchorName
+                                        else O.app allocate [O.call "M.lazy" [action],O.v anchorName])
+                                case native of
+                                    Just (bodyType, convert) -> do
+                                        let bodyName = Map.findWithDefault (n ++ "body") (unLoc name) (plannedBodies (namePlan scope))
+                                            body = [O.sig bodyName bodyType, O.val bodyName [] action]
+                                            shared = O.val n [] (O.call "mapThunk" [convert, O.v anchorName])
+                                        pure (O.letE body (O.doE [O.bind anchorName (O.call "M.lazy" [O.v bodyName])]
+                                            (O.letE (signature ++ [shared]) continuation)))
+                                    Nothing -> pure (O.doE [O.bind anchorName allocation] (O.letE (signature ++ [declaration]) continuation))
+                            else pure continuation
         _ -> do
             let scope' = insertEnv (unLoc name) (Function (localName scope (unLoc name)) (arity matches)) scope
             declaration <- typedBind scope' binding
@@ -636,7 +679,7 @@ withTypedValBinds signatures env binds finish = case binds of
         variables = concatMap (fst . splitForAllTyVars) types ++ nonDetEltsUniqSet (tyCoVarsOfTypes types)
         used = Set.fromList (map getOccString variables ++
             [occNameString (rdrNameOcc occurrence) |
-             occurrence <- collect (action, Map.elems signatures, Map.elems (inferredExpressions scope)) :: [RdrName],
+             occurrence <- collect (action, Map.elems signatures, map snd (Map.elems (inferredExpressions scope))) :: [RdrName],
              isTvOcc (rdrNameOcc occurrence)])
         fresh occupied variable =
             let occurrence = freshPrimed occupied (getOccString variable)
@@ -650,13 +693,14 @@ emitExpr env located = case unLoc located of
     NegApp _ expression _ -> do
         action <- emitExpr env expression
         pure (O.doE [O.bind "operand" action] (O.ret (O.call "negate" [O.v "operand"])))
-    HsVar _ name -> annotate False <$> case resolve env (unLoc name) of
+    HsVar _ name -> annotate False <$> case resolveAt env located (unLoc name) of
         Just (Thunk thunk) -> Right (O.call "M.force" [thunk])
         Just (Function fn 0) -> Right (O.v fn)
         Just (Function fn _) -> Right (O.ret (O.v fn))
         Just (Adapter fn _) -> Right (O.ret fn)
         Just (Constructor con 0 _) -> Right (O.ret (O.v con))
         Just Constructor {} -> unsupported
+        Just SpecializedThunks {} -> unsupported
         Nothing | unLoc name == getName unitDataCon -> Right (O.ret (O.tuple []))
         Nothing | builtin (unLoc name) "GHC.Types" "True" -> Right (O.ret (O.v "True"))
         Nothing | builtin (unLoc name) "GHC.Internal.Base" "otherwise" -> Right (O.ret (O.v "True"))
@@ -740,7 +784,7 @@ emitThunk env name located = case reuse located of
     Nothing -> suspendArgument name <$> emitExpr env located
   where
     reuse expression = case unLoc expression of
-        HsVar _ sourceName | Just (Thunk thunk) <- resolve env (unLoc sourceName) ->
+        HsVar _ sourceName | Just (Thunk thunk) <- resolveAt env expression (unLoc sourceName) ->
             Just (annotateExpression env "M.Th" False expression thunk)
         HsPar _ nested -> reuse nested
         ExprWithTySig _ nested signature ->
@@ -760,14 +804,21 @@ withMatchThunk env name located finish = do
             (not (hasFreshAnnotationVariables signature) && scopedEvidence expression) || scopedAnnotation nested
         _ -> False
     scopedEvidence expression = case Map.lookup (showSDocUnsafe (ppr (getLocA expression))) (inferredExpressions env) of
-        Just (True, ty) -> any (isTvOcc . rdrNameOcc) (collect ty :: [RdrName])
+        Just (ty, rendered) | hasFreeVariables ty -> any (isTvOcc . rdrNameOcc) (collect rendered :: [RdrName])
         _ -> False
 
 annotateExpression :: Env -> String -> Bool -> LHsExpr GhcRn -> O.Expr -> O.Expr
 annotateExpression env wrapper allowFree located code =
     case Map.lookup (showSDocUnsafe (ppr (getLocA located))) (inferredExpressions env) of
-        Just (free,ty) | allowFree || not free -> O.ann code (O.tc wrapper [ty])
+        Just (ty,rendered) | allowFree || not (hasFreeVariables ty) -> O.ann code (O.tc wrapper [rendered])
         _ -> code
+
+resolveAt :: Env -> LHsExpr GhcRn -> Name -> Maybe Binding
+resolveAt env expression name = case resolve env name of
+    Just (SpecializedThunks thunks) -> do
+        (ty, _) <- Map.lookup (showSDocUnsafe (ppr (getLocA expression))) (inferredExpressions env)
+        Thunk . snd <$> find (eqType ty . fst) thunks
+    binding -> binding
 
 suspendArgument :: String -> O.Expr -> ([O.Stmt], O.Expr)
 suspendArgument name action = ([O.bind name (O.call "M.lazy" [action])], O.v name)
@@ -779,8 +830,8 @@ argumentNames :: Env -> String -> Int -> [String]
 argumentNames env key count = Map.findWithDefault
     [key ++ "_" ++ show i | i <- [0 .. count - 1]] key (plannedArguments (namePlan env))
 
-planNames :: Data a => Set.Set String -> Map.Map Name [Name] -> a -> NamePlan
-planNames globalNames constructorLayouts syntax = NamePlan locals parameters arguments actions fields matchNames anchors bodies
+planNames :: Data a => Set.Set String -> Map.Map Name [Name] -> Map.Map Name [Type] -> a -> NamePlan
+planNames globalNames constructorLayouts closedBindings syntax = NamePlan locals parameters arguments actions fields matchNames anchors bodies specializations
   where
     binds = collect syntax :: [LHsBind GhcRn]
     binders = nub ([unLoc name | L _ (FunBind _ name _) <- binds] ++
@@ -809,7 +860,9 @@ planNames globalNames constructorLayouts syntax = NamePlan locals parameters arg
     (matchNames, afterMatches) = assignPrimed afterFields "matched" matchKeys
     bindingNames = [unLoc name | L _ (FunBind _ name _) <- binds]
     (anchors, afterAnchors) = assignBindingNames "anchor" locals afterMatches bindingNames
-    (bodies, _) = assignBindingNames "body" locals afterAnchors bindingNames
+    (bodies, afterBodies) = assignBindingNames "body" locals afterAnchors bindingNames
+    (specializations, _) = assignSpecializations locals afterBodies
+        [(name, types) | name <- bindingNames, Just types <- [Map.lookup name closedBindings]]
 
     parametersFor (L _ (FunBind _ name functionMatches)) =
         [((unLoc name,i), patternName pattern') |
@@ -956,6 +1009,17 @@ assignBindingNames suffix locals = go Map.empty
     go assigned used (source:sources) = go (Map.insert source name assigned) (Set.insert name used) sources
       where name = freshPrimed used (Map.findWithDefault "local" source locals ++ suffix)
 
+assignSpecializations :: Map.Map Name String -> Set.Set String -> [(Name, [Type])] -> (Map.Map Name [(Type, String)], Set.Set String)
+assignSpecializations locals = go Map.empty
+  where
+    go assigned used [] = (assigned, used)
+    go assigned used ((source, types):rest) = go (Map.insert source names assigned) used' rest
+      where
+        (used', names) = mapAccumL allocate used (zip [0 :: Int ..] types)
+        allocate occupied (index, ty) =
+            let name = freshPrimed occupied (Map.findWithDefault "local" source locals ++ show index)
+            in (Set.insert name occupied, (ty, name))
+
 freshNumbered :: Set.Set String -> String -> Int -> (String, Int)
 freshNumbered used prefix number = (freshPrimed used (prefix ++ show number), number + 1)
 
@@ -985,7 +1049,7 @@ partialName env target = choose target (0 :: Int)
     used = Set.fromList (Map.elems (plannedLocals plan) ++ Map.elems (plannedParameters plan) ++
         concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
         Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan) ++
-        Map.elems (plannedBodies plan))
+        Map.elems (plannedBodies plan) ++ concatMap (map snd) (Map.elems (plannedSpecializations plan)))
     plan = namePlan env
     choose remaining count
         | candidate `Set.member` used = choose remaining (count + 1)

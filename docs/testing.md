@@ -132,6 +132,21 @@ with a local `forall b`. Its `-Wno-name-shadowing` pragma preserves that scope
 regression; the handwritten reference and caller need no warning exception.
 This does not expand the bounded generated-output warning checks.
 
+The `constrained-sharing-local` fixture checks native allocation for a
+dictionary-sensitive local used at closed scalar types. Its original handwritten
+reference allocates separate `Int` and `Integer` thunks inside each call. The
+generated implementation uses GHC's instantiated expression types to select and
+reuse the corresponding native thunks; it does not run computations or construct
+runtime names. Missing or ambiguous type evidence, generic uses, and other result
+shapes are not eligible for this lowering.
+
+The `constrained-local-demand` fixture repeats each dictionary specialization,
+distinguishes separate source bindings, and checks freshness between invocations.
+Its generated callers also cover explicit and inferred quantifier scopes, a
+generic caller without added reflection constraints, partial demands, unused
+bottoms, and demanded failures. Relative identity probes detect per-reference
+allocation and accidental reuse across bindings without fixing runtime names.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

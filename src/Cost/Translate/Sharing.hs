@@ -1,4 +1,4 @@
-module Cost.Translate.Sharing (constrainedVariables, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
+module Cost.Translate.Sharing (constrainedVariables, closedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
 
 import GHC
 import GHC.Builtin.Types (liftedTypeKind, listTyCon)
@@ -6,14 +6,15 @@ import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyC
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Types.Var.Set (elemVarSet)
+import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.Types.Var (setVarName, tyVarKind)
 import GHC.Types.Name (getOccString, mkInternalName)
 import GHC.Types.Name.Occurrence (mkTyVarOcc)
 import GHC.Types.Unique (getUnique)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
-import Data.List (minimumBy)
+import Cost.Translate.Validation (scalarType)
+import Data.List (minimumBy, nubBy)
 import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
 import qualified Cost.Translate.Output as O
@@ -24,23 +25,46 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
     (vars, body) = splitForAllTyVars ty
     predicates = takeWhile isPredTy (map scaledThing (fst (splitFunTys body)))
 
+closedSharing :: Type -> [Maybe Type] -> Maybe [Type]
+closedSharing ty uses
+    | [variable] <- vars
+    , tyVarKind variable `eqType` liftedTypeKind
+    , variable `elem` constrainedVariables ty
+    , all (isPredTy . scaledThing) arguments
+    , Just resultVariable <- getTyVar_maybe result
+    , resultVariable == variable
+    , not (null uses) = do
+        types <- sequence uses
+        if all closedScalar types then Just (nubBy eqType types) else Nothing
+    | otherwise = Nothing
+  where
+    (vars, body) = splitForAllTyVars ty
+    (arguments, result) = splitFunTys body
+    closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
+
+sharingType :: Map.Map Name String -> Type -> ([TyVar], Type)
+sharingType renamings ty = (renamed, substTyWith vars (map mkTyVarTy renamed) body)
+  where
+    (vars, body) = splitForAllTyVars ty
+    renamed = map rename vars
+    rename variable = case Map.lookup (getName variable) renamings of
+        Nothing -> variable
+        Just occurrence -> setVarName variable (mkInternalName (getUnique variable)
+            (mkTyVarOcc occurrence) (nameSrcSpan (getName variable)))
+
 nativeSharing :: [TyCon] -> Map.Map Name String -> Type -> Either String (Maybe (O.Ty, O.Expr))
 nativeSharing datatypes renamings ty
     | null vars || not (all ((`eqType` liftedTypeKind) . tyVarKind) vars) || not (null arguments) = Right Nothing
     | otherwise = case mapper result of
         Nothing -> Right Nothing
         Just convert -> do
-            let renamed = map rename vars
+            let (renamed, renamedBody) = sharingType renamings ty
             quantified <- mapM (renderBinder datatypes) renamed
-            rendered <- renderType datatypes (substTyWith vars (map mkTyVarTy renamed) result)
+            rendered <- renderType datatypes (snd (splitFunTys renamedBody))
             pure (Just (O.forallT quantified (O.tc "M.MemoristM" [rendered]), convert))
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
-    rename variable = case Map.lookup (getName variable) renamings of
-        Nothing -> variable
-        Just occurrence -> setVarName variable (mkInternalName (getUnique variable)
-            (mkTyVarOcc occurrence) (nameSrcSpan (getName variable)))
     mapper value
         | not (any (`elemVarSet` tyCoVarsOfType value) vars) = Just (O.v "id")
         | Just variable <- getTyVar_maybe value, variable `elem` vars = Just (O.v "Void.absurd")

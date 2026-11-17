@@ -1,7 +1,9 @@
-module Cost.Translate.Validation (validateComparisons, scalarSupport) where
+module Cost.Translate.Validation (validateComparisons, scalarType, scalarSupport) where
 
 import qualified GHC.Core as Core
+import GHC.Builtin.Types (intTy, integerTy, boolTy, floatTy, doubleTy, charTy, unitTy)
 import GHC.Core.Utils (exprType)
+import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (Type, splitForAllTyVars, splitFunTys, splitTyConApp_maybe, getTyVar_maybe)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Types.Name (Name, getName, getOccString, nameModule_maybe, nameSrcSpan)
@@ -32,13 +34,12 @@ validateComparisons = mapM_ binding
             _ -> pure ()
     check location ty = case splitTyConApp_maybe ty of
         Just (tc,[argument]) | getOccString tc `elem` ["Eq","Ord"], ghcName (getName tc) ->
-            unless (scalar argument) (Left (location ++ ": comparisons support only strict scalar operands; found " ++ showSDocUnsafe (ppr argument)))
+            unless (scalarType argument) (Left (location ++ ": comparisons support only strict scalar operands; found " ++ showSDocUnsafe (ppr argument)))
         _ -> pure ()
 
-scalar :: Type -> Bool
-scalar ty = isJust (getTyVar_maybe ty) || case splitTyConApp_maybe ty of
-    Just (tc,[]) -> ghcName (getName tc) && getOccString tc `elem` ["Int","Integer","Bool","Float","Double","Char","()"]
-    _ -> False
+scalarType :: Type -> Bool
+scalarType ty = isJust (getTyVar_maybe ty) || any (eqType ty)
+    [intTy, integerTy, boolTy, floatTy, doubleTy, charTy, unitTy]
 
 ghcName :: Name -> Bool
 ghcName name = maybe False (("GHC." `isPrefixOf`) . moduleNameString . moduleName) (nameModule_maybe name)

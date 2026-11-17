@@ -110,16 +110,19 @@ _Avoid_: Lazy caching, memoization
 The creation of an explicit named thunk (`M.Th`) wrapping a suspended computation, retaining its identity across multiple references.
 _Avoid_: Suspension creation, delayed evaluation
 
-**Unconstrained Sharing (`sharedAt`)**:
-The allocation of a single runtime thunk at a fixed reserved name, shared across all type instantiations of an unconstrained polymorphic value.
+**Unconstrained Sharing**:
+Reuse of one locally shared value across all unconstrained type instantiations.
 _Avoid_: Monomorphic sharing, static sharing
 
-**Dictionary-Sensitive Sharing (`sharedAtBy`)**:
-The allocation of distinct thunks keyed by structural type representations of the generalized variables appearing in dictionary constraints.
+**Dictionary-Sensitive Sharing**:
+Reuse of a local value when the type arguments determining its dictionaries
+agree, with distinct thunks for different dictionary specializations. Closed
+scalar uses can be resolved during translation rather than through runtime keys.
 _Avoid_: Constrained sharing, class-keyed caching
 
 **Structural Type Key**:
-An integer sequence computed by `sharingTypeKey` from `Reflection.SomeTypeRep` that uniquely encodes qualified type constructors, kind arguments, and applications.
+A legacy sharing helper's integer sequence encoding qualified type constructors,
+kind arguments, and applications. Native lowering does not use this key.
 _Avoid_: Type hash, string key
 
 **Negative Delimiters**:
