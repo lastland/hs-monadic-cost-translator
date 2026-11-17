@@ -338,6 +338,16 @@ one plus the number selected; inspecting both helper results and their selected
 unique real source span and complete instantiated binary function type, not the
 whole infix expression's span or either operand's type. Partial references and
 sections do not provide saturated-call evidence.
+Fresh outer calls reuse both caller operands but allocate disjoint four-name
+vectors. With a positive repetition count `k`, fresh/cached `one` costs are
+`4*k`/four and fresh/cached `twice` costs are `5*k`/five. An explicitly cached
+helper call returns eight at cost four; two distinct equal-RHS shared bindings
+return eight at cost seven and retain disjoint identity vectors. A symbolic
+operator returns four at cost four, while mixed saturated prefix/infix calls of
+one helper return eight at cost five. Their identity probes retain the same
+sharing boundaries. A suspended head failure is safe through both list spines
+at cost three; a suspended root failure is safe through both helper results at
+cost three. Full demand raises in each case.
 
 ## Private Runtime Allocator
 

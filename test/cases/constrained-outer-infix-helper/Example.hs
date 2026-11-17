@@ -19,3 +19,54 @@ twice input n =
         helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
         helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
     in (input `helper` n, input `helper` n)
+
+cachedHelper :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+cachedHelper input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+        result = input `helper` n
+    in (result, result)
+
+separate :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+separate input n =
+    let leftShared :: forall c. (Eq c, Num c) => Maybe [c]
+        leftShared = Just [expensive 5]
+        rightShared :: forall c. (Eq c, Num c) => Maybe [c]
+        rightShared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (leftShared :: Maybe [b], rightShared :: Maybe [b])
+    in (input `helper` n, input `helper` n)
+
+brokenHead :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+brokenHead input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [error "infix-helper head failure"]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in (input `helper` n, input `helper` n)
+
+brokenRoot :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+brokenRoot input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = error "infix-helper root failure"
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in (input `helper` n, input `helper` n)
+
+symbolic :: forall a. (Eq a, Num a) => a -> Int -> (Maybe [a], Maybe [a])
+symbolic input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        (%%) :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        _ %% _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in input %% n
+
+mixed :: forall a. (Eq a, Num a) => a -> Int -> ((Maybe [a], Maybe [a]), (Maybe [a], Maybe [a]))
+mixed input n =
+    let shared :: forall c. (Eq c, Num c) => Maybe [c]
+        shared = Just [expensive 5]
+        helper :: forall b. (Eq b, Num b) => b -> Int -> (Maybe [b], Maybe [b])
+        helper _ _ = (shared :: Maybe [b], shared :: Maybe [b])
+    in (helper input n, input `helper` n)

@@ -1,11 +1,13 @@
 module Case (probes) where
 
+import Control.Monad ((>=>), replicateM)
+import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import qualified Example as Source
-import Generated (Scalar, oneM, twiceM)
+import Generated (Scalar, oneM, twiceM, cachedHelperM, separateM, brokenHeadM, brokenRootM, symbolicM, mixedM)
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
-import ReferenceSupport (Sample(..), Probe, demanded, scalarSource, snapshot)
+import ReferenceSupport (Sample(..), Probe, demanded, failure, scalarSource, snapshot)
 
 probes :: [Probe]
 probes =
@@ -43,6 +45,7 @@ probes =
                 firstLeft == firstRight && firstLeft == secondLeft && firstLeft == secondRight
             _ -> False)
     ]
+    ++ preservationProbes
 
 genericOne :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
 genericOne = oneM
@@ -136,3 +139,151 @@ fieldNames (M.PairT first second) = do
                     )
                 _ -> Nothing)
         _ -> pure Nothing
+
+preservationProbes :: [Probe]
+preservationProbes =
+    [ scalarSource "one/repeated-fresh-outer-calls" sourceRepeatedOne $ \sample -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        sum <$> replicateM (repeats sample) (genericOne input n >>= forceSum)
+    , scalarSource "one/repeated-cached-outer-call" sourceRepeatedOne $ \sample -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        cached <- M.lazy (genericOne input n)
+        sum <$> replicateM (repeats sample) (M.force cached >>= forceSum)
+    , scalarSource "twice/repeated-fresh-outer-calls" sourceRepeatedTwice $ \sample -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        sum <$> replicateM (repeats sample) (genericTwice input n >>= forceTwiceSum)
+    , scalarSource "twice/repeated-cached-outer-call" sourceRepeatedTwice $ \sample -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        cached <- M.lazy (genericTwice input n)
+        sum <$> replicateM (repeats sample) (M.force cached >>= forceTwiceSum)
+    , snapshot "twice/fresh-outer-identities" $ \_ -> M.value $ M.eval1 $ do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        first@(M.PairT firstLeft firstRight) <- genericTwice input n
+        second@(M.PairT secondLeft secondRight) <- genericTwice input n
+        firstNames <- twiceFieldNames first
+        secondNames <- twiceFieldNames second
+        pure (length (nub (map M.tname [firstLeft, firstRight, secondLeft, secondRight])) == 4 &&
+            case (firstNames, secondNames) of
+                (Just ((a, b), (c, d)), Just ((e, f), (g, h))) ->
+                    a == b && a == c && a == d && e == f && e == g && e == h && all (`notElem` e) a
+                _ -> False)
+    , scalarSource "cached-helper/int/full"
+        (const (sourceTwiceSum (Source.cachedHelper (undefined :: Int) undefined))) $ \_ -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        genericCachedHelper input n >>= forceTwiceSum
+    , snapshot "cached-helper/shared-result-and-fields" $ \_ -> M.value $ M.eval1 $ do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        result@(M.PairT first second) <- genericCachedHelper input n
+        names <- twiceFieldNames result
+        pure (M.tname first == M.tname second && case names of
+            Just ((a, b), (c, d)) -> a == b && a == c && a == d
+            _ -> False)
+    , scalarSource "separate/int/full"
+        (const (sourceTwiceSum (Source.separate (undefined :: Int) undefined))) $ \_ -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        genericSeparate input n >>= forceTwiceSum
+    , snapshot "separate/distinct-bindings-shared-across-helpers" $ \_ -> M.value $ M.eval1 $ do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        result@(M.PairT first second) <- genericSeparate input n
+        names <- twiceFieldNames result
+        pure (M.tname first /= M.tname second && case names of
+            Just ((firstLeft, firstRight), (secondLeft, secondRight)) ->
+                firstLeft == secondLeft && firstRight == secondRight && all (`notElem` firstRight) firstLeft
+            _ -> False)
+    , demanded "broken-head/both-list-spines"
+        (projectRoots True . bothDemanded) demandSpines selectedBrokenHead
+    , failure "broken-head/full" (selectedBrokenHead >=> forceTwiceSum)
+    , demanded "broken-root/both-helper-roots"
+        (projectHelpers . bothDemanded) (demandHelpers . bothDemanded) selectedBrokenRoot
+    , failure "broken-root/full" (selectedBrokenRoot >=> forceTwiceSum)
+    , scalarSource "symbolic/int/full"
+        (const (sourceSum (Source.symbolic (undefined :: Int) undefined))) $ \_ -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        genericSymbolic input n >>= forceSum
+    , snapshot "symbolic/shared-maybe-list-head-and-tail-identities" $ \_ -> M.value $ M.eval1 $ do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        names <- genericSymbolic input n >>= fieldNames
+        pure (case names of
+            Just (first, second) -> first == second
+            _ -> False)
+    , scalarSource "mixed/int/full"
+        (const (sourceTwiceSum (Source.mixed (undefined :: Int) undefined))) $ \_ -> do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        genericMixed input n >>= forceTwiceSum
+    , snapshot "mixed/distinct-helpers-and-shared-fields" $ \_ -> M.value $ M.eval1 $ do
+        input <- M.lazy (pure (undefined :: Int))
+        n <- M.lazy (pure (undefined :: Int))
+        result@(M.PairT first second) <- genericMixed input n
+        names <- twiceFieldNames result
+        pure (M.tname first /= M.tname second && case names of
+            Just ((a, b), (c, d)) -> a == b && a == c && a == d
+            _ -> False)
+    ]
+
+sourceRepeatedOne :: Sample -> Int
+sourceRepeatedOne sample = repeats sample * sourceSum (Source.one (undefined :: Int) undefined)
+
+sourceRepeatedTwice :: Sample -> Int
+sourceRepeatedTwice sample = repeats sample * sourceTwiceSum (Source.twice (undefined :: Int) undefined)
+
+genericCachedHelper :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+genericCachedHelper = cachedHelperM
+
+genericSeparate :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+genericSeparate = separateM
+
+genericBrokenHead :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+genericBrokenHead = brokenHeadM
+
+genericBrokenRoot :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+genericBrokenRoot = brokenRootM
+
+genericSymbolic :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a)))
+genericSymbolic = symbolicM
+
+genericMixed :: (Eq a, Num a, Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))))
+genericMixed = mixedM
+
+twiceFieldNames :: M.PairT (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) (M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))) -> M.MemoristM (Maybe (([M.ThName], [M.ThName]), ([M.ThName], [M.ThName])))
+twiceFieldNames (M.PairT first second) = do
+    left <- M.force first >>= fieldNames
+    right <- M.force second >>= fieldNames
+    pure ((,) <$> left <*> right)
+
+selectedBrokenHead :: Sample -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))))
+selectedBrokenHead _ = do
+    input <- M.lazy (pure (undefined :: Int))
+    n <- M.lazy (pure (undefined :: Int))
+    genericBrokenHead input n
+
+selectedBrokenRoot :: Sample -> M.MemoristM (M.PairT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))))
+selectedBrokenRoot _ = do
+    input <- M.lazy (pure (undefined :: Int))
+    n <- M.lazy (pure (undefined :: Int))
+    genericBrokenRoot input n
+
+bothDemanded :: Sample -> Sample
+bothDemanded sample = sample {leftDemand = True, rightDemand = True}
+
+demandSpines :: Sample -> M.PairT (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) (M.PairT (M.MaybeT (L.ListT Int)) (M.MaybeT (L.ListT Int))) -> M.PairD (M.PairD (M.MaybeD (L.ListD Int)) (M.MaybeD (L.ListD Int))) (M.PairD (M.MaybeD (L.ListD Int)) (M.MaybeD (L.ListD Int)))
+demandSpines _ (M.PairT first second) = M.PairD
+    (M.Need (views (M.tval first))) (M.Need (views (M.tval second)))
+  where
+    views (M.PairT left right) = M.PairD
+        (M.Need (payload (M.tval left))) (M.Need (payload (M.tval right)))
+    payload M.NothingT = M.NothingD
+    payload (M.JustT list) = M.JustD (M.Need (spine (M.tval list)))
+    spine L.NilT = L.NilD
+    spine (L.ConsT _ tailThunk) = L.ConsD M.Skip (M.Need (spine (M.tval tailThunk)))
