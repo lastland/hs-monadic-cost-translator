@@ -1,7 +1,7 @@
 module Cost.Translate.Sharing (constrainedVariables, specializedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
 
 import GHC
-import GHC.Builtin.Types (liftedTypeKind, listTyCon)
+import GHC.Builtin.Types (liftedTypeKind, listTyCon, maybeTyCon)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyConApp_maybe, splitAppTy_maybe, getTyVar_maybe, isPredTy, mkTyVarTy, substTyWith)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
@@ -15,6 +15,7 @@ import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Cost.Translate.Validation (scalarType)
 import Data.List (minimumBy, nubBy)
+import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
 import qualified Cost.Translate.Output as O
@@ -31,19 +32,26 @@ specializedSharing scopeVariables ty uses
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
     , all (isPredTy . scaledThing) arguments
-    , Just resultVariable <- getTyVar_maybe result
+    , Just resultVariable <- getTyVar_maybe (fromMaybe result (maybeElement result))
     , resultVariable == variable
     , not (null uses) = do
         types <- sequence uses
         let distinct = nubBy eqType types
-        if all closedScalar types then Just distinct else case distinct of
-            [value] | Just scoped <- getTyVar_maybe value, scoped `elem` scopeVariables -> Just distinct
+        if all closedResult types then Just distinct else case distinct of
+            [value] | Just _ <- getTyVar_maybe result
+                    , Just scoped <- getTyVar_maybe value, scoped `elem` scopeVariables -> Just distinct
             _ -> Nothing
     | otherwise = Nothing
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
+    closedResult value = case maybeElement result of
+        Just _ -> maybe False closedScalar (maybeElement value)
+        Nothing -> closedScalar value
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
+    maybeElement value = case splitTyConApp_maybe value of
+        Just (constructor, [element]) | constructor == maybeTyCon -> Just element
+        _ -> Nothing
 
 sharingType :: Map.Map Name String -> Type -> ([TyVar], Type)
 sharingType renamings ty = (renamed, substTyWith vars (map mkTyVarTy renamed) body)

@@ -178,6 +178,17 @@ skipping both calls costs one, and demanding their roots without arithmetic
 fields costs three. These probes detect a producer incorrectly shared between
 helper invocations even when the output field thunks remain distinct.
 
+The `constrained-local-maybe` fixture uses a constrained `Maybe a` local twice
+at `Maybe Int`. Its unconstrained generic caller also checks that the unused
+input type needs no reflection constraint. The independent native reference
+shares both the `Maybe` root and its payload: full demand of `Just` costs four
+ticks, root-only demand costs two, and skipping both roots costs one. `Nothing`
+costs two. Relative identity probes check root and payload reuse without fixing
+runtime names, plus fresh identities across calls that reuse caller inputs.
+Fresh calls pay four ticks each; repeated demands on an explicitly cached call
+pay four in total. Skipped bottom counts and suspended payload failures remain
+safe, while demanding either failure must raise.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

@@ -166,14 +166,17 @@ nested lists, the translator uses one native allocation. Pure representation
 conversions retain the root and field thunk identities across type
 instantiations. Each function invocation still allocates fresh local thunks.
 
-Dictionary-sensitive locals also use native allocation when their single
-generalized type parameter is the whole result and every reference has
-unambiguous type evidence. Closed scalar references receive one thunk per type
-and source binding. References all using one abstract type also share a native
-thunk when that type is available in the declaration's enclosing function scope.
-This includes explicitly typed and inferred helpers. Allocation stays where the
-source value is declared: each helper invocation creates fresh helper-local
-thunks. These bindings need no runtime type keys or added reflection constraints.
+Dictionary-sensitive locals also use native allocation when they have one
+generalized type parameter determining their dictionaries and every reference
+has unambiguous type evidence. When that parameter is the whole result, closed
+scalar references receive one thunk per type and source binding. References all
+using one abstract type also share a native thunk when that type is available in
+the declaration's enclosing function scope, including explicitly typed and
+inferred helpers. Locals returning `Maybe a` also use native allocation when all
+references have closed scalar element types. The shared `Maybe` root retains its
+lazy payload. Allocation stays where the source value is declared: each helper
+invocation creates fresh helper-local thunks. These bindings need no runtime
+type keys or added reflection constraints.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those
