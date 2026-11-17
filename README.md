@@ -173,7 +173,8 @@ source binding, reuses it across matching references, and allocates fresh thunks
 on the next invocation. These bindings need no runtime type key. Generic constrained
 uses and other unsupported generalized result shapes still emit legacy evaluator
 helpers; those outputs do not yet meet the construction-only contract enforced
-by the test suite.
+by the test suite. The remaining polymorphic-local limitation is tracked in
+[issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3).
 
 ## Architecture Overview
 

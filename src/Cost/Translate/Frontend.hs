@@ -306,6 +306,12 @@ data NamePlan = NamePlan
     , plannedSpecializations :: Map.Map Name [(Type, String)]
     }
 
+plannedTemporaryNames :: NamePlan -> [String]
+plannedTemporaryNames plan = concat (Map.elems (plannedArguments plan)) ++
+    Map.elems (plannedActions plan) ++ Map.elems (plannedFields plan) ++
+    Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan) ++
+    Map.elems (plannedBodies plan) ++ concatMap (map snd) (Map.elems (plannedSpecializations plan))
+
 lookupEnv :: Name -> Env -> Maybe Binding
 lookupEnv name = Map.lookup name . envBindings
 
@@ -351,10 +357,7 @@ occupiedNames env = fixedReservedNames `Set.union` Set.fromList
                                       expression <- case binding of { Thunk thunk -> [thunk]; SpecializedThunks thunks -> map snd thunks; _ -> [] },
                                       name <- collect expression :: [RdrName]] ++
      [name | Function name _ <- Map.elems (envBindings env), simpleIdentifier name] ++
-     concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
-     Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan) ++
-     Map.elems (plannedBodies plan) ++ concatMap (map snd) (Map.elems (plannedSpecializations plan)))
-  where plan = namePlan env
+     plannedTemporaryNames (namePlan env))
 
 emitBind :: Env -> LHsBind GhcRn -> Either String O.Decl
 emitBind outer binding = case unLoc binding of
@@ -1047,9 +1050,7 @@ partialName :: Env -> Int -> String
 partialName env target = choose target (0 :: Int)
   where
     used = Set.fromList (Map.elems (plannedLocals plan) ++ Map.elems (plannedParameters plan) ++
-        concat (Map.elems (plannedArguments plan)) ++ Map.elems (plannedActions plan) ++
-        Map.elems (plannedFields plan) ++ Map.elems (plannedMatches plan) ++ Map.elems (plannedAnchors plan) ++
-        Map.elems (plannedBodies plan) ++ concatMap (map snd) (Map.elems (plannedSpecializations plan)))
+        plannedTemporaryNames plan)
     plan = namePlan env
     choose remaining count
         | candidate `Set.member` used = choose remaining (count + 1)
