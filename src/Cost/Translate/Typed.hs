@@ -1,5 +1,5 @@
 module Cost.Translate.Typed
-    ( expressionTypes, FunctionType(..), functionTypes, scopedVariables
+    ( expressionTypes, expressionTypeAt, FunctionType(..), functionTypes, scopedVariables
     , hasFreeVariables, hasFreshAnnotationVariables
     ) where
 
@@ -33,6 +33,15 @@ expressionTypes session checked source typed = do
     interesting HsVar {} = True
     interesting ExprWithTySig {} = True
     interesting _ = False
+
+expressionTypeAt :: [LHsExpr GhcRn] -> Map.Map String Type -> LHsExpr GhcRn -> Maybe Type
+expressionTypeAt source hints = select
+  where
+    locations = Map.fromListWith (+) [(location expression, 1 :: Int) | expression <- source]
+    select expression = case getLocA expression of
+        RealSrcSpan {} | Map.lookup (location expression) locations == Just 1 -> Map.lookup (location expression) hints
+        _ -> Nothing
+    location = showSDocUnsafe . ppr . getLocA
 
 data FunctionType = FunctionType
     { functionDeclaredType :: Type

@@ -15,9 +15,9 @@ import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import GHC.Types.Var (tyVarKind)
 import GHC.Types.Var.Set (isEmptyVarSet)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
-import Cost.Translate.Callable (spine)
+import Cost.Translate.Callable (spine, expressions)
 import Cost.Translate.Sharing (constrainedVariables)
-import Cost.Translate.Typed (FunctionType(..))
+import Cost.Translate.Typed (FunctionType(..), expressionTypeAt)
 import Cost.Translate.Validation (scalarType)
 import Control.Monad (unless)
 import Data.Data (Data, cast, gmapQ)
@@ -26,10 +26,17 @@ import Data.Maybe (maybeToList)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
+data HelperSpecialization = HelperSpecialization
+    { specializedHelper :: Name
+    , helperOwnedVariable :: TyVar
+    , helperInstantiation :: Type
+    , helperQualifiedType :: Type
+    }
+
 specializeHelpers :: HsGroup GhcRn -> Map.Map Name FunctionType -> Map.Map String Type
     -> (Map.Map Name Type, Type -> Type)
 specializeHelpers group checked hints =
-    (Map.fromList [(name, adjust qualified) | (name, _, _, qualified) <- planned], adjust)
+    (Map.fromList [(specializedHelper result, adjust (helperQualifiedType result)) | result <- planned], adjust)
   where
     bindings = collect group :: [LHsBind GhcRn]
     sourceExpressions = collect group :: [LHsExpr GhcRn]
@@ -57,21 +64,19 @@ specializeHelpers group checked hints =
                          variable <- functionVariables info]
             in (unLoc name, variables) : concat (gmapQ (scopes (variables ++ owned)) (unLoc binding))
         _ -> concat (gmapQ (scopes variables) syntax)
-    locations = Map.fromListWith (+) [(location expression, 1 :: Int) | expression <- sourceExpressions]
     uses = Map.fromListWith (++) [(unLoc name, [(location expression, useType expression)]) |
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
-    useType expression = case getLocA expression of
-        RealSrcSpan {} | Map.lookup (location expression) locations == Just 1 -> Map.lookup (location expression) hints
-        _ -> Nothing
+    useType = expressionTypeAt sourceExpressions hints
     calls = Map.fromListWith (++) [((unLoc name, location function), [length arguments]) |
         expression@(L _ HsApp {}) <- expressions group,
         let (function, arguments) = spine expression, HsVar _ name <- [unLoc function]]
     planned = discover [] candidates
     adjust = substitute planned
-    substitute plan ty = foldl (\current (_, owned, actual, _) -> substTyWith [owned] [actual] current) ty plan
+    substitute plan ty = foldl (\current result ->
+        substTyWith [helperOwnedVariable result] [helperInstantiation result] current) ty plan
     discover plan remaining = case [result | candidate <- remaining, Just result <- [specialization plan candidate]] of
         [] -> plan
-        result@(name, _, _, _) : _ -> discover (plan ++ [result]) (filter (\(other, _, _) -> other /= name) remaining)
+        result : _ -> discover (plan ++ [result]) (filter (\(other, _, _) -> other /= specializedHelper result) remaining)
     specialization plan (name, count, info) = do
         let normalize = substitute plan
             ty = normalize (functionDeclaredType info)
@@ -92,10 +97,15 @@ specializeHelpers group checked hints =
         checkedOwned <- match variable tau body
         unless (checkedOwned `eqType` mkTyVarTy owned) Nothing
         unless (renderingSafe plan name actual) Nothing
-        pure (name, owned, actual, substTyWith [variable] [actual] (snd (splitForAllTyVars ty)))
+        pure HelperSpecialization
+            { specializedHelper = name
+            , helperOwnedVariable = owned
+            , helperInstantiation = actual
+            , helperQualifiedType = substTyWith [variable] [actual] (snd (splitForAllTyVars ty))
+            }
     renderingSafe plan name actual = all safe (nonDetEltsUniqSet (tyCoVarsOfType actual))
       where
-        removed = Set.fromList (name : [selected | (selected, _, _, _) <- plan])
+        removed = Set.fromList (name : map specializedHelper plan)
         emitted owner = [variable | owner `Set.notMember` removed,
             Just info <- [Map.lookup owner checked], variable <- functionVariables info]
         ancestorOwners = reverse (Map.findWithDefault [] name lexical)
@@ -130,10 +140,3 @@ location = showSDocUnsafe . ppr . getLocA
 
 collect :: (Data a, Data b) => b -> [a]
 collect value = maybeToList (cast value) ++ concat (gmapQ collect value)
-
-expressions :: Data a => a -> [LHsExpr GhcRn]
-expressions value = case cast value of
-    Just expression -> expression : case unLoc expression of
-        HsApp {} -> let (function, arguments) = spine expression in concatMap expressions (function : arguments)
-        _ -> concat (gmapQ expressions (unLoc expression))
-    Nothing -> concat (gmapQ expressions value)

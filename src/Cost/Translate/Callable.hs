@@ -1,4 +1,4 @@
-module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine) where
+module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine, expressions) where
 
 import GHC
 import GHC.Types.Name (getOccString, nameModule_maybe)
@@ -6,6 +6,7 @@ import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import Control.Monad (unless, replicateM, zipWithM)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
+import Data.Data (Data, cast, gmapQ)
 import qualified Cost.Translate.Output as O
 
 type Resolver = Name -> Maybe (O.Expr, Int)
@@ -23,6 +24,13 @@ spine expr = case unLoc expr of
     HsPar _ e -> spine e
     ExprWithTySig _ e _ -> spine e
     _ -> (expr, [])
+
+expressions :: Data a => a -> [LHsExpr GhcRn]
+expressions value = case cast value of
+    Just expr -> expr : case unLoc expr of
+        HsApp {} -> let (fun,args) = spine expr in concatMap expressions (fun:args)
+        _ -> concat (gmapQ expressions (unLoc expr))
+    Nothing -> concat (gmapQ expressions value)
 
 view :: LHsExpr GhcRn -> Either String (Head, [LHsExpr GhcRn])
 view expr = case spine expr of

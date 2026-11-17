@@ -24,7 +24,7 @@ import Cost.Translate.Pretty
 import qualified Cost.Translate.Output as O
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Sharing (constrainedVariables, specializedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport)
-import Cost.Translate.Callable (callArity, emitCallable, isComposition, spine)
+import Cost.Translate.Callable (callArity, emitCallable, isComposition, spine, expressions)
 import Cost.Translate.Diagnostic (Diagnostic(..))
 import Cost.Translate.Typed (hasFreeVariables, hasFreshAnnotationVariables)
 import qualified Cost.Translate.Typed as Typed
@@ -186,14 +186,9 @@ emitModule target source magicHash datatypes originalTypes literalTypes hints ch
         map snd (selectors datatypes))
     sourceBinds = collect group :: [LHsBind GhcRn]
     sourceExpressions = collect group :: [LHsExpr GhcRn]
-    expressionLocations = Map.fromListWith (+)
-        [(showSDocUnsafe (ppr (getLocA expression)), 1 :: Int) | expression <- sourceExpressions]
     useTypes = Map.fromListWith (++)
         [(unLoc name, [useType expression]) | expression@(L _ (HsVar _ name)) <- sourceExpressions]
-    useType expression = case getLocA expression of
-        RealSrcSpan {} | Map.lookup location expressionLocations == Just 1 -> Map.lookup location adjustedHints
-        _ -> Nothing
-      where location = showSDocUnsafe (ppr (getLocA expression))
+    useType = Typed.expressionTypeAt sourceExpressions adjustedHints
     allocationVariables = Map.fromList (allocationScopes [] group)
     allocationScopes :: Data a => [TyVar] -> a -> [(Name, [TyVar])]
     allocationScopes variables syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
@@ -235,13 +230,6 @@ locatedAt srcSpan = either (Left . ((showSDocUnsafe (ppr srcSpan) ++ ": ") ++)) 
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)
-
-expressions :: Data a => a -> [LHsExpr GhcRn]
-expressions value = case cast value of
-    Just expr -> expr : case unLoc expr of
-        HsApp {} -> let (fun,args) = spine expr in concatMap expressions (fun:args)
-        _ -> concat (gmapQ expressions (unLoc expr))
-    Nothing -> concat (gmapQ expressions value)
 
 identity :: Name -> String
 identity n = maybe "local" (moduleNameString . moduleName) (nameModule_maybe n) ++ "." ++ getOccString n
