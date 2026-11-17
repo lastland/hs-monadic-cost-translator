@@ -1,19 +1,21 @@
 module Cost.Translate.Sharing (constrainedVariables, specializedSharing, sharingType, nativeSharing, nativeSharingSupport, sharingPaths, sharingSupport) where
 
 import GHC
-import GHC.Builtin.Types (liftedTypeKind, listTyCon, maybeTyCon)
+import GHC.Builtin.Types (liftedTypeKind, listTyCon, maybeTyCon, tupleTyCon)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitFunTy_maybe, splitTyConApp_maybe, splitAppTy_maybe, getTyVar_maybe, isPredTy, mkTyVarTy, substTyWith)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.Types.Var (setVarName, tyVarKind)
+import GHC.Types.Basic (Boxity(..))
 import GHC.Types.Name (getOccString, mkInternalName)
 import GHC.Types.Name.Occurrence (mkTyVarOcc)
 import GHC.Types.Unique (getUnique)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Cost.Translate.Validation (scalarType)
+import Control.Monad (zipWithM)
 import Data.List (minimumBy, nubBy)
 import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
@@ -47,10 +49,15 @@ specializedSharing scopeVariables ty uses
     resultParameter = parameter result
     parameter shape value
         | Just _ <- getTyVar_maybe shape = Just value
-        | Just (constructor, [element]) <- splitTyConApp_maybe shape
-        , constructor `elem` [maybeTyCon, listTyCon]
-        , Just (actualConstructor, [actualElement]) <- splitTyConApp_maybe value
-        , actualConstructor == constructor = parameter element actualElement
+        | Just (constructor, elements) <- splitTyConApp_maybe shape
+        , constructor `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2]
+        , Just (actualConstructor, actualElements) <- splitTyConApp_maybe value
+        , actualConstructor == constructor
+        , length actualElements == length elements = do
+            parameters <- nubBy eqType <$> zipWithM parameter elements actualElements
+            case parameters of
+                [element] -> Just element
+                _ -> Nothing
         | otherwise = Nothing
     closedResult value = maybe False closedScalar (resultParameter value)
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value

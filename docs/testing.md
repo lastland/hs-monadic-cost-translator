@@ -227,6 +227,22 @@ and first-head demands cost two and four respectively, without forcing the tail.
 Bottom counts remain safe through `Maybe`-root demand. Broken-head and
 broken-tail probes distinguish demanded fields from suspended failures.
 
+The `constrained-maybe-tuple` fixture uses a shared `Just (expensive 5,
+expensive 5)` twice at one scoped abstract type. Its generic callers retain only
+`Eq`, `Num`, and `Scalar`, without `Typeable`. Corresponding fields share across
+the two views, but the left and right tuple fields are distinct computations.
+Full demand returns eight at cost five: one caller entry plus two entries for
+each field's work. Demanding one tuple position costs three; inspecting only
+`Maybe` or tuple constructors costs one. Identity probes inspect thunk names
+without demanding the scalar fields. Matching checks builtin boxed pairs and
+requires every occurrence of the result parameter to agree, while retaining the
+complete `Maybe (a, a)` type as the specialization key.
+Fresh calls cost five ticks each; repeated demands on a cached call cost five
+in total. Relative names remain shared across corresponding fields and disjoint
+between invocations. Separate broken-tuple, broken-left, and broken-right cases
+check that each constructor and unaffected field can be demanded safely, while
+demanding the broken field raises.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild
