@@ -5,7 +5,7 @@ import GHC.Core.Utils (exprType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Var (Var)
-import GHC.Types.Var.Set (isEmptyVarSet)
+import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types.Evidence (HsWrapper(..))
@@ -31,12 +31,16 @@ expressionTypes session checked source typed = do
 
 scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
 scopedVariables checked = Map.fromList
-    [(getName (abe_poly export), wrapperVariables wrapper) |
+    [(getName (abe_poly export), variables abstraction export wrapper) |
      abstraction <- checkedAbstractions (tm_typechecked_source checked),
-     abs_sig abstraction,
      export <- abs_exports abstraction,
      L _ (FunBind (wrapper,_) identifier _) <- bagToList (abs_binds abstraction),
      unLoc identifier == abe_mono export]
+  where
+    variables abstraction export wrapper
+        | abs_sig abstraction = wrapperVariables wrapper
+        | otherwise = [variable | variable <- abs_tvs abstraction,
+            variable `elemVarSet` tyCoVarsOfType (idType (abe_mono export))]
 
 checkedAbstractions :: Data a => a -> [AbsBinds]
 checkedAbstractions value

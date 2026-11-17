@@ -170,11 +170,10 @@ Dictionary-sensitive locals also use native allocation when their single
 generalized type parameter is the whole result and every reference has
 unambiguous type evidence. Closed scalar references receive one thunk per type
 and source binding. References all using one abstract type also share a native
-thunk when that type is visible through an enclosing function's complete
-signature with an explicit `forall`, including signed local helpers. Allocation
-stays where the source value is declared: each helper invocation creates fresh
-helper-local thunks. These bindings need no runtime type keys or added reflection
-constraints.
+thunk when that type is available in the declaration's enclosing function scope.
+This includes explicitly typed and inferred helpers. Allocation stays where the
+source value is declared: each helper invocation creates fresh helper-local
+thunks. These bindings need no runtime type keys or added reflection constraints.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those

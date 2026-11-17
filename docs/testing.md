@@ -166,6 +166,18 @@ identities between helper calls. They also check partial demand: skipping both
 helper results costs one tick, while demanding their roots without scalar fields
 costs three. The original single-helper probes retain their separate expectations.
 
+The `constrained-helper-inferred` fixture exercises an unsigned helper whose
+fresh type variable comes from GHC's inferred binding group. Its generic caller
+requires no `Typeable`. Both arithmetic result fields reuse one producer, so full
+demand costs eight ticks and skipping both fields costs two. The field thunks
+themselves are distinct; demanded costs observe sharing of the producer beneath
+them. Lexical ownership includes only group binders occurring in that helper's
+checked monotype, not every variable generalized for its sibling bindings.
+Two calls to the inferred helper within one outer invocation cost fifteen ticks;
+skipping both calls costs one, and demanding their roots without arithmetic
+fields costs three. These probes detect a producer incorrectly shared between
+helper invocations even when the output field thunks remain distinct.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

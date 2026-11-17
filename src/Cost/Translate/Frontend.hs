@@ -191,13 +191,10 @@ emitModule target source magicHash datatypes types literalTypes expressionTypes 
         _ -> Nothing
       where location = showSDocUnsafe (ppr (getLocA expression))
     allocationVariables = Map.fromList (allocationScopes [] group)
-    explicitOwners = Set.fromList
-        [unLoc name | L _ (TypeSig _ names signature) <- collect group :: [LSig GhcRn],
-         HsOuterExplicit {} <- [sig_bndrs (unLoc (hswc_body signature))], name <- names]
     allocationScopes :: Data a => [TyVar] -> a -> [(Name, [TyVar])]
     allocationScopes variables syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
         Just binding@(L _ (FunBind _ name matches)) ->
-            let scoped = if arity matches > 0 && unLoc name `Set.member` explicitOwners
+            let scoped = if arity matches > 0
                     then Map.findWithDefault [] (unLoc name) checkedVariables else []
             in (unLoc name, variables) : concat (gmapQ (allocationScopes (variables ++ scoped)) (unLoc binding))
         _ -> concat (gmapQ (allocationScopes variables) syntax)
