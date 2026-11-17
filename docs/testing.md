@@ -137,8 +137,7 @@ dictionary-sensitive local used at closed scalar types. Its original handwritten
 reference allocates separate `Int` and `Integer` thunks inside each call. The
 generated implementation uses GHC's instantiated expression types to select and
 reuse the corresponding native thunks; it does not run computations or construct
-runtime names. Missing or ambiguous type evidence, generic uses, and other result
-shapes are not eligible for this lowering.
+runtime names. Missing or ambiguous type evidence prevents native specialization.
 
 The `constrained-local-demand` fixture repeats each dictionary specialization,
 distinguishes separate source bindings, and checks freshness between invocations.
@@ -188,6 +187,18 @@ runtime names, plus fresh identities across calls that reuse caller inputs.
 Fresh calls pay four ticks each; repeated demands on an explicitly cached call
 pay four in total. Skipped bottom counts and suspended payload failures remain
 safe, while demanding either failure must raise.
+
+The `constrained-maybe-abstract` fixture uses the same `Maybe` local twice at one
+scoped abstract element type. Its generic caller requires only the existing
+`Eq`, `Num`, and `Scalar` constraints, not `Typeable`. Both `Int` and `Integer`
+callers compare against an independent native reference. Full `Just` demand
+costs four ticks, root-only demand costs two, and skipping both roots costs one.
+The generated allocation keeps the complete `Maybe a` type; eligibility checks
+the element's checked lexical binder rather than its printed name. Repeated fresh
+calls pay four ticks each, while repeated demands on a cached call pay four in
+total. Relative root/payload identities remain shared within each invocation and
+disjoint between invocations. Bottom counts and suspended payload failures remain
+safe when skipped and raise when demanded.
 
 ## Private Runtime Allocator
 

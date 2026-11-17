@@ -15,7 +15,6 @@ import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder, visibleArguments)
 import Cost.Translate.Validation (scalarType)
 import Data.List (minimumBy, nubBy)
-import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 import qualified Data.Map.Strict as Map
 import qualified Cost.Translate.Output as O
@@ -32,22 +31,23 @@ specializedSharing scopeVariables ty uses
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
     , all (isPredTy . scaledThing) arguments
-    , Just resultVariable <- getTyVar_maybe (fromMaybe result (maybeElement result))
+    , Just resultVariable <- resultParameter result >>= getTyVar_maybe
     , resultVariable == variable
     , not (null uses) = do
         types <- sequence uses
         let distinct = nubBy eqType types
         if all closedResult types then Just distinct else case distinct of
-            [value] | Just _ <- getTyVar_maybe result
-                    , Just scoped <- getTyVar_maybe value, scoped `elem` scopeVariables -> Just distinct
+            [value] | Just scoped <- resultParameter value >>= getTyVar_maybe
+                    , scoped `elem` scopeVariables -> Just distinct
             _ -> Nothing
     | otherwise = Nothing
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
-    closedResult value = case maybeElement result of
-        Just _ -> maybe False closedScalar (maybeElement value)
-        Nothing -> closedScalar value
+    resultParameter value = case maybeElement result of
+        Just _ -> maybeElement value
+        Nothing -> Just value
+    closedResult value = maybe False closedScalar (resultParameter value)
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
     maybeElement value = case splitTyConApp_maybe value of
         Just (constructor, [element]) | constructor == maybeTyCon -> Just element
