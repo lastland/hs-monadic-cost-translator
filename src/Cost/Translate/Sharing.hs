@@ -44,9 +44,11 @@ specializedSharing scopeVariables ty uses
   where
     (vars, body) = splitForAllTyVars ty
     (arguments, result) = splitFunTys body
-    resultParameter value = case maybeElement result of
-        Just _ -> maybeElement value
-        Nothing -> Just value
+    resultParameter = parameter result
+    parameter shape value
+        | Just _ <- getTyVar_maybe shape = Just value
+        | Just element <- maybeElement shape = maybeElement value >>= parameter element
+        | otherwise = Nothing
     closedResult value = maybe False closedScalar (resultParameter value)
     closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value
     maybeElement value = case splitTyConApp_maybe value of

@@ -200,6 +200,19 @@ total. Relative root/payload identities remain shared within each invocation and
 disjoint between invocations. Bottom counts and suspended payload failures remain
 safe when skipped and raise when demanded.
 
+The `constrained-maybe-nested` fixture returns a shared `Maybe (Maybe a)` twice
+at one scoped abstract type. Its generic caller keeps the existing `Eq`, `Num`,
+and `Scalar` constraints without `Typeable`. The reference shares the outer
+root, inner root, and scalar leaf. Outer-root demand costs one tick, inner-root
+demand costs two, and full `Just (Just ...)` demand costs four. A fully demanded
+`Just Nothing` costs two. Matching follows builtin `Maybe` constructors at every
+level while retaining the complete nested type as the specialization key.
+Relative identity probes check all three thunk levels within and between calls.
+Fresh calls pay four ticks each; repeated demands on a cached call pay four in
+total. An undefined count remains safe through outer-root demand, while demanding
+the inner root raises. Separate broken-inner and broken-leaf cases check that
+each enclosing constructor can be demanded without forcing the next field.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild
