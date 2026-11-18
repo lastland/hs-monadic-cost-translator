@@ -81,6 +81,14 @@ library
         Cost.Translate.Typed
         Cost.Translate.Specialize
         Cost.Translate.Output
+        Cost.Translate.Output.Ast
+        Cost.Translate.Output.Binders
+        Cost.Translate.Output.Declarations
+        Cost.Translate.Output.Expressions
+        Cost.Translate.Output.Modules
+        Cost.Translate.Output.Patterns
+        Cost.Translate.Output.Statements
+        Cost.Translate.Output.Types
     build-depends:
         base >=4.18 && <5,
         ghc ==9.10.3,
