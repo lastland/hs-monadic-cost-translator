@@ -9,10 +9,12 @@ identity rather than reallocating a binding at each reference.
 Module-level zero-argument values are currently emitted as ordinary monadic
 actions so every source function remains directly callable without an initializer
 or environment argument. Executing those actions again does not retain their
-earlier results. Source-global sharing costs are a temporarily accepted Memorist
-limitation tracked in
-[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2), not a
-change to the source cost model or permission to weaken local sharing.
+earlier results. Source-global sharing costs and thunk identity are a temporarily
+accepted Memorist limitation tracked in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2), with
+the identity scope confirmed in
+[issue #4](https://github.com/lastland/hs-monadic-cost-translator/issues/4). This
+does not change the source cost model or weaken local sharing or local identities.
 
 For function applications, use resolved definitions, inferred types, explicit
 parameter counts, supplied argument counts, and supported library conventions.
