@@ -5,18 +5,23 @@ import GHC
 import Control.Monad (unless, when, zipWithM)
 import Control.Monad.IO.Class (liftIO)
 import GHC.Builtin.Types (unitDataCon)
-import GHC.Data.Bag (bagToList, listToBag)
+import GHC.Data.Bag (bagToList, listToBag, unitBag)
 import GHC.Paths (libdir)
 import GHC.Driver.Session (xopt)
 import qualified GHC.LanguageExtensions.Type as Extension
 import GHC.Types.Name (nameModule_maybe, getOccString)
 import GHC.Types.Name.Set (elemNameSet)
-import GHC.Types.Basic (RecFlag(..), Boxity(..))
-import GHC.Types.Var (varName, isId)
+import GHC.Types.Basic (RecFlag(..), Boxity(..), isDefaultInlinePragma)
+import GHC.Types.Var (varName, isId, isNonCoVarId)
+import GHC.Types.Id (idInlinePragma)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCo.FVs (tyCoVarsOfTypes)
+import qualified GHC.Core as Core
+import GHC.Core.Utils (exprIsHNF)
+import GHC.HsToCore.Binds (dsLHsBinds)
+import GHC.HsToCore.Monad (initDs)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
@@ -64,6 +69,7 @@ generate file targetModule = runGhc (Just libdir) $ do
             hints <- case tm_renamed_source checked of
                 Just (group,_,_,_,_) -> liftIO (Typed.expressionTypes session checked (expressions group) (collect (tm_typechecked_source checked)))
                 Nothing -> pure Map.empty
+            strictValues <- liftIO (strictWhnfBindings session checked)
             pure $ case tm_renamed_source checked of
                 Just (group, imports, _, _, _) ->
                     let types = Map.fromList [(varName i, idType i) | AnId i <- modInfoTyThings (tm_checked_module_info checked)] `Map.union`
@@ -77,7 +83,7 @@ generate file targetModule = runGhc (Just libdir) $ do
                               (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes hints
                               (Typed.functionTypes checked)
                         (original, logs) = emit group
-                        pruned = pruneLocals group
+                        pruned = pruneLocals strictValues group
                         changed = length (collect pruned :: [LHsBind GhcRn]) /= length (collect group :: [LHsBind GhcRn])
                         result = if changed then original >> fst (emit pruned) else original
                         validation = do
@@ -104,8 +110,33 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
 
-pruneLocals :: Data a => a -> a
-pruneLocals syntax
+strictWhnfBindings :: HscEnv -> TypecheckedModule -> IO (Set.Set Name)
+strictWhnfBindings session checked = do
+    (_, result) <- initDs session (fst (tm_internals_ checked)) $
+        Map.traverseWithKey prove candidates
+    pure (maybe Set.empty (Map.keysSet . Map.filter id) result)
+  where
+    strict = Set.fromList [name | (group,_,_,_,_) <- maybeToList (tm_renamed_source checked),
+        name <- strictBindNames (collect group)]
+    candidates = Map.fromListWith (++)
+        [(getName (abe_poly export), [binding]) |
+         binding@(L _ (XHsBindsLR abstraction)) <- collect (tm_typechecked_source checked) :: [LHsBind GhcTc],
+         export <- abs_exports abstraction, getName (abe_poly export) `Set.member` strict]
+    prove name [binding] = do
+        (forced, pairs) <- dsLHsBinds (unitBag binding)
+        pure $ case [(identifier,rhs) | (identifier,rhs) <- pairs, getName identifier == name] of
+            [(identifier,rhs)] -> isDefaultInlinePragma (idInlinePragma identifier) &&
+                name `elem` map getName forced && exprIsHNF rhs &&
+                any isNonCoVarId (fst (Core.collectBinders rhs))
+            _ -> False
+    prove _ _ = pure False
+
+strictBindNames :: [LHsBind GhcRn] -> [Name]
+strictBindNames bindings = [unLoc name | L _ (FunBind _ name matches) <- bindings,
+    L _ Match { m_ctxt = FunRhs { mc_strictness = SrcStrict } } <- unLoc (mg_alts matches)]
+
+pruneLocals :: Data a => Set.Set Name -> a -> a
+pruneLocals strictValues syntax
     | Just (HsLet ext locals body) <- cast nested :: Maybe (HsExpr GhcRn)
     , Just result <- cast (HsLet ext (keep body locals) body :: HsExpr GhcRn) = result
     | Just (GRHSs ext bodies locals) <- cast nested :: Maybe (GRHSs GhcRn (LHsExpr GhcRn))
@@ -114,7 +145,7 @@ pruneLocals syntax
     , Just result <- cast (GRHS ext (guards body statements) body :: GRHS GhcRn (LHsExpr GhcRn)) = result
     | otherwise = nested
   where
-    nested = gmapT pruneLocals syntax
+    nested = gmapT (pruneLocals strictValues) syntax
     references :: Data b => b -> [Name]
     references value = [unLoc name | HsVar _ name <- collect value :: [HsExpr GhcRn]]
     keep :: Data b => b -> HsLocalBinds GhcRn -> HsLocalBinds GhcRn
@@ -125,8 +156,7 @@ pruneLocals syntax
         (graph, node, vertex) = graphFromEdges
             [(unLoc name, unLoc name, nub (filter (`elemNameSet` free) (references matches))) |
              L _ (FunBind free name matches) <- bindings]
-        strict = [unLoc name | L _ (FunBind _ name matches) <- bindings,
-            L _ Match { m_ctxt = FunRhs { mc_strictness = SrcStrict } } <- unLoc (mg_alts matches)]
+        strict = filter (`Set.notMember` strictValues) (strictBindNames bindings)
         live = Set.fromList [name | root <- strict ++ references body, Just start <- [vertex root],
             reached <- reachable graph start, let (name,_,_) = node reached]
         wanted (L _ (FunBind _ name _)) = unLoc name `Set.member` live
