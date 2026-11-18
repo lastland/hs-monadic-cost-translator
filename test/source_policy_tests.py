@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -748,9 +749,13 @@ class WorkingCheckoutScripts(unittest.TestCase):
                 self.assertEqual((root / "src/Other.hs").read_bytes(), untouched)
 
     def test_validate_discovers_compiler_using_newline_checkout_configuration(self) -> None:
+        selection_environment = dict(os.environ)
+        selected_compiler = os.environ.get("SOURCE_POLICY_TEST_GHC")
+        if selected_compiler is not None:
+            selection_environment["GHC"] = selected_compiler
         selected = subprocess.run(
             ["/bin/sh", str(ROOT / "scripts/validate.sh"), "--print-compiler"],
-            capture_output=True, text=True, check=False, timeout=120,
+            env=selection_environment, capture_output=True, text=True, check=False, timeout=120,
         )
         self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
         compiler = selected.stdout.removesuffix("\n")
@@ -763,10 +768,15 @@ class WorkingCheckoutScripts(unittest.TestCase):
             (tools / name).symlink_to(executable)
         log = self.directory / "stack arguments.json"
         stack = tools / "stack"
-        stack.write_text(
-            "#!" + sys.executable + "\nimport json\nfrom pathlib import Path\nimport sys\n"
+        stack_fixture = tools / "stack fixture.py"
+        stack_fixture.write_text(
+            "import json\nfrom pathlib import Path\nimport sys\n"
             "log: Path = Path(" + repr(str(log)) + ")\n"
             "log.write_text(json.dumps(sys.argv[1:]))\nprint(" + repr(compiler) + ")\n"
+        )
+        stack.write_text(
+            "#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+            + shlex.quote(str(stack_fixture)) + ' "$@"\n'
         )
         stack.chmod(0o755)
         environment = dict(os.environ, PATH=str(tools))
