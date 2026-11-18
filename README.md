@@ -198,9 +198,16 @@ determine dictionaries, occur in the result, and instantiate to closed scalars.
 The complete result type must be closed and follow the same container matching
 rules. Repeated uses at one complete type share a thunk; changing any parameter
 selects a distinct thunk, even when only fields of the unchanged parameters are
-demanded. RHS captures keep
-their enclosing scope and caller constraints. Unconstrained parameters and open
-results do not qualify for this multiple-parameter path.
+demanded. RHS captures keep their enclosing scope and caller constraints.
+Unconstrained parameters and open results do not qualify for this
+multiple-parameter path.
+
+Dictionary evidence must also be available where the local thunk is allocated.
+A closed result does not guarantee this: a constraint such as `Num Bool` may
+exist only inside an unused nested helper. Such sources can currently fail
+generated-code verification even when GHC accepts the source. This
+dictionary-scope limitation is separate from potentially overlapping
+instantiations.
 
 For a local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked
