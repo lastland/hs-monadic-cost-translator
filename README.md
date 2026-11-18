@@ -167,13 +167,13 @@ agree; other unconstrained type parameters do not split sharing. Top-level
 actions use the dictionaries selected at each use but do not retain a shared
 result across uses.
 
-For unconstrained local values whose generalized result is a type variable
-wrapped in lists or `Maybe` in any nesting, the translator uses one native
-allocation. A bare type-variable result is also supported. Each generalized
-parameter must have kind `Type`. Pure representation conversions retain the root
-and field thunk identities across type instantiations, including `Int` and
-`Bool` views of one `Maybe` value. These conversions leave unused payloads
-unforced. Each function invocation still allocates fresh local thunks.
+For unconstrained local values, one native allocation supports generalized
+`Type` variables under lists, builtin `Maybe`, and boxed pairs in any nesting.
+A bare type-variable result is also supported. Pair parameters can vary
+independently, as in `(a, b)`, while fixed or captured fields retain their types
+and aliases. Pure representation conversions preserve root and field thunk
+identities across type instantiations without forcing unused payloads. Each
+function invocation still allocates fresh local thunks.
 
 Dictionary-sensitive locals also use native allocation when they have one
 generalized type parameter determining their dictionaries and every reference

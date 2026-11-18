@@ -113,6 +113,15 @@ nativeSharing datatypes renamings ty
                 [(O.conP "M.NothingT" [], O.v "M.NothingT"),
                  (O.conP "M.JustT" [O.p "payload"],
                   O.call "M.JustT" [O.call "mapThunk" [convert, O.v "payload"]])]))
+        | Just (constructor, [left, right]) <- splitTyConApp_maybe value
+        , constructor == tupleTyCon Boxed 2 = do
+            convertLeft <- mapper left
+            convertRight <- mapper right
+            pure (O.lam [O.p "pairValue"] (O.caseE (O.v "pairValue")
+                [(O.conP "M.PairT" [O.p "leftPayload", O.p "rightPayload"],
+                  O.call "M.PairT"
+                    [O.call "mapThunk" [convertLeft, O.v "leftPayload"],
+                     O.call "mapThunk" [convertRight, O.v "rightPayload"]])]))
         | otherwise = Nothing
 
 nativeSharingSupport :: Bool -> [O.Decl]

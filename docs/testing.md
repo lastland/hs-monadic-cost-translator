@@ -158,6 +158,19 @@ applies the otherwise unused bottom function. Boolean payload probes consume the
 forced `Bool`. Captured source names `maybeValue` and `payload` deliberately match
 the pure converter's local names, checking that conversion does not capture them.
 
+The `polymorphic-local-pair` fixture covers unconstrained `(a, b)` and `(a, a)`
+locals, captured `(a, t)` fields, and nested list/Maybe/pair combinations. Both
+generic callers are constraint-free. Its 48 probes comprise 19 costed
+computations, eight identity/annotation snapshots, and 21 demanded failures.
+Two views of one pair return two root tags at cost three; repeated root demands
+keep that cost, while distinct equal-RHS bindings cost five. Fresh calls reuse
+the same paid caller thunks but retain disjoint local names. Captured fields keep
+their caller identities across views and invocations. Nested partial demands
+cost two, three, three, or four, and all nine nested identities remain shared
+across type instantiations. Int and Bool bottoms are actually consumed when
+demanded. The source-specific native reference uses finite unit-token/bottom
+carriers, not a generic pair converter or the translator's allocation algorithm.
+
 The `constrained-sharing-local` fixture checks native allocation for a
 dictionary-sensitive local used at closed scalar types. Its original handwritten
 reference allocates separate `Int` and `Integer` thunks inside each call. The
