@@ -28,6 +28,10 @@ probes =
         input <- M.lazy (M.tick >> pure (number s))
         result <- M.lazy (generic input)
         sum <$> replicateM (repeats s) (unit <$> M.force result)
+    , scalarSource "unused/strict-call" (const 0) $ \_ -> do
+        input <- M.lazy (pure (undefined :: Int))
+        _ <- M.lazy (generic input)
+        pure 0
     , scalarSource "bottom/int" (const (unit (Source.views (undefined :: Int))))
         (const (call (undefined :: Int)))
     , scalarSource "bottom/integer" (const (unit (Source.views (undefined :: Integer))))
