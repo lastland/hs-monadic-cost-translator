@@ -1,15 +1,15 @@
 module Cost.Translate (translateFile, generatedName) where
 
 import Control.Exception (SomeException, displayException, try)
-import Cost.Translate.Frontend (generate)
 import Cost.Translate.Diagnostic (renderDiagnostic)
+import Cost.Translate.Frontend (generate)
 import Cost.Translate.Names (generatedName)
+import Data.List (isInfixOf)
 import System.Directory (renameFile)
-import System.Exit (ExitCode(..))
+import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, takeDirectory, (</>))
 import System.IO.Temp (withTempDirectory)
 import System.Process (readProcessWithExitCode)
-import Data.List (isInfixOf)
 
 translateFile :: FilePath -> FilePath -> IO (Either String ())
 translateFile source output = do
@@ -22,8 +22,20 @@ translateFile source output = do
             withTempDirectory (takeDirectory output) ".cost-translate-" $ \temp -> do
                 let candidate = temp </> takeBaseName output ++ ".hs"
                 writeFile candidate code
-                (status, out, err) <- readProcessWithExitCode "ghc"
-                    ["-v0", "-fno-code", "-fforce-recomp", "-i" ++ takeDirectory source, "-package", "MemoristANT", "-package", "QuickCheck", candidate] ""
+                (status, out, err) <-
+                    readProcessWithExitCode
+                        "ghc"
+                        [ "-v0"
+                        , "-fno-code"
+                        , "-fforce-recomp"
+                        , "-i" ++ takeDirectory source
+                        , "-package"
+                        , "MemoristANT"
+                        , "-package"
+                        , "QuickCheck"
+                        , candidate
+                        ]
+                        ""
                 appendFile logPath (out ++ err)
                 case status of
                     ExitSuccess -> do
@@ -32,11 +44,14 @@ translateFile source output = do
                         pure (Right ())
                     ExitFailure _ -> do
                         appendFile logPath ("Failed candidate:\n" ++ code)
-                        let category = if any (`isInfixOf` (out ++ err)) ["cannot satisfy -package", "Could not find module", "Could not load module"]
-                                then "setup error: target modules are unavailable in GHC's environment"
-                                else "generated-code type error"
+                        let category =
+                                if any
+                                    (`isInfixOf` (out ++ err))
+                                    ["cannot satisfy -package", "Could not find module", "Could not load module"]
+                                    then "setup error: target modules are unavailable in GHC's environment"
+                                    else "generated-code type error"
                         appendFile logPath (category ++ "\n")
                         pure (Left (category ++ "; see " ++ logPath))
-  where
-    logPath = output ++ ".log"
-    failure message = writeFile logPath (message ++ "\n") >> pure (Left message)
+    where
+        logPath = output ++ ".log"
+        failure message = writeFile logPath (message ++ "\n") >> pure (Left message)

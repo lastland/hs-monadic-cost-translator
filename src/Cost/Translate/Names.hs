@@ -1,7 +1,7 @@
 module Cost.Translate.Names (generatedName, demandHelperName, sourceConstructor) where
 
-import GHC.Types.Name (Name, getOccString)
 import Data.Char (isAlpha, isAlphaNum, ord)
+import GHC.Types.Name (Name, getOccString)
 
 generatedName :: String -> Name -> String
 generatedName suffix name = case getOccString name of
@@ -18,7 +18,7 @@ encode :: String -> String
 encode = concatMap (("_" ++) . show . ord)
 
 simpleIdentifier :: String -> Bool
-simpleIdentifier (c:cs) = (isAlpha c || c == '_') && all (\x -> isAlphaNum x || x `elem` "_'") cs
+simpleIdentifier (c : cs) = (isAlpha c || c == '_') && all (\x -> isAlphaNum x || x `elem` "_'") cs
 simpleIdentifier [] = False
 
 sourceConstructor :: Name -> String
