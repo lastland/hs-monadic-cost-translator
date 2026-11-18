@@ -177,6 +177,16 @@ and aliases. Pure representation conversions preserve root and field thunk
 identities across type instantiations without forcing unused payloads. Each
 function invocation still allocates fresh local thunks.
 
+An unconstrained local value with a translated source-datatype result can also
+share one polymorphic thunk when its right-hand side is an unguarded,
+nonrecursive constructor application. Its generalized variables must have kind
+`Type`, and fields depending on those variables must themselves be constructor
+applications that meet the same conditions. Independent fields remain suspended
+normally. The translator constructs polymorphic payloads before suspending them
+and uses pure typed views that preserve thunk identities and annotations.
+This path needs no extra caller constraints or runtime operations. It does not
+cover arbitrary polymorphic applications or recursive bindings.
+
 Dictionary-sensitive locals also use native allocation when they have one
 generalized type parameter determining their dictionaries and every reference
 has unambiguous type evidence. When that parameter is the whole result, closed

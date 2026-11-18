@@ -60,11 +60,15 @@ moduleExtensions ::
     Bool -> Bool -> Bool -> Env -> [O.Decl] -> [Extension.Extension]
 moduleExtensions magicHash specialized helpers env declarations =
     [Extension.MagicHash | magicHash]
+        ++ [Extension.ImpredicativeTypes | applications]
+        ++ [Extension.TypeApplications | applications]
         ++ [ Extension.ScopedTypeVariables
            | native || specialized || helpers
            ]
         ++ enabled
     where
+        expressions = collect declarations :: [HsExpr GhcPs]
+        applications = not (null [() | HsAppType {} <- expressions])
         native = "mapThunk" `Set.member` supportReferences declarations
         types = Map.elems (inferredBindings env)
         enabled

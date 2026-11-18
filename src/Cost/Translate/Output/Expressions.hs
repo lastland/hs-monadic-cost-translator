@@ -15,6 +15,7 @@ module Cost.Translate.Output.Expressions
     , ifE
     , caseE
     , ann
+    , typeApp
     ) where
 
 import Cost.Translate.Output.Ast (Expr, Pat, Ty, nameParts, rdr)
@@ -47,6 +48,15 @@ call = app . v
 
 ret :: Expr -> Expr
 ret x = call "pure" [x]
+
+typeApp :: Expr -> Ty -> Expr
+typeApp expression ty =
+    noLocA
+        ( HsAppType
+            noAnn
+            expression
+            (mkHsWildCardBndrs (parenthesizeHsType appPrec ty))
+        )
 
 integer :: Integer -> Expr
 integer = overLit . ol_val . mkHsIntegral . mkIntegralLit

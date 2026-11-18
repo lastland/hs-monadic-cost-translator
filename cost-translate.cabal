@@ -75,6 +75,7 @@ library
         Cost.Translate.Frontend.NamePlan
         Cost.Translate.Frontend.PatternPaths
         Cost.Translate.Frontend.Patterns
+        Cost.Translate.Frontend.Polymorphic
         Cost.Translate.Frontend.Prepare
         Cost.Translate.Frontend.Prune
         Cost.Translate.Frontend.Resolve

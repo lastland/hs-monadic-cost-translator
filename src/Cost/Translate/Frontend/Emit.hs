@@ -8,6 +8,7 @@ import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Patterns
+import Cost.Translate.Frontend.Polymorphic
 import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
@@ -229,6 +230,44 @@ emitLocalValue ::
     Either String O.Expr
 emitLocalValue signatures scope binding name match done = do
     checkLocalAliases scope match
+    let source = unLoc name
+        n = localName scope source
+        bindingType = Map.lookup source (inferredBindings scope)
+        payload =
+            bindingType >>= (\ty -> constructorPayload scope source ty match)
+    case payload of
+        Just plan
+            | let instances = plannedSpecializations (namePlan scope)
+            , Map.notMember (unLoc name) instances -> do
+                remaining <- done (insertEnv (unLoc name) (Thunk (O.v n)) scope)
+                let continuation =
+                        if strict
+                            then forceWhnf (O.v n) remaining
+                            else remaining
+                allocatePayload
+                    (emitExpr scope)
+                    scope
+                    (unLoc name)
+                    plan
+                    continuation
+        _ -> emitOrdinaryLocalValue signatures scope binding name match done
+    where
+        strict =
+            strictLocalValue
+                scope
+                binding
+                (unLoc name)
+                (Map.lookup (unLoc name) (inferredBindings scope))
+
+emitOrdinaryLocalValue ::
+    Map.Map Name O.Ty ->
+    Env ->
+    LHsBind GhcRn ->
+    LocatedN Name ->
+    Match GhcRn (LHsExpr GhcRn) ->
+    (Env -> Either String O.Expr) ->
+    Either String O.Expr
+emitOrdinaryLocalValue signatures scope binding name match done = do
     action <- emitMatchBody scope match (failureExpr "source guard failure")
     let n = localName scope (unLoc name)
         bindingType = Map.lookup (unLoc name) (inferredBindings scope)
@@ -292,7 +331,7 @@ emitExpr env located = case unLoc located of
         pure (conditionalAction cond yesAction noAction)
     HsLet _ locals body -> withLocals env locals (`emitExpr` body)
     ExplicitTuple _ [Present _ a, Present _ b] Boxed ->
-        emitConstruct env located "M.PairT" [a, b]
+        emitApplied env located (returnConstructor "M.PairT") [a, b]
     RecordCon _ name fields -> emitRecord env located (unLoc name) fields
     HsRecSel _ field -> case resolve env (fieldName field) of
         Just (Function fn _) -> Right (O.ret (O.v fn))
@@ -316,11 +355,11 @@ emitApplication env located = case unLoc fun of
     HsRecSel _ field
         | Just (fn, _) <- functionResolver env (fieldName field)
         , length args == 1 ->
-            emitInvocation env located fn args
+            emitApplied env located (O.app fn) args
     HsVar _ name -> case resolve env (unLoc name) of
         Just (Constructor con count _)
             | length args == count ->
-                emitConstruct env located con args
+                emitApplied env located (returnConstructor con) args
         _
             | Just (fn, count) <- functionResolver env (unLoc name)
             , length args <= count -> do
@@ -356,13 +395,13 @@ emitOperator env located left operator right = case unLoc operator of
             emitCallable (partialName env) resolver (emitThunk env) located
     HsVar _ name
         | builtin (unLoc name) "GHC.Types" ":" ->
-            emitConstruct env located "L.ConsT" [left, right]
+            emitApplied env located (returnConstructor "L.ConsT") [left, right]
     HsVar _ name
         | Just (Constructor con 2 _) <- resolve env (unLoc name) ->
-            emitConstruct env located con [left, right]
+            emitApplied env located (returnConstructor con) [left, right]
     HsVar _ name
         | Just (fn, 2) <- functionResolver env (unLoc name) ->
-            emitInvocation env located fn [left, right]
+            emitApplied env located (O.app fn) [left, right]
     HsVar _ name -> unsupportedCall "operator" located (unLoc name)
     _ -> unsupportedExpression located
     where
@@ -437,14 +476,12 @@ emitArguments env located args =
         (argumentNames env (argumentKey located) (length args))
         args
 
-emitInvocation ::
-    Env -> LHsExpr GhcRn -> O.Expr -> [LHsExpr GhcRn] -> Either String O.Expr
-emitInvocation env located fn args = do
+emitApplied ::
+    Env ->
+    LHsExpr GhcRn ->
+    ([O.Expr] -> O.Expr) ->
+    [LHsExpr GhcRn] ->
+    Either String O.Expr
+emitApplied env located finish args = do
     thunks <- emitArguments env located args
-    pure (lazyArguments thunks (O.app fn))
-
-emitConstruct ::
-    Env -> LHsExpr GhcRn -> String -> [LHsExpr GhcRn] -> Either String O.Expr
-emitConstruct env located con args = do
-    thunks <- emitArguments env located args
-    pure (lazyArguments thunks (returnConstructor con))
+    pure (lazyArguments thunks finish)
