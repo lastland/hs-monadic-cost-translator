@@ -1,0 +1,26 @@
+{-# LANGUAGE GADTs #-}
+{-# OPTIONS_GHC -main-is "Ignored.main" #-}
+{-# LANGUAGE
+    NamedFieldPuns
+ #-}
+module Lexical where
+-- "ignored" {-# LINE 1 "fake" #-}
+{- ordinary
+  {- nested "ignored" -}
+
+-}
+-- | doc "ignored"
+{-| block doc "ignored"
+-}
+a = "-- {- -}"
+b = "λ🙂"
+c = "\x61"
+gap = "a\
+
+      \b"
+value =
+   let x = 1  -- comment
+
+   in x
+tabs =	"a"
+unicode = ["λ🙂", "z"]

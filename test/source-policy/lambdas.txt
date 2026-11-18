@@ -1,0 +1,6 @@
+{-# LANGUAGE LambdaCase #-}
+module Lambda where
+choose = \case
+  0 -> \x -> x
+  _ -> \cases
+    x y -> x

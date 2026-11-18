@@ -1,0 +1,13 @@
+{-# LANGUAGE DataKinds, TemplateHaskell, QuasiQuotes #-}
+{-# OPTIONS_GHC -Wno-unused-binds #-}
+module Literals where
+one = ["", "a", "\97"]
+match "a" = "matched"
+type Label = "a"
+{-# ANN module ("a" :: String) #-}
+expr = [| "a" |]
+pat = [p| "a" |]
+typ = [t| "a" |]
+decl = [d| nested = "a" |]
+opaque = [q|"ignored" ""|]
+qualified = [Q.q|"ignored" ""|]

@@ -1,0 +1,6 @@
+module Language where
+import Does.Not.Exist qualified as Missing
+data Record = Record
+  {field :: Int}
+boxed !x = (x,)
+uses Record{field} = field

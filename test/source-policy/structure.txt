@@ -1,0 +1,28 @@
+module Structure where
+
+f :: Int -> Int
+f 0 = 0
+f n
+  | n > 0 = local n
+  | otherwise = n
+  where
+    local :: Int -> Int
+    local x =
+      let same y = y
+          inner z =
+            let same y = y + 1
+            in same z
+      in same x + inner x
+
+(<+>) x y = x + y
+(left, right) = (1, 2)
+constant = 0
+class Example a where
+  method :: a -> a
+  method x =
+    let local y = y
+    in local x
+instance Example Int where
+  method x =
+    (\y ->
+       y) x

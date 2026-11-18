@@ -1,0 +1,4 @@
+module Sample where
+
+value :: Int
+value = 1

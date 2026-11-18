@@ -1,0 +1,15 @@
+{-# LANGUAGE QuasiQuotes #-}
+module Locations where
+text = "{-# LINE 1 \"fake\" #-}"
+{- outer
+#line 1 "fiction.hs"
+#if ignored
+{-# LINE 1 "also-ignored.hs" #-}
+-}
+quoted = [q|
+#line 1 "fiction.hs"
+{-# LINE 1 "fiction.hs" #-}
+|]
+f = 1
+-- #line 1 "still-ignored.hs"
+g = 2

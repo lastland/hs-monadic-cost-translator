@@ -1,0 +1,9 @@
+{-# LANGUAGE Arrows, ImplicitParams #-}
+module Locals where
+value =
+  let ?config =
+        "v"
+  in ?config
+arrow = proc x ->
+  (\y ->
+     returnA -< y) x

@@ -1,0 +1,12 @@
+module Groups where
+f x =
+  let g 0 = 0
+      g n =
+        let g 0 = 1
+            g m = m
+        in g n
+  in g x
+patternValue =
+  let (a, b) =
+        (1, 2)
+  in a + b
