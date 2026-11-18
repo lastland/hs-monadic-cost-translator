@@ -469,6 +469,19 @@ the entire right list unforced, and empty-right zips leave left elements and tai
 unforced after inspecting its first constructor. Both cost two. A parenthesized
 bare callback retains the same full zip costs and generic interface.
 
+The `constrained-outer-recursive-helper` fixture preserves the same bare
+`zipWith`/`head` and saturated infix calls, with a live self-recursive helper.
+For depth `d = max 0 (width sample)`, each demanded helper executes `d + 1`
+entries. Full demand returns eight at cost `2*d + 7`: one outer entry, one `head`
+entry, one `zipWith` entry, two helper loops, and two shared producer entries.
+Selecting helper-result roots costs `1 + (d + 3)*L + (d + 1)*R`; inspecting only
+the outer result costs one. Generic callers retain only `Eq`, `Num`, and `Scalar`.
+Relative identities keep one shared `Maybe`/list/head/tail vector across both
+loops, but distinct helper-result roots. Fresh outer calls reuse caller thunks
+and allocate disjoint local vectors. With positive repetition count `k`, fresh
+calls cost `k*(2*d + 7)`, while a cached call costs `2*d + 7`. The original
+`count == 0` branch and ordinary `head` warning remain unchanged.
+
 ## Private Runtime Allocator
 
 Apply the [external runtime patch](../patches/README.md) and rebuild

@@ -51,9 +51,14 @@ specializeHelpers group checked hints =
     recursive = Set.fromList [unLoc name |
         XValBindsLR (NValBinds groups _) <- collect group :: [HsValBinds GhcRn],
         (Recursive, binds) <- groups, L _ (FunBind _ name _) <- bagToList binds]
+    singletonRecursive = Set.fromList [unLoc name |
+        XValBindsLR (NValBinds groups _) <- collect group :: [HsValBinds GhcRn],
+        (Recursive, binds) <- groups, [L _ (FunBind _ name matches)] <- [bagToList binds],
+        arity matches > 0]
     candidates = [(unLoc name, arity matches, info) |
         L _ (FunBind _ name matches) <- bindings, arity matches > 0,
-        unLoc name `Set.notMember` (topLevel `Set.union` recursive),
+        unLoc name `Set.notMember` topLevel,
+        unLoc name `Set.notMember` recursive || unLoc name `Set.member` singletonRecursive,
         Just info <- [Map.lookup (unLoc name) checked]]
     declarations = Map.fromList (scopes [] group)
     lexical = Map.fromList (paths [] group)
@@ -71,6 +76,14 @@ specializeHelpers group checked hints =
         _ -> concat (gmapQ (scopes variables) syntax)
     uses = Map.fromListWith (++) [(unLoc name, [(location expression, useType expression)]) |
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
+    ownership = Map.fromListWith (++) (referenceOwners [] group)
+    referenceOwners :: Data a => [(Name, SrcSpan)] -> a -> [((Name, String), [([(Name, SrcSpan)], SrcSpan)])]
+    referenceOwners owners syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
+        Just binding@(L _ (FunBind _ name _)) ->
+            concat (gmapQ (referenceOwners (owners ++ [(unLoc name, getLocA binding)])) (unLoc binding))
+        _ -> case cast syntax :: Maybe (LHsExpr GhcRn) of
+            Just expression@(L _ (HsVar _ name)) -> [((unLoc name, location expression), [(owners, getLocA expression)])]
+            _ -> concat (gmapQ (referenceOwners owners) syntax)
     useType = expressionTypeAt sourceExpressions hints
     applications = [((unLoc name, location function), reference (length arguments)) |
         expression <- expressions group,
@@ -109,7 +122,22 @@ specializeHelpers group checked hints =
             Just [InfixApplication provided] -> provided == count
             _ -> False) references) Nothing
         actualTypes <- mapM (fmap normalize . snd) references
-        [actualType] <- pure (nubBy eqType actualTypes)
+        outsideTypes <- if name `Set.member` recursive then do
+            [binding] <- pure [binding' | binding'@(L _ (FunBind _ identifier _)) <- bindings, unLoc identifier == name]
+            unless (real (getLocA binding)) Nothing
+            classified <- mapM (\(site, hint) -> do
+                [(owners, span')] <- Map.lookup (name, site) ownership
+                unless (real span') Nothing
+                let inside = name `elem` map fst owners
+                unless (not inside || lookup name owners == Just (getLocA binding) &&
+                    span' `isSubspanOf` getLocA binding) Nothing
+                actualType <- normalize <$> hint
+                unless (not inside || actualType `eqType` body) Nothing
+                pure (inside, actualType)) references
+            unless (any fst classified && not (all fst classified)) Nothing
+            pure [actualType | (False, actualType) <- classified]
+          else pure actualTypes
+        [actualType] <- pure (nubBy eqType outsideTypes)
         actual <- match variable tau actualType
         unless (available scope actual) Nothing
         checkedOwned <- match variable tau body
@@ -147,6 +175,8 @@ specializeHelpers group checked hints =
         | Just variable <- getTyVar_maybe ty = variable `elem` scope && tyVarKind variable `eqType` liftedTypeKind &&
             all (`elem` scope) (nonDetEltsUniqSet (tyCoVarsOfType ty))
         | otherwise = False
+    real RealSrcSpan {} = True
+    real _ = False
 
 arity :: MatchGroup GhcRn (LHsExpr GhcRn) -> Int
 arity matches = case unLoc (mg_alts matches) of

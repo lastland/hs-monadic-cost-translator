@@ -201,7 +201,7 @@ even when only fields of the unchanged parameter are demanded. RHS captures keep
 their enclosing scope and caller constraints. Unconstrained parameters and open
 results do not qualify for this two-parameter path.
 
-For a nonrecursive local helper with one generalized dictionary parameter, the
+For a local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked
 prefix application, saturated infix call, or bare function reference at the same
 verified instantiation.
@@ -221,6 +221,13 @@ Uninstantiated function values, sections, multiple instantiations, and escaping
 type variables do not qualify for this helper specialization. A helper also stays
 polymorphic when its specialized type cannot be named safely in its local scopes.
 Top-level functions keep their generic interfaces.
+
+A self-recursive helper can use this path when its recursive binding group
+contains only that function. Real lexical self-references must have the helper's
+complete checked body type, and external references must agree on one checked
+instantiation. Each recursive entry still charges a tick; a shared value declared
+outside the helper stays outside every recursive call. Mutual recursion and
+self-calls at different types do not qualify for this path.
 
 Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
 and other generalized result shapes still emit legacy evaluator helpers; those
