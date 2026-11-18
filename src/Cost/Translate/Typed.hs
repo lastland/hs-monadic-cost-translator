@@ -10,24 +10,33 @@ module Cost.Translate.Typed
     ) where
 
 import Data.Data (Data, cast, gmapQ)
-import Data.List (isSuffixOf, maximumBy)
+import Data.List (isSuffixOf, maximumBy, partition)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Ord (comparing)
 import Data.Set qualified as Set
 import GHC hiding (exprType)
+import GHC.Core.FVs (exprFreeIds)
+import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.Subst (substTy)
-import GHC.Core.Type (mkVisFunTy, splitFunTys)
+import GHC.Core.Type (isPredTy, mkVisFunTy, splitFunTys)
 import GHC.Core.Unify (tcMatchTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
-import GHC.Tc.Types.Evidence (HsWrapper (..))
+import GHC.Tc.Types.Evidence
+    ( EvBind (..)
+    , EvTerm (..)
+    , HsWrapper (..)
+    , TcEvBinds (..)
+    )
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
-import GHC.Types.Var (Var)
+import GHC.Types.Id (isDFunId)
+import GHC.Types.Unique.Set (nonDetEltsUniqSet)
+import GHC.Types.Var (Var, isId)
 import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 
@@ -138,6 +147,7 @@ data FunctionType = FunctionType
     { functionDeclaredType :: Type
     , functionVariables :: [TyVar]
     , functionBodyType :: Type
+    , functionEvidence :: ([Id], [EvBind])
     }
 
 functionTypes :: TypecheckedModule -> Map.Map Name FunctionType
@@ -151,6 +161,7 @@ functionTypes checked =
                         (idType (abe_poly export))
                         (variables abstraction export wrapper)
                         (bodyType (mg_ext matches))
+                        (wrapperEvidence wrapper)
                   ]
               )
             | abstraction <- checkedAbstractions (tm_typechecked_source checked)
@@ -178,10 +189,47 @@ functionTypes checked =
 
 functionGivens :: FunctionType -> [Type]
 functionGivens info = case tcMatchTy body (functionBodyType info) of
-    Just substitution -> map (substTy substitution) predicates
+    Just substitution ->
+        let givens = map (substTy substitution) predicates
+         in givens ++ checkedPredicates givens (functionEvidence info)
     Nothing -> []
     where
         (_, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
+
+wrapperEvidence :: HsWrapper -> ([Id], [EvBind])
+wrapperEvidence (WpCompose left right) =
+    wrapperEvidence left <> wrapperEvidence right
+wrapperEvidence (WpEvLam given) = ([given], [])
+wrapperEvidence (WpLet (EvBinds bindings)) = ([], bagToList bindings)
+wrapperEvidence _ = ([], [])
+
+checkedPredicates :: [Type] -> ([Id], [EvBind]) -> [Type]
+checkedPredicates givens (variables, bindings) =
+    map (idType . eb_lhs) (close initial bindings)
+    where
+        initial =
+            Set.fromList
+                [ v
+                | v <- variables
+                , isId v
+                , any (eqType (idType v)) givens
+                ]
+        close known remaining =
+            let (ready, pending) = partition (proved known) remaining
+                next = known <> Set.fromList (map eb_lhs ready)
+             in ready ++ if null ready then [] else close next pending
+        proved known (EvBind identifier (EvExpr rhs) _) =
+            isId identifier
+                && isPredTy (idType identifier)
+                && all (available known) (nonDetEltsUniqSet (exprFreeIds rhs))
+        proved _ _ = False
+        available known identifier =
+            identifier `Set.member` known
+                || ( isGlobalId identifier
+                        && ( isDFunId identifier
+                                || isJust (isClassOpId_maybe identifier)
+                           )
+                   )
 
 scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
 scopedVariables = Map.map functionVariables . functionTypes
