@@ -107,6 +107,12 @@ nativeSharing datatypes renamings ty
         | Just variable <- getTyVar_maybe value, variable `elem` vars = Just (O.v "Void.absurd")
         | Just (constructor, [element]) <- splitTyConApp_maybe value, constructor == listTyCon =
             O.call "mapListT" . (:[]) <$> mapper element
+        | Just (constructor, [element]) <- splitTyConApp_maybe value, constructor == maybeTyCon = do
+            convert <- mapper element
+            pure (O.lam [O.p "maybeValue"] (O.caseE (O.v "maybeValue")
+                [(O.conP "M.NothingT" [], O.v "M.NothingT"),
+                 (O.conP "M.JustT" [O.p "payload"],
+                  O.call "M.JustT" [O.call "mapThunk" [convert, O.v "payload"]])]))
         | otherwise = Nothing
 
 nativeSharingSupport :: Bool -> [O.Decl]

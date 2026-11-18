@@ -132,6 +132,25 @@ with a local `forall b`. Its `-Wno-name-shadowing` pragma preserves that scope
 regression; the handwritten reference and caller need no warning exception.
 This does not expand the bounded generated-output warning checks.
 
+The `polymorphic-local-maybe` fixture shares unconstrained `Maybe a` and
+`Maybe (Maybe a)` locals across `Int` and `Bool`. Its three generic callers have
+no class constraints. A source-specific unit-token reference models bottom
+payloads while retaining the same root and field thunk metadata in both views.
+Fully demanded `Nothing` returns zero at cost three; two `Just` constructors
+return two at cost three without forcing their bottom payloads. Demanding neither
+root costs one; either or both cost three. A bottom count stays safe when both
+roots are skipped. Fresh calls cost `3*k`; repeated demands of one cached call
+cost three. Distinct equal-RHS locals instead cost five and retain disjoint names.
+For nested values, outer `Nothing` costs three; `Just Nothing` costs four. Outer
+constructor demand costs three, and inner constructor demand costs four while
+leaves remain unforced. Fresh/cached inner demands cost `4*k`/four; one paid
+caller count shared across fresh calls adds one tick in total. Relative identity
+probes check aliases across types at every depth and freshness across calls.
+Seven failures cover demanded roots/counts/payloads and a control that forces and
+applies the otherwise unused bottom function. Boolean payload probes consume the
+forced `Bool`. Captured source names `maybeValue` and `payload` deliberately match
+the pure converter's local names, checking that conversion does not capture them.
+
 The `constrained-sharing-local` fixture checks native allocation for a
 dictionary-sensitive local used at closed scalar types. Its original handwritten
 reference allocates separate `Int` and `Integer` thunks inside each call. The
