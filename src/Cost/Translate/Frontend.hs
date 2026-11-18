@@ -11,9 +11,8 @@ import GHC.Driver.Session (xopt)
 import qualified GHC.LanguageExtensions.Type as Extension
 import GHC.Types.Name (nameModule_maybe, getOccString)
 import GHC.Types.Name.Set (elemNameSet)
-import GHC.Types.Basic (RecFlag(..), Boxity(..), isDefaultInlinePragma)
+import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId, isNonCoVarId)
-import GHC.Types.Id (idInlinePragma)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
@@ -22,6 +21,7 @@ import qualified GHC.Core as Core
 import GHC.Core.Utils (exprIsHNF)
 import GHC.HsToCore.Binds (dsLHsBinds)
 import GHC.HsToCore.Monad (initDs)
+import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Cost.Translate.Datatypes (renderType, emitDatatypeSections, constructors, selectors, checkConversionExports)
 import Cost.Translate.Names (generatedName)
@@ -122,14 +122,35 @@ strictWhnfBindings session checked = do
         [(getName (abe_poly export), [binding]) |
          binding@(L _ (XHsBindsLR abstraction)) <- collect (tm_typechecked_source checked) :: [LHsBind GhcTc],
          export <- abs_exports abstraction, getName (abe_poly export) `Set.member` strict]
-    prove name [binding] = do
+    prove name [binding] | Just evidence <- strictEvidence name binding = do
         (forced, pairs) <- dsLHsBinds (unitBag binding)
         pure $ case [(identifier,rhs) | (identifier,rhs) <- pairs, getName identifier == name] of
-            [(identifier,rhs)] -> isDefaultInlinePragma (idInlinePragma identifier) &&
+            [(_,rhs)] ->
                 name `elem` map getName forced && exprIsHNF rhs &&
-                any isNonCoVarId (fst (Core.collectBinders rhs))
+                any (\binder -> isNonCoVarId binder && binder `elem` evidence) (fst (Core.collectBinders rhs))
             _ -> False
     prove _ _ = pure False
+
+strictEvidence :: Name -> LHsBind GhcTc -> Maybe [Id]
+strictEvidence name (L _ (XHsBindsLR abstraction)) = case
+    [export | export <- abs_exports abstraction, getName (abe_poly export) == name] of
+    [export] -> case [wrapper | L _ (FunBind (wrapper,_) identifier _) <- bagToList (abs_binds abstraction),
+                               unLoc identifier == abe_mono export] of
+        [wrapper] -> do
+            exported <- evidenceBinders (abe_wrap export)
+            own <- evidenceBinders wrapper
+            pure (abs_ev_vars abstraction ++ exported ++ own)
+        _ -> Nothing
+    _ -> Nothing
+strictEvidence _ _ = Nothing
+
+evidenceBinders :: HsWrapper -> Maybe [Id]
+evidenceBinders WpHole = Just []
+evidenceBinders (WpCompose left right) = (++) <$> evidenceBinders left <*> evidenceBinders right
+evidenceBinders (WpEvLam identifier) = Just [identifier]
+evidenceBinders (WpTyLam _) = Just []
+evidenceBinders (WpLet _) = Just []
+evidenceBinders _ = Nothing
 
 strictBindNames :: [LHsBind GhcRn] -> [Name]
 strictBindNames bindings = [unLoc name | L _ (FunBind _ name matches) <- bindings,
