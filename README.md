@@ -215,6 +215,11 @@ reflection obligations in its enclosing function. Reachable local bindings retai
 their source scope. Module-level functions and values remain in the output, even
 when they are unused or unexported.
 
+Local bang bindings without their own class contexts, such as
+`let !x = work input in body`, demand the outer value before continuing. They
+leave constructor fields lazy and retain the binding's shared thunk. Bindings
+with a local class context retain the existing dictionary-sensitive limitations.
+
 For a local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked
 prefix application, saturated infix call, or bare function reference at the same
@@ -264,7 +269,7 @@ Unsupported constructs cause translation to fail rather than being silently omit
 - Anonymous lambdas (`\x -> ...`) and operator sections.
 - `newtype` declarations, type synonyms, type families, GADTs, and existential or constrained data constructors.
 - User-defined typeclasses, instances, and `deriving` clauses on source `data` declarations.
-- Strict field annotations (`!a`), strict or irrefutable patterns (`!pat`, `~pat`), and `Strict`, `StrictData`, or `RebindableSyntax` language pragmas.
+- Strict field annotations (`!a`), strict patterns other than the local bang bindings described above, irrefutable patterns (`~pat`), and `Strict`, `StrictData`, or `RebindableSyntax` language pragmas.
 - Pattern bindings (such as `let (a, b) = expr`) and recursive value bindings (such as `let xs = 1 : xs`); only named function bindings and non-recursive named value bindings are supported.
 - Function-valued aliases or computed function results that lack a static syntactic arity, and over-saturated function applications.
 - Higher-rank user types, record updates (`r { field = x }`), list comprehensions, arithmetic sequences, and tuples other than boxed pairs `(a, b)` (and `()` as a scalar type).

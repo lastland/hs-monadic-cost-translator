@@ -79,7 +79,7 @@ generate file targetModule = runGhc (Just libdir) $ do
                             [(showSDocUnsafe (ppr (getLocA expression)), name) | expression@(L _ (HsOverLit _ literal)) <- collect (tm_typechecked_source checked) :: [LHsExpr GhcTc],
                              Just (tc,[]) <- [splitTyConApp_maybe (overLitType literal)],
                              let name = getOccString tc, name `elem` ["Int","Integer","Float","Double"]]
-                        emit = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
+                        emit = emitModule strictValues targetModule (moduleNameString (moduleName (ms_mod summary)))
                               (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes hints
                               (Typed.functionTypes checked)
                         (original, logs) = emit group
@@ -171,8 +171,8 @@ pruneLocals strictValues syntax
         in L location (LetStmt ext (keep (remaining, body) locals)) : remaining
     guards body (statement : rest) = statement : guards body rest
 
-emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String Type -> Map.Map Name Typed.FunctionType -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
-emitModule target source magicHash datatypes originalTypes literalTypes hints checkedFunctions group =
+emitModule :: Set.Set Name -> String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String Type -> Map.Map Name Typed.FunctionType -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
+emitModule strictValues target source magicHash datatypes originalTypes literalTypes hints checkedFunctions group =
     let binds = topLevelBinds
         env = extendEnv [(unLoc n, Function (generatedName "M" (unLoc n)) (arity ms))
                           | L _ (FunBind _ n ms) <- binds] constructorEnv
@@ -244,7 +244,7 @@ emitModule target source magicHash datatypes originalTypes literalTypes hints ch
     constructorEnv = Env (Map.fromList ([(n, Constructor c a fs) | (n,c,a,fs) <- constructors datatypes] ++
                                    [(n, Function f 1) | (n,f) <- selectors datatypes])) literalTypes types expressionTypes datatypes reflected
                                    (Set.fromList ("M.PairT" : [generatedName "T" (getName c) | tc <- datatypes, [c] <- [tyConDataCons tc]]))
-                                   (planNames reservedNames constructorLayouts specializedBindings group)
+                                   (planNames reservedNames constructorLayouts specializedBindings group) strictValues
     constructorLayouts = Map.fromList [(n,fields') | (n,_,_,fields') <- constructors datatypes]
     topLevelGroups = case hs_valds group of
         XValBindsLR (NValBinds groups _) -> [(recursive, bagToList bindings) | (recursive, bindings) <- groups]
@@ -367,6 +367,7 @@ data Env = Env
     , reflectiveBindings :: Set.Set Name
     , singleConstructors :: Set.Set String
     , namePlan :: NamePlan
+    , strictWhnfValues :: Set.Set Name
     }
 
 data NamePlan = NamePlan
@@ -690,6 +691,12 @@ withTypedValBinds signatures env binds finish = case binds of
                 action <- withLocals scope (grhssLocalBinds (m_grhss match)) $ \scope' -> emitGuards scope' (grhssGRHSs (m_grhss match)) (failureExpr "source guard failure")
                 let n = localName scope (unLoc name)
                     bindingType = Map.lookup (unLoc name) (inferredBindings scope)
+                    strict = unLoc name `elem` strictBindNames [binding] &&
+                        unLoc name `Set.notMember` strictWhnfValues scope &&
+                        case bindingType of
+                            Just ty -> not (any (isPredTy . scaledThing)
+                                (fst (splitFunTys (snd (splitForAllTyVars ty)))))
+                            Nothing -> False
                 case Map.lookup (unLoc name) (plannedSpecializations (namePlan scope)) of
                     Just instantiations -> do
                         let scope' = insertEnv (unLoc name)
@@ -716,7 +723,8 @@ withTypedValBinds signatures env binds finish = case binds of
                         paths <- locatedAt (getLocA name)
                             (maybe (Right Nothing) sharingPaths bindingType)
                         let reference = if isJust paths then O.call n [O.tuple []] else O.v n
-                        continuation <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
+                        remaining <- go (insertEnv (unLoc name) (Thunk reference) scope) rest done
+                        let continuation = if strict then forceWhnf reference remaining else remaining
                         if any ((== n) . occNameString . rdrNameOcc) (collect continuation :: [RdrName])
                             then do
                                 native <- locatedAt (getLocA name) $ case bindingType of
@@ -763,6 +771,13 @@ withTypedValBinds signatures env binds finish = case binds of
         fresh occupied variable =
             let occurrence = freshPrimed occupied (getOccString variable)
             in (Set.insert occurrence occupied, (getName variable, occurrence))
+
+forceWhnf :: O.Expr -> O.Expr -> O.Expr
+forceWhnf reference continuation = O.doE [O.bind value (O.call "M.force" [reference])]
+    (O.call "Prelude.seq" [O.v value, continuation])
+  where
+    value = freshPrimed (Set.fromList [occNameString (rdrNameOcc name) |
+        name <- collect continuation :: [RdrName]]) "strictValue"
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitExpr env located = case unLoc located of
