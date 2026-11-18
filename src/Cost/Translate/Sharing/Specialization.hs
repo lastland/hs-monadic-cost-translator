@@ -21,6 +21,7 @@ import GHC.Core.Type
     , splitTyConApp_maybe
     , substTyWith
     )
+import GHC.Core.Unify (typesCantMatch)
 import GHC.Types.Basic (Boxity (..))
 import GHC.Types.Var (tyVarKind)
 import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
@@ -43,11 +44,12 @@ specializedSharing datatypes scopeVariables givens ty uses
     , not (null uses) = do
         types <- sequence uses
         let distinct = nubBy eqType types
-        case distinct of
-            [value]
-                | not (isEmptyVarSet (tyCoVarsOfType value)) ->
-                    scopedInstantiation matcher scopeVariables givens ty value
-            _ -> mapM_ (closedInstantiation matcher vars result) types
+        unless
+            ( all (isEmptyVarSet . tyCoVarsOfType) distinct
+                || pairwiseDisjoint distinct
+            )
+            Nothing
+        mapM_ instantiate distinct
         pure distinct
     | [variable] <- vars
     , tyVarKind variable `eqType` liftedTypeKind
@@ -71,6 +73,11 @@ specializedSharing datatypes scopeVariables givens ty uses
         (vars, body) = splitForAllTyVars ty
         (arguments, result) = splitFunTys body
         matcher = parameters datatypes scopeVariables vars result
+        instantiate value
+            | isEmptyVarSet (tyCoVarsOfType value) =
+                closedInstantiation matcher vars result value
+            | otherwise =
+                scopedInstantiation matcher scopeVariables givens ty value
         resultParameter value = do
             distinctParameters <-
                 nubBy eqType . map snd <$> matcher value
@@ -78,6 +85,12 @@ specializedSharing datatypes scopeVariables givens ty uses
                 [element] -> Just element
                 _ -> Nothing
         closedResult value = maybe False closedScalar (resultParameter value)
+
+pairwiseDisjoint :: [Type] -> Bool
+pairwiseDisjoint [] = True
+pairwiseDisjoint (value : rest) =
+    all (\other -> typesCantMatch [(value, other)]) rest
+        && pairwiseDisjoint rest
 
 closedScalar :: Type -> Bool
 closedScalar value = isEmptyVarSet (tyCoVarsOfType value) && scalarType value

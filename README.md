@@ -201,14 +201,26 @@ runtime type keys or added reflection constraints.
 Captured argument thunks keep their existing identities, including when callers
 reuse them between invocations.
 
-Native allocation also supports two or more generalized parameters when all
-determine dictionaries, occur in the result, and instantiate to closed scalars.
-The complete result type must be closed and follow the same container matching
-rules. Repeated uses at one complete type share a thunk; changing any parameter
-selects a distinct thunk, even when only fields of the unchanged parameters are
-demanded. RHS captures keep their enclosing scope and caller constraints.
-Unconstrained parameters and open results do not qualify for this
-multiple-parameter path.
+Native allocation also supports two or more generalized `Type` parameters when
+all determine dictionaries, are recovered from the result type, and follow the
+same container matching rules. Each parameter must instantiate to a closed
+scalar or a type variable available in the declaration's enclosing function
+scope. Scoped uses also need checked evidence for every required class
+constraint at the declaration. That evidence can include superclass and
+closed-instance facts from the enclosing function.
+When distinct instantiations involve scoped type variables, GHC must prove
+that no pair can unify. For example, `(a, Int)` and `(a, Integer)` under
+`Integral a` cannot unify, whereas `(a, Int)` and `(b, Int)` can overlap and
+remain excluded under
+[issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3).
+The translator allocates one ordinary `M.lazy` thunk per distinct admitted
+result type and reuses it across repeated uses at that complete type; changing
+any parameter selects a distinct thunk, even when only fields of the unchanged
+parameters are demanded. Right-hand-side captures keep their enclosing scope,
+and caller constraints remain unchanged without `Typeable` or new runtime
+support. Unconstrained parameters do not qualify for this multiple-parameter
+path. A type or dictionary available only inside a nested helper cannot justify
+an allocation outside that helper.
 
 The translator validates the full source before omitting unused local bindings.
 References inside an unreachable local helper do not trigger thunk allocation or
