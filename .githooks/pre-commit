@@ -1,0 +1,31 @@
+#!/bin/sh
+# Opt-in only: execute the driver from the index, not unstaged edits.
+set -eu
+export GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1
+
+# Git replaces indexes atomically. Keep one read-only inode for both staged
+# bootstrap programs; the Python helper copies it and verifies the original.
+if [ -z "${SOURCE_POLICY_ORIGINAL_INDEX-}" ]; then
+    index=$(git rev-parse --path-format=absolute --git-path index && printf '.')
+    index=${index%.}
+    index=${index%?}
+    exec 3< "$index"
+    SOURCE_POLICY_INDEX_STAMP=$(python3 -I -c '
+import os
+state: os.stat_result = os.fstat(3)
+print(repr((state.st_dev, state.st_ino, state.st_mode, state.st_size,
+            state.st_mtime_ns, state.st_ctime_ns)))
+')
+    export SOURCE_POLICY_INDEX_STAMP
+    export SOURCE_POLICY_ORIGINAL_INDEX="$index"
+fi
+export GIT_INDEX_FILE=/dev/fd/3
+
+entry=$(git ls-files --stage -- ':(top)scripts/check-staged.sh')
+case "${entry%% *}" in
+    100644|100755) ;;
+    *) printf '%s\n' 'staged-policy: missing or unsupported staged scripts/check-staged.sh' >&2; exit 1 ;;
+esac
+driver=$(git show :scripts/check-staged.sh)
+[ -n "$driver" ] || { printf '%s\n' 'staged-policy: empty staged bootstrap: scripts/check-staged.sh' >&2; exit 1; }
+exec sh -c "$driver" staged-policy "$@"

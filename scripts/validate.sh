@@ -12,14 +12,15 @@ die() {
 
 usage() {
     printf '%s\n' \
-        'Usage: sh scripts/validate.sh [--check-compiler]' \
-        'Run the runtime-free build and tests with installed GHC 9.10.3.' \
+        'Usage: sh scripts/validate.sh [--check-compiler|--print-compiler]' \
+        'Run source, shell, and HLint checks, regressions, and runtime-free tests.' \
+        'Use installed GHC 9.10.3; no tools are installed by this script.' \
         'Set GHC to a compiler path or command to override discovery.' \
         'Discovery tries ghc-9.10.3, ghc, then Stack (without installing GHC).'
 }
 
 case "$#:${1-}" in
-    0:|1:--check-compiler) ;;
+    0:|1:--check-compiler|1:--print-compiler) ;;
     1:--help) usage; exit 0 ;;
     *) usage >&2; exit 1 ;;
 esac
@@ -74,12 +75,22 @@ package_tool="$compiler_dir/ghc-pkg"
     die "the selected installation must provide ghc-pkg $required_ghc in $compiler_dir"
 
 export PATH="$compiler_dir:$PATH"
+if [ "${1-}" = --print-compiler ]; then
+    printf '%s\n' "$compiler"
+    exit 0
+fi
 printf 'Validating with GHC %s (%s)\n' "$version" "$compiler"
 [ "$#" -eq 0 ] || exit 0
 
 command -v cabal >/dev/null 2>&1 || die 'cabal is required for validation'
 command -v python3 >/dev/null 2>&1 || die 'python3 is required for validation'
+export GHC="$compiler"
 cd "$root"
+sh "$root/scripts/check-source.sh"
+sh "$root/scripts/check-shell.sh"
+sh "$root/scripts/check-hlint.sh"
+python3 "$root/test/source_policy.py" --ghc "$compiler" --self-test
+python3 "$root/test/staged_policy.py" --ghc "$compiler" --self-test
 python3 "$root/test/comment_policy.py" --ghc "$compiler" --self-test --check
 cabal_with_ghc() {
     cabal "$@" --with-compiler="$compiler" --with-hc-pkg="$package_tool" --ghc-options='-Wall -Werror'

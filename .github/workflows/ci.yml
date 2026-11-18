@@ -6,22 +6,6 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint translator
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Set up HLint
-        uses: haskell-actions/hlint-setup@fe9cd1cd1af94a23900c06738e73f6ddb092966a # v2
-        with:
-          version: '3.10'
-      - name: Lint implementation and test infrastructure (including suggestions)
-        # Explicit globs exclude fixture, policy, and mutation inputs.
-        run: hlint src app test/*.hs test/reference/*.hs
-
   build-and-test:
     name: Build and runtime-free tests
     runs-on: ubuntu-24.04
@@ -30,13 +14,57 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Read shared tool pins
+        id: tools
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          config: object = json.loads(Path("scripts/source-policy.json").read_text(encoding="utf-8"))
+          if not isinstance(config, dict):
+              raise SystemExit("source policy configuration must be an object")
+          tools: object = config.get("tools")
+          if not isinstance(tools, dict):
+              raise SystemExit("source policy tool pins must be an object")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              for name in ("ghc", "hlint", "fourmolu", "shellcheck"):
+                  version: object = tools.get(name)
+                  if not isinstance(version, str) or re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version) is None:
+                      raise SystemExit("invalid source policy tool pin: " + name)
+                  output.write(name + "=" + version + "\n")
+          PY
       - name: Set up GHC and Cabal
         id: haskell
         uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2
         with:
-          ghc-version: '9.10.3'
+          ghc-version: ${{ steps.tools.outputs.ghc }}
           cabal-version: '3.16.1.0'
           cabal-update: 'false'
+      - name: Set up pinned HLint
+        uses: haskell-actions/hlint-setup@fe9cd1cd1af94a23900c06738e73f6ddb092966a # v2
+        with:
+          version: ${{ steps.tools.outputs.hlint }}
+      - name: Set up pinned Fourmolu and ShellCheck
+        env:
+          FOURMOLU_VERSION: ${{ steps.tools.outputs.fourmolu }}
+          SHELLCHECK_VERSION: ${{ steps.tools.outputs.shellcheck }}
+        run: |
+          tool_root="$RUNNER_TEMP/source-policy-tools"
+          mkdir -p "$tool_root/bin"
+          curl --fail --location --retry 3 \
+            "https://github.com/fourmolu/fourmolu/releases/download/v${FOURMOLU_VERSION}/fourmolu-${FOURMOLU_VERSION}-linux-x86_64.zip" \
+            --output "$tool_root/fourmolu.zip"
+          unzip -q "$tool_root/fourmolu.zip" -d "$tool_root"
+          install -m 755 "$tool_root/fourmolu-${FOURMOLU_VERSION}-linux-x86_64/fourmolu" "$tool_root/bin/fourmolu"
+          curl --fail --location --retry 3 \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            --output "$tool_root/shellcheck.tar.xz"
+          tar -xJf "$tool_root/shellcheck.tar.xz" -C "$tool_root"
+          install -m 755 "$tool_root/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$tool_root/bin/shellcheck"
+          printf '%s\n' "$tool_root/bin" >> "$GITHUB_PATH"
       - name: Cache Cabal dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -52,7 +80,7 @@ jobs:
           sh scripts/validate.sh --check-compiler
       - name: Update package index
         run: cabal update
-      - name: Validate with the pinned compiler
+      - name: Check source policy, lint, regressions, and runtime-free tests
         env:
           GHC: ${{ steps.haskell.outputs.ghc-exe }}
         run: sh scripts/validate.sh
