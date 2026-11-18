@@ -1,0 +1,25 @@
+{
+  "tools": {
+    "ghc": "9.10.3",
+    "hlint": "3.10",
+    "shellcheck": "0.11.0",
+    "fourmolu": "0.21.0.0"
+  },
+  "limits": {
+    "file_lines": 500,
+    "top_level": 20,
+    "definition_lines": 50,
+    "line_width": 80,
+    "string_occurrences": 2,
+    "directory_entries": 20
+  },
+  "shell_exclude": [
+    ".git",
+    ".scratch",
+    ".stack-work",
+    "__pycache__",
+    "dist",
+    "dist-newstyle",
+    "hs-pbt"
+  ]
+}
