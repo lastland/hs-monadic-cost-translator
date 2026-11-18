@@ -35,15 +35,22 @@ expressionTypes ::
     [LHsExpr GhcTc] ->
     IO (Map.Map String Type)
 expressionTypes session checked source typed = do
-    let locations = Set.fromList [location e | e <- source, interesting (unLoc e)]
+    let locations =
+            Set.fromList
+                [location e | e <- source, interesting (unLoc e)]
         original =
             Map.fromListWith
                 (\_ outer -> outer)
-                [(location e, e) | e <- typed, location e `Set.member` locations]
+                [ (location e, e)
+                | e <- typed
+                , location e `Set.member` locations
+                ]
         names =
             Map.fromListWith
                 (++)
-                [(location e, [(unLoc name, getLocA e)]) | e@(L _ (HsVar _ name)) <- source]
+                [ (location e, [(unLoc name, getLocA e)])
+                | e@(L _ (HsVar _ name)) <- source
+                ]
         occurrences = Map.fromListWith (+) [(location e, 1 :: Int) | e <- typed]
         references =
             Map.fromListWith
@@ -52,7 +59,8 @@ expressionTypes session checked source typed = do
                 | e <- typed
                 , Just (name, path) <- [reference e]
                 ]
-        selected = Map.mapMaybeWithKey (recover names occurrences references) original
+        selected = Map.mapMaybeWithKey choose original
+        choose = recover names occurrences references
     (_, result) <-
         initDs session (fst (tm_internals_ checked)) $
             traverse (fmap exprType . dsLExpr) selected
@@ -62,45 +70,60 @@ expressionTypes session checked source typed = do
         interesting HsVar {} = True
         interesting ExprWithTySig {} = True
         interesting _ = False
-        recover names occurrences references site original = case Map.lookup site references of
-            Just candidates | any (\(_, path, _) -> length path > 1) candidates -> do
-                [(name, sourceSpan)] <- Map.lookup site names
-                let (_, outerPath, outer) = maximumBy (comparing (\(_, path, _) -> length path)) candidates
-                if last outerPath == sourceSpan
-                    && all
-                        (\(checkedName, path, _) -> checkedName == name && path `isSuffixOf` outerPath)
-                        candidates
-                    && length candidates == length outerPath
-                    && all
-                        (\span' -> Map.lookup (showSDocUnsafe (ppr span')) occurrences == Just 1)
-                        outerPath
-                    then Just outer
-                    else Nothing
-            _ -> Just original
-        reference expression = case getLocA expression of
-            RealSrcSpan {} -> do
-                (name, path) <- nested (unLoc expression)
-                pure (name, getLocA expression : path)
-            _ -> Nothing
-        nested (HsVar _ name)
-            | let (_, _, tau) = tcSplitSigmaTy (idType (unLoc name))
-            , not (null (fst (splitFunTys tau))) =
-                Just (getName (unLoc name), [])
-        nested (HsPar _ expression) = reference expression
-        nested (XExpr (WrapExpr (HsWrap wrapper expression)))
-            | applications wrapper = nested expression
-        nested _ = Nothing
-        applications (WpCompose left right) = applications left && applications right
-        applications WpTyApp {} = True
-        applications WpEvApp {} = True
-        applications WpHole = True
-        applications _ = False
+
+recover ::
+    Map.Map String [(Name, SrcSpan)] ->
+    Map.Map String Int ->
+    Map.Map String [(Name, [SrcSpan], LHsExpr GhcTc)] ->
+    String ->
+    LHsExpr GhcTc ->
+    Maybe (LHsExpr GhcTc)
+recover names counts refs site original = case Map.lookup site refs of
+    Just candidates | any (\(_, path, _) -> length path > 1) candidates -> do
+        [(name, sourceSpan)] <- Map.lookup site names
+        let pathLength (_, path, _) = length path
+            (_, outerPath, outer) = maximumBy (comparing pathLength) candidates
+            sameReference (checkedName, path, _) =
+                checkedName == name && path `isSuffixOf` outerPath
+            uniqueSpan span' =
+                Map.lookup (showSDocUnsafe (ppr span')) counts == Just 1
+        if last outerPath == sourceSpan
+            && all sameReference candidates
+            && length candidates == length outerPath
+            && all uniqueSpan outerPath
+            then Just outer
+            else Nothing
+    _ -> Just original
+reference :: LHsExpr GhcTc -> Maybe (Name, [SrcSpan])
+reference expression = case getLocA expression of
+    RealSrcSpan {} -> do
+        (name, path) <- nested (unLoc expression)
+        pure (name, getLocA expression : path)
+    _ -> Nothing
+nested :: HsExpr GhcTc -> Maybe (Name, [SrcSpan])
+nested (HsVar _ name)
+    | let (_, _, tau) = tcSplitSigmaTy (idType (unLoc name))
+    , not (null (fst (splitFunTys tau))) =
+        Just (getName (unLoc name), [])
+nested (HsPar _ expression) = reference expression
+nested (XExpr (WrapExpr (HsWrap wrapper expression)))
+    | applications wrapper = nested expression
+nested _ = Nothing
+applications :: HsWrapper -> Bool
+applications (WpCompose left right) = applications left && applications right
+applications WpTyApp {} = True
+applications WpEvApp {} = True
+applications WpHole = True
+applications _ = False
 
 expressionTypeAt ::
     [LHsExpr GhcRn] -> Map.Map String Type -> LHsExpr GhcRn -> Maybe Type
 expressionTypeAt source hints = select
     where
-        locations = Map.fromListWith (+) [(location expression, 1 :: Int) | expression <- source]
+        locations =
+            Map.fromListWith
+                (+)
+                [(location e, 1 :: Int) | e <- source]
         select expression = case getLocA expression of
             RealSrcSpan {}
                 | Map.lookup (location expression) locations == Just 1 ->
@@ -140,12 +163,13 @@ functionTypes checked =
             | abs_sig abstraction = wrapperVariables wrapper
             | otherwise =
                 [ variable
-                | variable <- abs_tvs abstraction
-                , variable `elemVarSet` tyCoVarsOfType (idType (abe_mono export))
+                | let free = tyCoVarsOfType (idType (abe_mono export))
+                , variable <- abs_tvs abstraction
+                , variable `elemVarSet` free
                 ]
         bodyType matches =
             foldr
-                (\argument -> mkVisFunTy (scaledMult argument) (scaledThing argument))
+                (\arg -> mkVisFunTy (scaledMult arg) (scaledThing arg))
                 (mg_res_ty matches)
                 (mg_arg_tys matches)
 
@@ -163,7 +187,8 @@ checkedAbstractions value
     | otherwise = concat (gmapQ checkedAbstractions value)
 
 wrapperVariables :: HsWrapper -> [TyVar]
-wrapperVariables (WpCompose left right) = wrapperVariables left ++ wrapperVariables right
+wrapperVariables (WpCompose left right) =
+    wrapperVariables left ++ wrapperVariables right
 wrapperVariables (WpTyLam variable) = [variable]
 wrapperVariables _ = []
 
@@ -171,4 +196,5 @@ hasFreeVariables :: Type -> Bool
 hasFreeVariables = not . isEmptyVarSet . tyCoVarsOfType
 
 hasFreshAnnotationVariables :: LHsSigWcType GhcRn -> Bool
-hasFreshAnnotationVariables = not . null . hsOuterTyVarNames . sig_bndrs . unLoc . hswc_body
+hasFreshAnnotationVariables annotation =
+    not (null (hsOuterTyVarNames (sig_bndrs (unLoc (hswc_body annotation)))))

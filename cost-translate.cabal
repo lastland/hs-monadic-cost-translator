@@ -95,10 +95,21 @@ library
         Cost.Translate.Validation
         Cost.Translate.Kinds
         Cost.Translate.Sharing
+        Cost.Translate.Sharing.Keys
+        Cost.Translate.Sharing.Native
+        Cost.Translate.Sharing.NativeSupport
+        Cost.Translate.Sharing.Paths
+        Cost.Translate.Sharing.Projection
+        Cost.Translate.Sharing.Reflected
+        Cost.Translate.Sharing.ReflectionTypes
+        Cost.Translate.Sharing.Specialization
+        Cost.Translate.Sharing.Support
         Cost.Translate.Callable
         Cost.Translate.Diagnostic
         Cost.Translate.Typed
         Cost.Translate.Specialize
+        Cost.Translate.Specialize.Analysis
+        Cost.Translate.Specialize.Selection
         Cost.Translate.Output
         Cost.Translate.Output.Ast
         Cost.Translate.Output.Binders
