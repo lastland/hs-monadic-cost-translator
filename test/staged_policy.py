@@ -62,6 +62,9 @@ class StagedPolicyTests(unittest.TestCase):
             for path in sorted((ROOT / directory).glob("*")):
                 if path.is_file():
                     self.copy(path.relative_to(ROOT))
+        # Source distributions may normalize executable bits. Install the hook
+        # explicitly in this disposable repository before invoking it directly.
+        (self.root / ".githooks" / "pre-commit").chmod(0o755)
         for name in ("fourmolu.yaml", ".hlint.yaml", ".shellcheckrc"):
             if (ROOT / name).is_file():
                 self.copy(name)

@@ -10,7 +10,7 @@ Building and running the translator with full candidate verification requires:
 - **Stack (LTS 24.22)**: `stack.yaml` pins LTS 24.22 (GHC 9.10.3) and `QuickCheck-2.17.1.0` to match the target runtime.
 - **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a local checkout of the `MemoristANT` package at `hs-pbt/` in the repository root. Apply the [private-allocator patch](patches/README.md) before building. This directory is git-ignored and not bundled with the repository.
 
-`stack.yaml` registers both `.` and `hs-pbt/` so that GHC commands run under `stack run` and `stack test` can load `MemoristANT` and `QuickCheck` when typechecking generated modules. The translator library and executable themselves do not depend on `MemoristANT` at build time; runtime-free builds and policy checks need only Cabal and an installed GHC 9.10.3.
+`stack.yaml` registers both `.` and `hs-pbt/` so that GHC commands run under `stack run` and `stack test` can load `MemoristANT` and `QuickCheck` when typechecking generated modules. The translator library and executable themselves do not depend on `MemoristANT` at build time. Runtime-free builds need Cabal and an installed GHC 9.10.3; repository validation also requires the pinned tools described in the [source-check guide](docs/source-policy.md).
 
 ## Building and Translating a Module
 
@@ -306,27 +306,28 @@ scopes and result shapes merely because they currently use the same fallback.
 
 Test groups and their execution are defined in [`test/Main.hs`](test/Main.hs).
 
-- **Runtime-free build and policy checks** (requires Cabal and GHC 9.10.3; does not require `hs-pbt/`):
+- **Runtime-free build and policy checks** (requires Cabal, Python 3, Git, and the [pinned source-check tools](scripts/source-policy.json); does not require `hs-pbt/`):
   ```sh
   sh scripts/validate.sh
   ```
-  `scripts/validate.sh` locates an installed `ghc-9.10.3` (or overrides via `GHC=/path/to/ghc`), builds the executable and test suite with `-Wall -Werror`, and runs the runtime-free diagnostic, selector, and fixture-policy checks.
+  `scripts/validate.sh` checks formatting, source limits, ShellCheck, HLint, and checker/hook regressions before the warning-clean build and runtime-free tests. See the [source-check guide](docs/source-policy.md) for setup, formatting commands, and the opt-in staged hook.
 - **Full reference-comparison test suite** (requires Stack, `hs-pbt/`, and HLint on `PATH`):
   ```sh
-  stack test
+  sh scripts/stack-test.sh
   ```
   To run individual test groups or fixture selectors:
   ```sh
-  stack test cost-translate:test:cost-translate-test --test-arguments="double"
-  stack test cost-translate:test:cost-translate-test --test-arguments="diagnostics fixture-policy"
+  sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="double"
+  sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="diagnostics fixture-policy"
   ```
 - **Supplemental external-runtime probes** (validates `MemoristANT` runtime behavior directly):
   ```sh
-  stack --stack-yaml integration/stack.yaml test
+  sh scripts/stack-test.sh --stack-yaml integration/stack.yaml
   ```
 - **Linting**:
   ```sh
-  hlint src app test/*.hs test/reference/*.hs
+  sh scripts/check-hlint.sh
+  sh scripts/check-shell.sh
   ```
 
 ## License

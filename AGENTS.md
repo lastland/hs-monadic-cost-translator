@@ -17,6 +17,20 @@ not merely because work was completed.
 Run Stack tests with `sh scripts/stack-test.sh [arguments]` instead of invoking
 `stack test` directly.
 
+## Source workflow
+
+- After editing `src/`, run `sh scripts/format-source.sh FILE...`, then
+  `sh scripts/check-source.sh` and `sh scripts/check-hlint.sh`. The shared scripts
+  own formatting, discovery, tool pins, and source limits.
+- After shell changes, run `sh scripts/check-shell.sh`.
+- After each coherent extraction, compile and run affected behavioral tests.
+  Preserve independent references and inspect changes to generated behavior.
+- Before completing substantial work, run `sh scripts/validate.sh` and the full
+  Stack reference suite. Report baseline failures separately from regressions.
+- Type-annotate new and modified Python code, including tests.
+- For tool setup, checker failures, or the opt-in staged hook, read
+  `docs/source-policy.md`. Hook installation and Git configuration need approval.
+
 ## Agent skills
 
 ### Issue tracker

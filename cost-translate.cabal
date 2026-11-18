@@ -29,17 +29,22 @@ data-files:
     test/generated-construction/*.hs
     test/runtime-allocator/*.hs
 extra-source-files:
+    .githooks/pre-commit
+    .hlint.yaml
+    .shellcheckrc
+    fourmolu.yaml
+    docs/source-policy.md
     patches/README.md
     patches/memorist-private-allocator.patch
     examples/VALIDATION.md
     scripts/stack-compiler.yaml
-    scripts/stack-test.sh
-    scripts/validate.sh
-    test/comment_policy.py
+    scripts/*.sh
+    scripts/*.py
+    scripts/source-policy.json
+    test/*.py
     test/comment-policy/*.txt
+    test/source-policy/*.txt
     test/CommentPolicy.hs
-    test/compiler_preflight.py
-    test/stack_test.py
     test/OutputAstProbe.hs
     test/RuntimeFilterGate.hs
     test/RuntimeScanlGate.hs
