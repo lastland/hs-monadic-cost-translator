@@ -1,4 +1,10 @@
-module Cost.Translate.Callable (callArity, emitCallable, isComposition, spine, expressions) where
+module Cost.Translate.Callable
+    ( callArity
+    , emitCallable
+    , isComposition
+    , spine
+    , expressions
+    ) where
 
 import Control.Monad (replicateM, unless, zipWithM)
 import Control.Monad.Trans.Class (lift)
@@ -33,23 +39,32 @@ expressions :: (Data a) => a -> [LHsExpr GhcRn]
 expressions value = case cast value of
     Just expr ->
         expr : case unLoc expr of
-            HsApp {} -> let (fun, args) = spine expr in concatMap expressions (fun : args)
+            HsApp {} ->
+                let (fun, args) = spine expr
+                 in concatMap expressions (fun : args)
             _ -> concat (gmapQ expressions (unLoc expr))
     Nothing -> concat (gmapQ expressions value)
 
 view :: LHsExpr GhcRn -> Either String (Head, [LHsExpr GhcRn])
 view expr = case spine expr of
-    (L _ (HsVar _ n), f : g : args) | isComposition (unLoc n) -> Right (Composed f g, args)
-    (L _ (OpApp _ f op g), args) | HsVar _ n <- unLoc op, isComposition (unLoc n) -> Right (Composed f g, args)
-    (L _ (HsVar _ n), args) | not (isComposition (unLoc n)) -> Right (Named (unLoc n), args)
+    (L _ (HsVar _ n), f : g : args)
+        | isComposition (unLoc n) -> Right (Composed f g, args)
+    (L _ (OpApp _ f op g), args)
+        | HsVar _ n <- unLoc op
+        , isComposition (unLoc n) ->
+            Right (Composed f g, args)
+    (L _ (HsVar _ n), args)
+        | not (isComposition (unLoc n)) -> Right (Named (unLoc n), args)
     (L _ (HsRecSel _ field), args) -> Right (Named (foExt field), args)
     _ ->
         failure
             expr
-            "function alias or computed function result has no validated calling convention"
+            "function alias or computed function result\
+            \ has no validated calling convention"
 
 failure :: LHsExpr GhcRn -> String -> Either String a
-failure expr message = Left (showSDocUnsafe (ppr (getLocA expr)) ++ ": " ++ message)
+failure expr message =
+    Left (showSDocUnsafe (ppr (getLocA expr)) ++ ": " ++ message)
 
 callArity :: Resolver -> LHsExpr GhcRn -> Either String Int
 callArity resolve expr = do
@@ -59,7 +74,8 @@ callArity resolve expr = do
             maybe
                 ( failure
                     expr
-                    "function alias or computed function result has no validated calling convention"
+                    "function alias or computed function result\
+                    \ has no validated calling convention"
                 )
                 (Right . snd)
                 (resolve n)
@@ -70,7 +86,8 @@ callArity resolve expr = do
                 (nf > 0 && ng > 0)
                 ( failure
                     expr
-                    "composition needs a named function right operand and a named result convention"
+                    "composition needs a named function right operand\
+                    \ and a named result convention"
                 )
             pure nf
     unless
@@ -88,7 +105,9 @@ emitCallable freshName resolve renderThunk expr = do
     _ <- callArity resolve expr
     evalStateT
         ( do
-            (prefix, fun) <- prepare expr; result <- finish fun; pure (O.doE prefix result)
+            (prefix, fun) <- prepare expr
+            result <- finish fun
+            pure (O.doE prefix result)
         )
         0
     where
@@ -106,7 +125,8 @@ emitCallable freshName resolve renderThunk expr = do
             arguments <- lift (zipWithM renderThunk names args)
             (more, applied) <- specialize fun (map snd arguments)
             pure (prefix ++ concatMap fst arguments ++ more, applied)
-        specialize (Call name n captured) args = pure ([], Call name (n - length args) (captured ++ args))
+        specialize (Call name n captured) args =
+            pure ([], Call name (n - length args) (captured ++ args))
         specialize composed@(Compose _ _) [] = pure ([], composed)
         specialize (Compose f g) (input : rest) = do
             (pg, cg) <- specialize g [input]

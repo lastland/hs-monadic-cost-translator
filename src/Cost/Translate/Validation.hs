@@ -1,4 +1,8 @@
-module Cost.Translate.Validation (validateComparisons, scalarType, scalarSupport) where
+module Cost.Translate.Validation
+    ( validateComparisons
+    , scalarType
+    , scalarSupport
+    ) where
 
 import Control.Monad (unless)
 import Cost.Translate.Output qualified as O
@@ -37,8 +41,10 @@ import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 validateComparisons :: Core.CoreProgram -> Either String ()
 validateComparisons = mapM_ binding
     where
-        binding (Core.NonRec name expr) = walk (showSDocUnsafe (ppr (nameSrcSpan (getName name)))) expr
-        binding (Core.Rec bindings) = mapM_ (binding . uncurry Core.NonRec) bindings
+        binding (Core.NonRec name expr) =
+            walk (showSDocUnsafe (ppr (nameSrcSpan (getName name)))) expr
+        binding (Core.Rec bindings) =
+            mapM_ (binding . uncurry Core.NonRec) bindings
         walk location expr = do
             case expr of
                 Core.Type _ -> pure ()
@@ -46,13 +52,18 @@ validateComparisons = mapM_ binding
                 _ ->
                     mapM_
                         (check location . scaledThing)
-                        (fst (splitFunTys (snd (splitForAllTyVars (exprType expr)))))
+                        ( fst
+                            ( splitFunTys
+                                (snd (splitForAllTyVars (exprType expr)))
+                            )
+                        )
             case expr of
                 Core.App f a -> walk location f >> walk location a
                 Core.Lam _ body -> walk location body
                 Core.Let bindings body -> binding bindings >> walk location body
                 Core.Case scrutinee _ _ alts ->
-                    walk location scrutinee >> mapM_ (\(Core.Alt _ _ rhs) -> walk location rhs) alts
+                    walk location scrutinee
+                        >> mapM_ (\(Core.Alt _ _ rhs) -> walk location rhs) alts
                 Core.Cast body _ -> walk location body
                 Core.Tick _ body -> walk location body
                 _ -> pure ()
@@ -64,7 +75,8 @@ validateComparisons = mapM_ binding
                         (scalarType argument)
                         ( Left
                             ( location
-                                ++ ": comparisons support only strict scalar operands; found "
+                                ++ ": comparisons support only strict\
+                                   \ scalar operands; found "
                                 ++ showSDocUnsafe (ppr argument)
                             )
                         )

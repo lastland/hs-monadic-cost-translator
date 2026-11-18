@@ -15,43 +15,61 @@ translateFile :: FilePath -> FilePath -> IO (Either String ())
 translateFile source output = do
     result <- try (generate source (takeBaseName output))
     case result of
-        Left (e :: SomeException) -> failure ("source error: " ++ displayException e)
-        Right (Left diagnostic, logText) -> failure (logText ++ renderDiagnostic diagnostic)
+        Left (e :: SomeException) ->
+            failure ("source error: " ++ displayException e)
+        Right (Left diagnostic, logText) ->
+            failure (logText ++ renderDiagnostic diagnostic)
         Right (Right code, logText) -> do
             writeFile logPath logText
-            withTempDirectory (takeDirectory output) ".cost-translate-" $ \temp -> do
-                let candidate = temp </> takeBaseName output ++ ".hs"
-                writeFile candidate code
-                (status, out, err) <-
-                    readProcessWithExitCode
-                        "ghc"
-                        [ "-v0"
-                        , "-fno-code"
-                        , "-fforce-recomp"
-                        , "-i" ++ takeDirectory source
-                        , "-package"
-                        , "MemoristANT"
-                        , "-package"
-                        , "QuickCheck"
-                        , candidate
-                        ]
-                        ""
-                appendFile logPath (out ++ err)
-                case status of
-                    ExitSuccess -> do
-                        renameFile candidate output
-                        appendFile logPath "Generated module typechecked; published output\n"
-                        pure (Right ())
-                    ExitFailure _ -> do
-                        appendFile logPath ("Failed candidate:\n" ++ code)
-                        let category =
-                                if any
-                                    (`isInfixOf` (out ++ err))
-                                    ["cannot satisfy -package", "Could not find module", "Could not load module"]
-                                    then "setup error: target modules are unavailable in GHC's environment"
-                                    else "generated-code type error"
-                        appendFile logPath (category ++ "\n")
-                        pure (Left (category ++ "; see " ++ logPath))
+            withTempDirectory (takeDirectory output) ".cost-translate-" $
+                publishCandidate source output code
     where
         logPath = output ++ ".log"
-        failure message = writeFile logPath (message ++ "\n") >> pure (Left message)
+        failure message =
+            writeFile logPath (message ++ "\n") >> pure (Left message)
+
+publishCandidate ::
+    FilePath -> FilePath -> String -> FilePath -> IO (Either String ())
+publishCandidate source output code temp = do
+    let candidate = temp </> takeBaseName output ++ ".hs"
+    writeFile candidate code
+    (status, out, err) <-
+        readProcessWithExitCode
+            "ghc"
+            [ "-v0"
+            , "-fno-code"
+            , "-fforce-recomp"
+            , "-i" ++ takeDirectory source
+            , "-package"
+            , "MemoristANT"
+            , "-package"
+            , "QuickCheck"
+            , candidate
+            ]
+            ""
+    appendFile logPath (out ++ err)
+    case status of
+        ExitSuccess -> do
+            renameFile candidate output
+            appendFile
+                logPath
+                "Generated module typechecked; published output\n"
+            pure (Right ())
+        ExitFailure _ -> do
+            appendFile logPath ("Failed candidate:\n" ++ code)
+            let category = failureCategory (out ++ err)
+            appendFile logPath (category ++ "\n")
+            pure (Left (category ++ "; see " ++ logPath))
+    where
+        logPath = output ++ ".log"
+
+failureCategory :: String -> String
+failureCategory diagnostic =
+    if any
+        (`isInfixOf` diagnostic)
+        [ "cannot satisfy -package"
+        , "Could not find module"
+        , "Could not load module"
+        ]
+        then "setup error: target modules are unavailable in GHC's environment"
+        else "generated-code type error"

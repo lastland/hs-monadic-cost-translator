@@ -40,10 +40,14 @@ data Section = Section
     }
 
 renderModule :: DynFlags -> HsModule GhcPs -> String
-renderModule flags ast = renderPreamble generatedExtensions ++ showSDoc renderedFlags body ++ "\n"
+renderModule flags ast =
+    renderPreamble generatedExtensions ++ showSDoc renderedFlags body ++ newline
     where
         renderedFlags = foldl xopt_set flags generatedExtensions
-        body = renderBody ast [renderDeclarations declarations | not (null declarations)]
+        body =
+            renderBody
+                ast
+                [renderDeclarations declarations | not (null declarations)]
         declarations = hsmodDecls ast
 
 renderSectionedModule ::
@@ -52,18 +56,23 @@ renderSectionedModule flags extensions ast sections =
     renderPreamble extensions
         ++ showSDoc
             renderedFlags
-            (renderBody ast [separated (map renderSection sections) | not (null sections)])
-        ++ "\n"
+            ( renderBody
+                ast
+                [separated (map renderSection sections) | not (null sections)]
+            )
+        ++ newline
     where
         renderedFlags = foldl xopt_set flags generatedExtensions
-        renderSection (Section common name declarations) = separated (text banner : declarationBlock)
+        renderSection (Section common name declarations) =
+            separated (text banner : declarationBlock)
             where
                 banner =
                     "-- ==== "
                         ++ (if common then "Common: " else "Module-specific: ")
                         ++ name
                         ++ " ===="
-                declarationBlock = [renderDeclarations declarations | not (null declarations)]
+                declarationBlock =
+                    [renderDeclarations declarations | not (null declarations)]
 
 renderBody :: HsModule GhcPs -> [SDoc] -> SDoc
 renderBody ast declarations = separated (moduleLine : imports ++ declarations)
@@ -74,7 +83,8 @@ renderBody ast declarations = separated (moduleLine : imports ++ declarations)
 renderImports :: [LImportDecl GhcPs] -> [SDoc]
 renderImports imports = map renderGroup (filter (not . null) [plain, qualified])
     where
-        (plain, qualified) = partition ((== NotQualified) . ideclQualified . unLoc) imports
+        (plain, qualified) =
+            partition ((== NotQualified) . ideclQualified . unLoc) imports
         renderGroup = vcat . map ppr . sortOn importName
         importName = moduleNameString . unLoc . ideclName . unLoc
 
@@ -90,11 +100,17 @@ declarationGroups = go []
         go pending [] = map (: []) pending
         go pending (declaration : rest) = case signatureNames declaration of
             [] ->
-                let (matching, remaining) = partition (matches declaration) pending
+                let (matching, remaining) =
+                        partition (matches declaration) pending
                  in (matching ++ [declaration]) : go remaining rest
             _ -> go (pending ++ [declaration]) rest
         matches declaration signature =
-            not (null (signatureNames signature `intersect` declarationNames declaration))
+            not
+                ( null
+                    ( signatureNames signature
+                        `intersect` declarationNames declaration
+                    )
+                )
 
 signatureNames :: Decl -> [RdrName]
 signatureNames located = case unLoc located of
@@ -111,7 +127,7 @@ declarationNames located = case unLoc located of
 renderPreamble :: [Extension.Extension] -> String
 renderPreamble extensions =
     intercalate
-        "\n"
+        newline
         (filter (not . null) [generatedPragma extensions, generatedOptions])
         ++ "\n\n"
 
@@ -161,11 +177,14 @@ generatedPragma extensions =
         then ""
         else
             "{-# LANGUAGE\n    "
-                ++ intercalate ",\n    " (map show unique ++ ["NoMonoLocalBinds"])
+                ++ intercalate
+                    ",\n    "
+                    (map show unique ++ ["NoMonoLocalBinds"])
                 ++ " #-}"
     where
         unique = foldr add [] extensions
-        add extension seen = if extension `elem` seen then seen else extension : seen
+        add extension seen =
+            if extension `elem` seen then seen else extension : seen
 
 basicExtensions :: [Extension.Extension]
 basicExtensions =
@@ -176,7 +195,8 @@ basicExtensions =
     ]
 
 polymorphicExtensions :: [Extension.Extension]
-polymorphicExtensions = basicExtensions ++ [Extension.RankNTypes, Extension.KindSignatures]
+polymorphicExtensions =
+    basicExtensions ++ [Extension.RankNTypes, Extension.KindSignatures]
 
 reflectionExtensions :: [Extension.Extension]
 reflectionExtensions =
@@ -196,5 +216,10 @@ requiredExtensions magicHash =
 
 generatedOptions :: String
 generatedOptions =
-    "-- Runtime-owned types require local instances; generic dictionaries retain intentional constraints.\n"
-        ++ "{-# OPTIONS_GHC -Wno-orphans -Wno-simplifiable-class-constraints #-}"
+    "-- Runtime-owned types require local instances;\
+    \ generic dictionaries retain intentional constraints.\n"
+        ++ "{-# OPTIONS_GHC -Wno-orphans\
+           \ -Wno-simplifiable-class-constraints #-}"
+
+newline :: String
+newline = "\n"

@@ -94,6 +94,9 @@ library
         Cost.Translate.Foldable
         Cost.Translate.Validation
         Cost.Translate.Kinds
+        Cost.Translate.Kinds.Lifting
+        Cost.Translate.Kinds.Mapping
+        Cost.Translate.Kinds.Requirements
         Cost.Translate.Sharing
         Cost.Translate.Sharing.Keys
         Cost.Translate.Sharing.Native
