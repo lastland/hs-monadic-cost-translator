@@ -3,7 +3,13 @@
 set -eu
 
 required_ghc=9.10.3
-root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+case $0 in
+    */*) script_dir=${0%/*} ;;
+    *) script_dir=. ;;
+esac
+# Keep a sentinel after the path so command substitution preserves final LFs.
+root=$(CDPATH='' cd -- "$script_dir/.." && printf '%s/' "$PWD")
+root=${root%/}
 
 die() {
     printf 'validate: %s\n' "$*" >&2

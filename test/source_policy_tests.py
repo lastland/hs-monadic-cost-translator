@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -631,6 +632,162 @@ class SourcePolicyCommands(unittest.TestCase):
         result = self.command("check", "--ghc", str(compiler))
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr, "source-policy: tool: GHC facts engine failed\nsrc/Example.hs:3:1: parser failure\n")
+
+
+class WorkingCheckoutScripts(unittest.TestCase):
+    """Invoke copied public scripts without overriding their checkout root."""
+
+    directory: Path
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="working checkout ")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+
+    def checkout(self, name: str, scripts: str = "scripts") -> Path:
+        root = self.directory / name
+        root.mkdir(exist_ok=True)
+        for directory in ("scripts", ".githooks"):
+            shutil.copytree(ROOT / directory, root / directory, dirs_exist_ok=True)
+        (root / "test").mkdir(exist_ok=True)
+        for pattern in ("test/*.py", "test/SourcePolicy.hs", "fourmolu.yaml", ".hlint.yaml", ".shellcheckrc"):
+            for source in ROOT.glob(pattern):
+                shutil.copy2(source, root / source.relative_to(ROOT))
+        for directory in ("src", "app", "test/reference"):
+            (root / directory).mkdir(exist_ok=True)
+        if scripts != "scripts":
+            (root / "scripts").rename(root / scripts)
+            # Configuration remains at its public, fixed location.
+            (root / "scripts").mkdir()
+            for name in ("source-policy.json", "stack-compiler.yaml"):
+                shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
+        return root
+
+    def invoke(
+        self, root: Path, script: str, *arguments: str, scripts: str = "scripts",
+        relative: bool = False, environment: Mapping[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        path = Path(scripts) / script
+        env = dict(os.environ, **(environment or {}))
+        selected = os.environ.get("SOURCE_POLICY_TEST_GHC")
+        if selected is not None:
+            env["GHC"] = selected
+        return subprocess.run(
+            ["/bin/sh", str(path if relative else root / path), *arguments],
+            cwd=root if relative else self.directory, env=env,
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+
+    def test_source_script_checks_newline_checkout_not_passing_sibling(self) -> None:
+        sibling = self.checkout("checkout")
+        good = b"module Example where\n\nvalue :: Int\nvalue = 1\n"
+        (sibling / "src/Example.hs").write_bytes(good)
+        for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
+            with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
+                root = self.checkout("checkout" + suffix, scripts)
+                bad = b"module Example where\nvalue=1\n"
+                (root / "src/Example.hs").write_bytes(bad)
+                accepted = self.invoke(sibling, "check-source.sh")
+                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+                result = self.invoke(root, "check-source.sh", scripts=scripts, relative=relative)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("src/Example.hs: formatting:", result.stderr)
+                self.assertEqual((root / "src/Example.hs").read_bytes(), bad)
+                self.assertEqual((sibling / "src/Example.hs").read_bytes(), good)
+
+    def test_shell_script_checks_newline_checkout_not_passing_sibling(self) -> None:
+        sibling = self.checkout("checkout")
+        good = b'#!/bin/sh\nargument="two words"\nprintf "%s\\n" "$argument"\n'
+        (sibling / "probe.sh").write_bytes(good)
+        for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
+            with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
+                root = self.checkout("checkout" + suffix, scripts)
+                bad = b'#!/bin/sh\nargument="two words"\nprintf "%s\\n" $argument\n'
+                (root / "probe.sh").write_bytes(bad)
+                accepted = self.invoke(sibling, "check-shell.sh")
+                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+                result = self.invoke(root, "check-shell.sh", scripts=scripts, relative=relative)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("probe.sh:3:", result.stderr)
+                self.assertIn("SC2086", result.stderr)
+                self.assertEqual((root / "probe.sh").read_bytes(), bad)
+                self.assertEqual((sibling / "probe.sh").read_bytes(), good)
+
+    def test_hlint_script_checks_newline_checkout_not_passing_sibling(self) -> None:
+        sibling = self.checkout("checkout")
+        good = b"module Example where\n\nvalue :: Int\nvalue = 1\n"
+        (sibling / "src/Example.hs").write_bytes(good)
+        for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
+            with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
+                root = self.checkout("checkout" + suffix, scripts)
+                bad = b"module Example where\n\nvalue :: Int\nvalue = id 1\n"
+                (root / "src/Example.hs").write_bytes(bad)
+                accepted = self.invoke(sibling, "check-hlint.sh")
+                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+                result = self.invoke(root, "check-hlint.sh", scripts=scripts, relative=relative)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("src/Example.hs:4:", result.stderr)
+                self.assertIn("Redundant id", result.stderr)
+                self.assertEqual((root / "src/Example.hs").read_bytes(), bad)
+                self.assertEqual((sibling / "src/Example.hs").read_bytes(), good)
+
+    def test_formatter_writes_newline_checkout_and_preserves_sibling(self) -> None:
+        sibling = self.checkout("checkout")
+        sibling_original = b"module Example where\nvalue=2\n"
+        for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
+            with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
+                root = self.checkout("checkout" + suffix, scripts)
+                (root / "src/Example.hs").write_bytes(b"module Example where\nvalue=1\n")
+                untouched = b"module Other where\nother=3\n"
+                (root / "src/Other.hs").write_bytes(untouched)
+                (sibling / "src/Example.hs").write_bytes(sibling_original)
+                result = self.invoke(root, "format-source.sh", "src/Example.hs", scripts=scripts, relative=relative)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((sibling / "src/Example.hs").read_bytes(), sibling_original)
+                self.assertEqual((root / "src/Example.hs").read_bytes(), b"module Example where\n\nvalue = 1\n")
+                self.assertEqual((root / "src/Other.hs").read_bytes(), untouched)
+
+    def test_validate_discovers_compiler_using_newline_checkout_configuration(self) -> None:
+        selected = subprocess.run(
+            ["/bin/sh", str(ROOT / "scripts/validate.sh"), "--print-compiler"],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+        self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
+        compiler = selected.stdout.removesuffix("\n")
+        tools = self.directory / "discovery tools"
+        tools.mkdir()
+        for name in ("dirname", "basename", "readlink"):
+            executable = shutil.which(name, path=os.defpath)
+            self.assertIsNotNone(executable, name)
+            assert executable is not None
+            (tools / name).symlink_to(executable)
+        log = self.directory / "stack arguments.json"
+        stack = tools / "stack"
+        stack.write_text(
+            "#!" + sys.executable + "\nimport json\nfrom pathlib import Path\nimport sys\n"
+            "log: Path = Path(" + repr(str(log)) + ")\n"
+            "log.write_text(json.dumps(sys.argv[1:]))\nprint(" + repr(compiler) + ")\n"
+        )
+        stack.chmod(0o755)
+        environment = dict(os.environ, PATH=str(tools))
+        environment.pop("GHC", None)
+        self.checkout("checkout")
+        for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
+            with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
+                root = self.checkout("checkout" + suffix, scripts)
+                path = Path(scripts) / "validate.sh"
+                result = subprocess.run(
+                    ["/bin/sh", str(path if relative else root / path), "--print-compiler"],
+                    cwd=root if relative else self.directory, env=environment,
+                    capture_output=True, text=True, check=False, timeout=120,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, compiler + "\n")
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(json.loads(log.read_text()), [
+                    "--stack-yaml", str(root / "scripts/stack-compiler.yaml"),
+                    "--no-install-ghc", "path", "--compiler-exe",
+                ])
 
 
 class RealSourcePolicyBoundaries(unittest.TestCase):
