@@ -117,6 +117,13 @@ sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-argument
 The guard checks references to these runtime definitions. It is not a proof
 against arbitrary reimplementations of an interpreter.
 
+Native support for potentially overlapping generic instantiations is outside the
+current scope ([issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3)).
+This is a production limitation, not a guard exemption: evaluator-based output
+still fails the same construction check. Other legacy failures are not excluded
+merely because they use the same helper. References, demanded costs, and caller
+constraints remain unchanged.
+
 The `polymorphic-local-value` and `polymorphic-local-demand` fixtures exercise
 native allocation for unconstrained local values with type-variable or nested-list
 results. Their independent references retain the reasoning operations permitted

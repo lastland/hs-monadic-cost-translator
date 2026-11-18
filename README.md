@@ -229,11 +229,11 @@ instantiation. Each recursive entry still charges a tick; a shared value declare
 outside the helper stays outside every recursive call. Mutual recursion and
 self-calls at different types do not qualify for this path.
 
-Potentially overlapping instantiations such as `a` and `Int`, unsupported scopes,
-and other generalized result shapes still emit legacy evaluator helpers; those
-outputs do not yet meet the construction-only contract enforced by the test
-suite. The remaining polymorphic-local limitation is tracked in
-[issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3).
+Local values outside these native rules can still emit legacy evaluator helpers
+or require additional `Typeable` constraints. Those outputs fail the
+construction-only contract enforced by the test suite. The overlapping-instantiation
+limitation below is distinct from other scopes and result shapes outside the
+native lowering rules.
 
 ## Architecture Overview
 
@@ -260,6 +260,22 @@ Unsupported constructs cause translation to fail rather than being silently omit
 - **Scalar-only comparisons**: Runtime `Eq` and `Ord` instances on thunked structures compare thunk metadata rather than structural values. The translator rejects `Eq` and `Ord` uses unless their operands are strict scalars (`Int`, `Integer`, `Float`, `Double`, `Bool`, `Char`, `()`) or `Scalar`-constrained type variables.
 - **Explicit datatype and constructor exports**: Because the generated module is a separate Haskell module that imports the source module to define `reprM` and `abstract`, any source module with an explicit export list must export all of its datatypes and all of their constructors (e.g., `Box(..)`).
 - **Restricted class constraints**: Typeclass constraints on translated bindings are limited to `Foldable` (translated to `FoldableT`) and standard scalar/numeric classes (`Num`, `Eq`, `Ord`, `Fractional`, `Floating`, `Integral`, `Real`, `RealFrac`, `RealFloat`, `Enum`, `Bounded`).
+
+### Potentially Overlapping Generic Locals
+
+Construction-only sharing for potentially overlapping generic instantiations is
+outside the current scope, as tracked in
+[issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3).
+For example, one dictionary-sensitive local may be used at both an abstract `a`
+and concrete `Int`. Those uses must reuse one thunk when the caller chooses
+`a = Int`, but remain distinct when it chooses `a = Integer`. Separate abstract
+parameters can overlap in the same way.
+
+These cases can still publish legacy helpers using `eval`/`value` and require
+`Typeable` constraints absent from the source interface. They are not supported
+construction-only translations; the global test guard still rejects them.
+This exclusion does not apply to distinct closed instantiations or to other
+scopes and result shapes merely because they currently use the same fallback.
 
 ### Module and Environment Constraints
 
