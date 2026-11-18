@@ -794,8 +794,11 @@ class WorkingCheckoutScripts(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout, compiler + "\n")
                 self.assertEqual(result.stderr, "")
+                # A relative invocation starts from subprocess's physical cwd.
+                # Resolve only its parent; keep the newline-bearing name exact.
+                expected_root: Path = root.parent.resolve() / root.name if relative else root
                 self.assertEqual(json.loads(log.read_text()), [
-                    "--stack-yaml", str(root / "scripts/stack-compiler.yaml"),
+                    "--stack-yaml", str(expected_root / "scripts/stack-compiler.yaml"),
                     "--no-install-ghc", "path", "--compiler-exe",
                 ])
 
