@@ -114,10 +114,11 @@ The source cost model is unchanged; the translator does not introduce a separate
 global cache or evaluate computations to compensate for the discrepancy.
 
 Repeated global actions can also lose thunk aliases across direct exported calls,
-even when their measured costs agree. Global identity preservation remains an
-unmet requirement; [issue #4](https://github.com/lastland/hs-monadic-cost-translator/issues/4)
-asks whether it belongs to the same runtime limitation. The cost deferral does
-not itself waive identity checks.
+even when their measured costs agree. Global thunk identity is part of the same
+runtime limitation in #2, as specified in
+[issue #4](https://github.com/lastland/hs-monadic-cost-translator/issues/4).
+Local sharing, local identities, and invocation freshness remain supported
+requirements, not part of this deferral.
 
 ## Cost Model
 
@@ -297,7 +298,7 @@ scopes and result shapes merely because they currently use the same fallback.
 
 ## Testing and Validation
 
-See [`docs/testing.md`](docs/testing.md) for the reference-comparison architecture, probe catalog API, fixture layout, and static policy rules.
+Test groups and their execution are defined in [`test/Main.hs`](test/Main.hs).
 
 - **Runtime-free build and policy checks** (requires Cabal and GHC 9.10.3; does not require `hs-pbt/`):
   ```sh

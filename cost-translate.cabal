@@ -29,7 +29,6 @@ data-files:
     test/generated-construction/*.hs
     test/runtime-allocator/*.hs
 extra-source-files:
-    docs/testing.md
     patches/README.md
     patches/memorist-private-allocator.patch
     examples/VALIDATION.md
