@@ -30,10 +30,10 @@ moduleEnvironment ::
     Map.Map String String ->
     Map.Map Name Type ->
     Map.Map String Type ->
-    Map.Map Name [TyVar] ->
+    Map.Map Name ([TyVar], [Type]) ->
     HsGroup GhcRn ->
     (Env, Map.Map Name [Type])
-moduleEnvironment strict datatypes literals types hints checkedVars group =
+moduleEnvironment strict datatypes literals types hints checkedScopes group =
     let binds = concatMap snd (topLevelGroups group)
         topNames =
             Set.fromList
@@ -43,7 +43,7 @@ moduleEnvironment strict datatypes literals types hints checkedVars group =
                 datatypes
                 types
                 hints
-                checkedVars
+                checkedScopes
                 topNames
                 group
         reflected = reflectedLocals types topNames specialized group
@@ -107,21 +107,24 @@ specializedLocals ::
     [TyCon] ->
     Map.Map Name Type ->
     Map.Map String Type ->
-    Map.Map Name [TyVar] ->
+    Map.Map Name ([TyVar], [Type]) ->
     Set.Set Name ->
     HsGroup GhcRn ->
     Map.Map Name [Type]
-specializedLocals datatypes types hints checkedVariables topNames group =
+specializedLocals datatypes types hints checkedScopes topNames group =
     Map.fromList
         [ (unLoc name, instantiations)
         | L _ (FunBind _ name matches) <- collect group :: [LHsBind GhcRn]
         , arity matches == 0
         , unLoc name `Set.notMember` topNames
+        , let (variables, givens) =
+                Map.findWithDefault ([], []) (unLoc name) allocationEvidence
         , Just ty <- [Map.lookup (unLoc name) types]
         , Just instantiations <-
             [ specializedSharing
                 datatypes
-                (Map.findWithDefault [] (unLoc name) allocationVariables)
+                variables
+                givens
                 ty
                 (Map.findWithDefault [] (unLoc name) useTypes)
             ]
@@ -135,24 +138,31 @@ specializedLocals datatypes types hints checkedVariables topNames group =
                 [ (unLoc name, [useType expression])
                 | expression@(L _ (HsVar _ name)) <- sourceExpressions
                 ]
-        allocationVariables =
+        allocationEvidence =
             Map.fromList $
-                allocationScopes checkedVariables [] group
+                allocationScopes checkedScopes ([], []) group
 
 allocationScopes ::
-    (Data a) => Map.Map Name [TyVar] -> [TyVar] -> a -> [(Name, [TyVar])]
-allocationScopes known vars value = case cast value :: Maybe (LHsBind GhcRn) of
+    (Data a) =>
+    Map.Map Name ([TyVar], [Type]) ->
+    ([TyVar], [Type]) ->
+    a ->
+    [(Name, ([TyVar], [Type]))]
+allocationScopes known scope@(vars, givens) value = case source of
     Just binding@(L _ (FunBind _ name matches)) ->
-        let scoped =
+        let (scopedVariables, scopedGivens) =
                 if arity matches > 0
-                    then Map.findWithDefault [] (unLoc name) known
-                    else []
-            descend :: (Data b) => b -> [(Name, [TyVar])]
-            descend = allocationScopes known (vars ++ scoped)
-         in (unLoc name, vars)
+                    then Map.findWithDefault ([], []) (unLoc name) known
+                    else ([], [])
+            nested = (vars ++ scopedVariables, givens ++ scopedGivens)
+            descend :: (Data b) => b -> [(Name, ([TyVar], [Type]))]
+            descend = allocationScopes known nested
+         in (unLoc name, scope)
                 : concat
                     (gmapQ descend (unLoc binding))
-    _ -> concat (gmapQ (allocationScopes known vars) value)
+    _ -> concat (gmapQ (allocationScopes known scope) value)
+    where
+        source = cast value :: Maybe (LHsBind GhcRn)
 
 reflectedLocals ::
     Map.Map Name Type ->

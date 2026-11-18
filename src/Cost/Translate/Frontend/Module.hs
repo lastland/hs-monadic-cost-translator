@@ -46,10 +46,17 @@ emitModule strict target source hash dts original literals hints checked group =
         (helperTypes, adjustType) = specializeHelpers group checked hints
         types = helperTypes `Map.union` Map.map adjustType original
         adjustedHints = Map.map adjustType hints
-        checkedVariables =
-            Map.map
-                Typed.functionVariables
-                (Map.withoutKeys checked (Map.keysSet helperTypes))
+        checkedScopes =
+            Map.mapWithKey
+                ( \name info ->
+                    ( [ variable
+                      | name `Map.notMember` helperTypes
+                      , variable <- Typed.functionVariables info
+                      ]
+                    , map adjustType (Typed.functionGivens info)
+                    )
+                )
+                checked
         (constructorEnv, specialized) =
             moduleEnvironment
                 strict
@@ -57,7 +64,7 @@ emitModule strict target source hash dts original literals hints checked group =
                 literals
                 types
                 adjustedHints
-                checkedVariables
+                checkedScopes
                 group
         binds = concatMap snd (topLevelGroups group)
         env =

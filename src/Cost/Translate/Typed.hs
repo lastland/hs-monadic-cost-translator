@@ -3,6 +3,7 @@ module Cost.Translate.Typed
     , expressionTypeAt
     , FunctionType (..)
     , functionTypes
+    , functionGivens
     , scopedVariables
     , hasFreeVariables
     , hasFreshAnnotationVariables
@@ -17,7 +18,9 @@ import Data.Set qualified as Set
 import GHC hiding (exprType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
+import GHC.Core.TyCo.Subst (substTy)
 import GHC.Core.Type (mkVisFunTy, splitFunTys)
+import GHC.Core.Unify (tcMatchTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
 import GHC.HsToCore.Expr (dsLExpr)
@@ -172,6 +175,13 @@ functionTypes checked =
                 (\arg -> mkVisFunTy (scaledMult arg) (scaledThing arg))
                 (mg_res_ty matches)
                 (mg_arg_tys matches)
+
+functionGivens :: FunctionType -> [Type]
+functionGivens info = case tcMatchTy body (functionBodyType info) of
+    Just substitution -> map (substTy substitution) predicates
+    Nothing -> []
+    where
+        (_, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
 
 scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
 scopedVariables = Map.map functionVariables . functionTypes

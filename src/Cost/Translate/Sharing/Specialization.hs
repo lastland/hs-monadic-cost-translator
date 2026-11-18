@@ -33,16 +33,22 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` free]
         predicates = takeWhile isPredTy arguments
         free = tyCoVarsOfTypes predicates
 
-specializedSharing :: [TyCon] -> [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
-specializedSharing datatypes scopeVariables ty uses
+specializedSharing ::
+    [TyCon] -> [TyVar] -> [Type] -> Type -> [Maybe Type] -> Maybe [Type]
+specializedSharing datatypes scopeVariables givens ty uses
     | length vars > 1
     , all ((`eqType` liftedTypeKind) . tyVarKind) vars
     , all (`elem` constrainedVariables ty) vars
     , all (isPredTy . scaledThing) arguments
     , not (null uses) = do
         types <- sequence uses
-        mapM_ (closedInstantiation matcher vars result) types
-        pure (nubBy eqType types)
+        let distinct = nubBy eqType types
+        case distinct of
+            [value]
+                | not (isEmptyVarSet (tyCoVarsOfType value)) ->
+                    scopedInstantiation matcher scopeVariables givens ty value
+            _ -> mapM_ (closedInstantiation matcher vars result) types
+        pure distinct
     | [variable] <- vars
     , tyVarKind variable `eqType` liftedTypeKind
     , variable `elem` constrainedVariables ty
@@ -91,6 +97,31 @@ closedInstantiation matcher vars result value = do
             && substTyWith vars replacements result `eqType` value
         )
         Nothing
+
+scopedInstantiation ::
+    (Type -> Maybe [(TyVar, Type)]) ->
+    [TyVar] ->
+    [Type] ->
+    Type ->
+    Type ->
+    Maybe ()
+scopedInstantiation matcher scopeVariables givens ty value = do
+    matches <- matcher value
+    replacements <- mapM (`lookup` matches) vars
+    let instantiated = map (substTyWith vars replacements) predicates
+    unless
+        ( all available replacements
+            && substTyWith vars replacements result `eqType` value
+            && all (\predicate -> any (eqType predicate) givens) instantiated
+        )
+        Nothing
+    where
+        (vars, body) = splitForAllTyVars ty
+        (arguments, result) = splitFunTys body
+        predicates = map scaledThing arguments
+        available actual =
+            closedScalar actual
+                || maybe False (`elem` scopeVariables) (getTyVar_maybe actual)
 
 parameters ::
     [TyCon] ->
