@@ -21,8 +21,8 @@ import Cost.Translate.Typed (FunctionType(..), expressionTypeAt)
 import Cost.Translate.Validation (scalarType)
 import Control.Monad (unless)
 import Data.Data (Data, cast, gmapQ)
-import Data.List (nubBy)
-import Data.Maybe (maybeToList)
+import Data.List (find, nubBy)
+import Data.Maybe (isJust, maybeToList)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
@@ -36,6 +36,16 @@ data HelperSpecialization = HelperSpecialization
     , helperOwnedVariable :: TyVar
     , helperInstantiation :: Type
     , helperQualifiedType :: Type
+    }
+
+data LexicalOwner = LexicalOwner
+    { ownerName :: Name
+    , ownerSpan :: SrcSpan
+    }
+
+data ReferenceOwnership = ReferenceOwnership
+    { referenceAncestors :: [LexicalOwner]
+    , referenceSpan :: SrcSpan
     }
 
 specializeHelpers :: HsGroup GhcRn -> Map.Map Name FunctionType -> Map.Map String Type
@@ -77,12 +87,14 @@ specializeHelpers group checked hints =
     uses = Map.fromListWith (++) [(unLoc name, [(location expression, useType expression)]) |
         expression@(L _ (HsVar _ name)) <- sourceExpressions]
     ownership = Map.fromListWith (++) (referenceOwners [] group)
-    referenceOwners :: Data a => [(Name, SrcSpan)] -> a -> [((Name, String), [([(Name, SrcSpan)], SrcSpan)])]
+    referenceOwners :: Data a => [LexicalOwner] -> a -> [((Name, String), [ReferenceOwnership])]
     referenceOwners owners syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
         Just binding@(L _ (FunBind _ name _)) ->
-            concat (gmapQ (referenceOwners (owners ++ [(unLoc name, getLocA binding)])) (unLoc binding))
+            let owner = LexicalOwner { ownerName = unLoc name, ownerSpan = getLocA binding }
+            in concat (gmapQ (referenceOwners (owners ++ [owner])) (unLoc binding))
         _ -> case cast syntax :: Maybe (LHsExpr GhcRn) of
-            Just expression@(L _ (HsVar _ name)) -> [((unLoc name, location expression), [(owners, getLocA expression)])]
+            Just expression@(L _ (HsVar _ name)) -> [((unLoc name, location expression),
+                [ReferenceOwnership { referenceAncestors = owners, referenceSpan = getLocA expression }])]
             _ -> concat (gmapQ (referenceOwners owners) syntax)
     useType = expressionTypeAt sourceExpressions hints
     applications = [((unLoc name, location function), reference (length arguments)) |
@@ -121,22 +133,25 @@ specializeHelpers group checked hints =
             Just [PrefixApplication provided] -> provided > 0 && provided <= count
             Just [InfixApplication provided] -> provided == count
             _ -> False) references) Nothing
-        actualTypes <- mapM (fmap normalize . snd) references
+        normalizedReferences <- mapM (\(site, hint) -> do
+            actualType <- normalize <$> hint
+            pure (site, actualType)) references
         outsideTypes <- if name `Set.member` recursive then do
             [binding] <- pure [binding' | binding'@(L _ (FunBind _ identifier _)) <- bindings, unLoc identifier == name]
             unless (real (getLocA binding)) Nothing
-            classified <- mapM (\(site, hint) -> do
-                [(owners, span')] <- Map.lookup (name, site) ownership
+            classified <- mapM (\(site, actualType) -> do
+                [reference] <- Map.lookup (name, site) ownership
+                let span' = referenceSpan reference
                 unless (real span') Nothing
-                let inside = name `elem` map fst owners
-                unless (not inside || lookup name owners == Just (getLocA binding) &&
+                let owner = find ((== name) . ownerName) (referenceAncestors reference)
+                    inside = isJust owner
+                unless (not inside || (ownerSpan <$> owner) == Just (getLocA binding) &&
                     span' `isSubspanOf` getLocA binding) Nothing
-                actualType <- normalize <$> hint
                 unless (not inside || actualType `eqType` body) Nothing
-                pure (inside, actualType)) references
+                pure (inside, actualType)) normalizedReferences
             unless (any fst classified && not (all fst classified)) Nothing
             pure [actualType | (False, actualType) <- classified]
-          else pure actualTypes
+          else pure (map snd normalizedReferences)
         [actualType] <- pure (nubBy eqType outsideTypes)
         actual <- match variable tau actualType
         unless (available scope actual) Nothing
