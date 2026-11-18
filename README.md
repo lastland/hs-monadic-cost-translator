@@ -113,6 +113,12 @@ source-model 4. This runtime limitation is tracked in
 The source cost model is unchanged; the translator does not introduce a separate
 global cache or evaluate computations to compensate for the discrepancy.
 
+Repeated global actions can also lose thunk aliases across direct exported calls,
+even when their measured costs agree. Global identity preservation remains an
+unmet requirement; [issue #4](https://github.com/lastland/hs-monadic-cost-translator/issues/4)
+asks whether it belongs to the same runtime limitation. The cost deferral does
+not itself waive identity checks.
+
 ## Cost Model
 
 The translator enforces source-level call-by-need cost semantics (see [`docs/adr/0001-source-cost-semantics.md`](docs/adr/0001-source-cost-semantics.md)):
