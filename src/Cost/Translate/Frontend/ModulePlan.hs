@@ -149,17 +149,12 @@ allocationScopes ::
     a ->
     [(Name, ([TyVar], [Type]))]
 allocationScopes known scope@(vars, givens) value = case source of
-    Just binding@(L _ (FunBind _ name matches)) ->
+    Just (L _ (FunBind _ name matches)) ->
         let (scopedVariables, scopedGivens) =
-                if arity matches > 0
-                    then Map.findWithDefault ([], []) (unLoc name) known
-                    else ([], [])
+                Map.findWithDefault ([], []) (unLoc name) known
             nested = (vars ++ scopedVariables, givens ++ scopedGivens)
-            descend :: (Data b) => b -> [(Name, ([TyVar], [Type]))]
-            descend = allocationScopes known nested
          in (unLoc name, scope)
-                : concat
-                    (gmapQ descend (unLoc binding))
+                : allocationScopes known nested matches
     _ -> concat (gmapQ (allocationScopes known scope) value)
     where
         source = cast value :: Maybe (LHsBind GhcRn)

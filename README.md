@@ -182,7 +182,7 @@ generalized type parameter determining their dictionaries and every reference
 has unambiguous type evidence. When that parameter is the whole result, closed
 scalar references receive one thunk per type and source binding. References all
 using one abstract type also share a native thunk when that type is available in
-the declaration's enclosing function scope, including explicitly typed and
+the declaration's lexical scope, including explicitly typed and
 inferred helpers. Lists, `Maybe`, boxed pairs, and translated source datatypes can
 wrap that same generalized parameter, as in `Maybe [a]`, `Maybe (a, a)`, or
 `Maybe (Pair a b)` for a source-declared `Pair`. Matching uses the checked type
@@ -193,7 +193,7 @@ checked binder is available where the value is declared. That field must retain
 the same lexical binder at every use; capturing it adds no caller constraints.
 Within each use, all occurrences of the generalized parameter must agree on one
 closed scalar type or one abstract type available in the declaration's enclosing
-function scope. Native allocation preserves root and field identities and source
+lexical scope. Native allocation preserves root and field identities and source
 laziness at each level, including separately computed tuple fields with equal
 right-hand sides. Allocation stays where the source value is declared: each
 helper invocation creates fresh helper-local thunks. These bindings need no
@@ -204,10 +204,13 @@ reuse them between invocations.
 Native allocation also supports two or more generalized `Type` parameters when
 all determine dictionaries, are recovered from the result type, and follow the
 same container matching rules. Each parameter must instantiate to a closed
-scalar or a type variable available in the declaration's enclosing function
-scope. Scoped uses also need checked evidence for every required class
+scalar or a type variable available in the declaration's lexical scope.
+Scoped uses also need checked evidence for every required class
 constraint at the declaration. That evidence can include superclass and
-closed-instance facts from the enclosing function.
+closed-instance facts from the enclosing binding. Within a constrained value's
+right-hand side, nested declarations can use that value's quantified type
+variables and class context. Those binders do not extend to sibling declarations
+or to the enclosing value's own allocation.
 When distinct instantiations involve scoped type variables, GHC must prove
 that no pair can unify. For example, `(a, Int)` and `(a, Integer)` under
 `Integral a` cannot unify, whereas `(a, Int)` and `(b, Int)` can overlap and
