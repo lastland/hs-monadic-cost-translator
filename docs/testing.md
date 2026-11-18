@@ -188,6 +188,20 @@ field identities. Relative identity probes also check same-type aliases,
 dictionary separation, and invocation freshness. Three full-demand failures
 cover a negative left count, a zero right count, and a bottom count.
 
+The `constrained-local-three-formals` fixture shares `(a, (b, c))` at two closed
+types differing only in `c`. Its generic callers retain only `Num t` for an outer
+capture. Full demand returns 168 at cost nine: one outer entry, two gates, and six
+work entries. Demanding the common first two fields returns 96 at cost seven;
+demanding only the last returns 72 at cost five. Both demands skip the failing
+opposite field. Skipping all roots costs one, and root-only demand costs three,
+with a bottom count still unforced. Fresh/cached calls cost `9*k`/nine; a shared
+paid caller count adds one tick in total. Distinct equal-RHS bindings return 84
+at cost nine. Identity probes include both pair roots and all three scalar fields,
+checking aliases, dictionary separation, fresh locals, and reused caller inputs.
+Three demanded failures cover negative, zero, and bottom counts. The finite
+planner checks every formal and replays substitution over the complete result;
+the first two matching parameters cannot hide a different last dictionary.
+
 The `constrained-local-abstract` fixture uses one local polymorphic value twice
 at the enclosing function's abstract type. Its generic caller supplies only the
 existing `Eq`, `Num`, and `Scalar` constraints, not `Typeable`. The independent

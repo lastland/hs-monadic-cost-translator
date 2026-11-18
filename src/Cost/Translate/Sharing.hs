@@ -29,7 +29,7 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` tyCoVarsOfTypes predica
 
 specializedSharing :: [TyCon] -> [TyVar] -> Type -> [Maybe Type] -> Maybe [Type]
 specializedSharing datatypes scopeVariables ty uses
-    | length vars == 2
+    | length vars > 1
     , all ((`eqType` liftedTypeKind) . tyVarKind) vars
     , all (`elem` constrainedVariables ty) vars
     , all (isPredTy . scaledThing) arguments
