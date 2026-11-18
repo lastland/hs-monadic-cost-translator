@@ -202,6 +202,24 @@ Three demanded failures cover negative, zero, and bottom counts. The finite
 planner checks every formal and replays substitution over the complete result;
 the first two matching parameters cannot hide a different last dictionary.
 
+The `constrained-local-four-formals` fixture extends that boundary to
+`(a, (b, (c, d)))`, with closed choices differing only in `d`. Full demand returns
+256 at cost eleven; the common first three fields return 168 at cost nine; the
+last fields return 88 at cost five. Skipping all roots costs one, and demanding
+only the roots costs three. Fresh/cached calls cost `11*k`/eleven, and a shared
+paid count adds one tick in total. Its 17 probes include three demanded failures
+and three identity checks covering all seven root/field names per specialization.
+
+The `constrained-local-unused-helper` fixture checks a local shared value used
+only inside an unused helper with a `Num Bool` constraint. Its enclosing caller
+retains only `Num t`. The six probes consume the returned unit, leave bottom Int
+and Integer inputs unused, compare fresh/cached calls at costs `k`/one, and keep
+a paid but unused caller input unticked. A failure control actually demands that
+bottom input. The independent reference charges only the enclosing entry tick.
+The global function guard still checks all source top-level functions; unused
+local bindings do not drive allocation or reflection planning. The translator
+still validates their unsupported constructs before omitting them.
+
 The `constrained-local-abstract` fixture uses one local polymorphic value twice
 at the enclosing function's abstract type. Its generic caller supplies only the
 existing `Eq`, `Num`, and `Scalar` constraints, not `Typeable`. The independent

@@ -202,12 +202,11 @@ demanded. RHS captures keep their enclosing scope and caller constraints.
 Unconstrained parameters and open results do not qualify for this
 multiple-parameter path.
 
-Dictionary evidence must also be available where the local thunk is allocated.
-A closed result does not guarantee this: a constraint such as `Num Bool` may
-exist only inside an unused nested helper. Such sources can currently fail
-generated-code verification even when GHC accepts the source. This
-dictionary-scope limitation is separate from potentially overlapping
-instantiations.
+The translator validates the full source before omitting unused local bindings.
+References inside an unreachable local helper do not trigger thunk allocation or
+reflection obligations in its enclosing function. Reachable local bindings retain
+their source scope. Module-level functions and values remain in the output, even
+when they are unused or unexported.
 
 For a local helper with one generalized dictionary parameter, the
 translator can specialize its generated type when every reference is a checked

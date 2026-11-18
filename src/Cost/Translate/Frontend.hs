@@ -5,11 +5,12 @@ import GHC
 import Control.Monad (unless, when, zipWithM)
 import Control.Monad.IO.Class (liftIO)
 import GHC.Builtin.Types (unitDataCon)
-import GHC.Data.Bag (bagToList)
+import GHC.Data.Bag (bagToList, listToBag)
 import GHC.Paths (libdir)
 import GHC.Driver.Session (xopt)
 import qualified GHC.LanguageExtensions.Type as Extension
 import GHC.Types.Name (nameModule_maybe, getOccString)
+import GHC.Types.Name.Set (elemNameSet)
 import GHC.Types.Basic (RecFlag(..), Boxity(..))
 import GHC.Types.Var (varName, isId)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, isPredTy, splitTyConApp_maybe)
@@ -38,7 +39,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.List (elemIndex, find, isPrefixOf, mapAccumL, nub)
 import Data.Char (isAlpha, isAlphaNum)
-import Data.Data (Data, cast, gmapQ)
+import Data.Data (Data, cast, gmapQ, gmapT)
+import Data.Graph (graphFromEdges, reachable)
 import Data.Maybe (maybeToList, isJust)
 import GHC.Types.Name.Occurrence (occNameString, isTvOcc)
 import GHC.Types.Name.Reader (rdrNameOcc)
@@ -71,9 +73,13 @@ generate file targetModule = runGhc (Just libdir) $ do
                             [(showSDocUnsafe (ppr (getLocA expression)), name) | expression@(L _ (HsOverLit _ literal)) <- collect (tm_typechecked_source checked) :: [LHsExpr GhcTc],
                              Just (tc,[]) <- [splitTyConApp_maybe (overLitType literal)],
                              let name = getOccString tc, name `elem` ["Int","Integer","Float","Double"]]
-                        (result, logs) = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
-                             (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes hints
-                             (Typed.functionTypes checked) group
+                        emit = emitModule targetModule (moduleNameString (moduleName (ms_mod summary)))
+                              (xopt Extension.MagicHash (ms_hspp_opts summary)) datatypes types literalTypes hints
+                              (Typed.functionTypes checked)
+                        (original, logs) = emit group
+                        pruned = pruneLocals group
+                        changed = length (collect pruned :: [LHsBind GhcRn]) /= length (collect group :: [LHsBind GhcRn])
+                        result = if changed then original >> fst (emit pruned) else original
                         validation = do
                             when (any (`xopt` ms_hspp_opts summary) [Extension.Strict, Extension.StrictData, Extension.RebindableSyntax])
                                 (Left (file ++ ":1: Strict, StrictData and RebindableSyntax are unsupported"))
@@ -97,6 +103,43 @@ checkDeclaration located = case unLoc located of
     TyClD _ DataDecl { tcdDataDefn = defn } | null (dd_derivs defn) -> Right ()
     TyClD _ DataDecl {} -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": source deriving clauses are unsupported")
     _ -> Left (showSDocUnsafe (ppr (getLocA located)) ++ ": unsupported declaration")
+
+pruneLocals :: Data a => a -> a
+pruneLocals syntax
+    | Just (HsLet ext locals body) <- cast nested :: Maybe (HsExpr GhcRn)
+    , Just result <- cast (HsLet ext (keep body locals) body :: HsExpr GhcRn) = result
+    | Just (GRHSs ext bodies locals) <- cast nested :: Maybe (GRHSs GhcRn (LHsExpr GhcRn))
+    , Just result <- cast (GRHSs ext bodies (keep bodies locals) :: GRHSs GhcRn (LHsExpr GhcRn)) = result
+    | Just (GRHS ext statements body) <- cast nested :: Maybe (GRHS GhcRn (LHsExpr GhcRn))
+    , Just result <- cast (GRHS ext (guards body statements) body :: GRHS GhcRn (LHsExpr GhcRn)) = result
+    | otherwise = nested
+  where
+    nested = gmapT pruneLocals syntax
+    references :: Data b => b -> [Name]
+    references value = [unLoc name | HsVar _ name <- collect value :: [HsExpr GhcRn]]
+    keep :: Data b => b -> HsLocalBinds GhcRn -> HsLocalBinds GhcRn
+    keep body (HsValBinds ext (XValBindsLR (NValBinds groups signatures))) =
+        HsValBinds ext (XValBindsLR (NValBinds retained signatures))
+      where
+        bindings = concatMap (bagToList . snd) groups
+        (graph, node, vertex) = graphFromEdges
+            [(unLoc name, unLoc name, nub (filter (`elemNameSet` free) (references matches))) |
+             L _ (FunBind free name matches) <- bindings]
+        strict = [unLoc name | L _ (FunBind _ name matches) <- bindings,
+            L _ Match { m_ctxt = FunRhs { mc_strictness = SrcStrict } } <- unLoc (mg_alts matches)]
+        live = Set.fromList [name | root <- strict ++ references body, Just start <- [vertex root],
+            reached <- reachable graph start, let (name,_,_) = node reached]
+        wanted (L _ (FunBind _ name _)) = unLoc name `Set.member` live
+        wanted _ = True
+        retained = [(recursive, listToBag remaining) | (recursive, bag) <- groups,
+            let remaining = filter wanted (bagToList bag), not (null remaining)]
+    keep _ locals = locals
+    guards :: LHsExpr GhcRn -> [GuardLStmt GhcRn] -> [GuardLStmt GhcRn]
+    guards _ [] = []
+    guards body (L location (LetStmt ext locals) : rest) =
+        let remaining = guards body rest
+        in L location (LetStmt ext (keep (remaining, body) locals)) : remaining
+    guards body (statement : rest) = statement : guards body rest
 
 emitModule :: String -> String -> Bool -> [TyCon] -> Map.Map Name Type -> Map.Map String String -> Map.Map String Type -> Map.Map Name Typed.FunctionType -> HsGroup GhcRn -> (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
 emitModule target source magicHash datatypes originalTypes literalTypes hints checkedFunctions group =
