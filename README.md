@@ -217,7 +217,11 @@ same container matching rules. Each parameter must instantiate to a closed
 scalar or a type variable available in the declaration's lexical scope.
 Scoped uses also need checked evidence for every required class
 constraint at the declaration. That evidence can include superclass and
-closed-instance facts from the enclosing binding. Within a constrained value's
+closed-instance facts from the enclosing binding. These checks also retain
+GHC's solved dictionary facts for inferred bindings and closed dictionary facts
+shared across the module. An enclosing binding's facts remain available to its
+nested bindings; a sibling or descendant's local constraints do not become
+available outside that binding. Within a constrained value's
 right-hand side, nested declarations can use that value's quantified type
 variables and class context. Those binders do not extend to sibling declarations
 or to the enclosing value's own allocation.

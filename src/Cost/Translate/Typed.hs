@@ -17,7 +17,6 @@ import Data.Ord (comparing)
 import Data.Set qualified as Set
 import GHC hiding (exprType)
 import GHC.Core.FVs (exprFreeIds)
-import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.Subst (substTy)
@@ -27,6 +26,7 @@ import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
+import GHC.Tc.Types (tcg_ev_binds)
 import GHC.Tc.Types.Evidence
     ( EvBind (..)
     , EvTerm (..)
@@ -161,10 +161,13 @@ functionTypes checked =
                         (idType (abe_poly export))
                         (variables abstraction export wrapper)
                         (bodyType (mg_ext matches))
-                        (wrapperEvidence wrapper)
+                        (evidence <> wrapperEvidence wrapper)
                   ]
               )
-            | abstraction <- checkedAbstractions (tm_typechecked_source checked)
+            | (evidence, abstraction) <-
+                lexicalAbstractions
+                    ([], bagToList (tcg_ev_binds (fst (tm_internals_ checked))))
+                    (tm_typechecked_source checked)
             , export <- abs_exports abstraction
             , L _ (FunBind (wrapper, _) identifier matches) <-
                 bagToList (abs_binds abstraction)
@@ -191,7 +194,7 @@ functionGivens :: FunctionType -> [Type]
 functionGivens info = case tcMatchTy body (functionBodyType info) of
     Just substitution ->
         let givens = map (substTy substitution) predicates
-         in givens ++ checkedPredicates givens (functionEvidence info)
+         in givens ++ checkedPredicates (functionEvidence info)
     Nothing -> []
     where
         (_, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
@@ -203,17 +206,12 @@ wrapperEvidence (WpEvLam given) = ([given], [])
 wrapperEvidence (WpLet (EvBinds bindings)) = ([], bagToList bindings)
 wrapperEvidence _ = ([], [])
 
-checkedPredicates :: [Type] -> ([Id], [EvBind]) -> [Type]
-checkedPredicates givens (variables, bindings) =
-    map (idType . eb_lhs) (close initial bindings)
+checkedPredicates :: ([Id], [EvBind]) -> [Type]
+checkedPredicates (variables, bindings) =
+    map idType roots ++ map (idType . eb_lhs) (close initial bindings)
     where
-        initial =
-            Set.fromList
-                [ v
-                | v <- variables
-                , isId v
-                , any (eqType (idType v)) givens
-                ]
+        roots = [v | v <- variables, isId v, isPredTy (idType v)]
+        initial = Set.fromList roots
         close known remaining =
             let (ready, pending) = partition (proved known) remaining
                 next = known <> Set.fromList (map eb_lhs ready)
@@ -234,15 +232,28 @@ checkedPredicates givens (variables, bindings) =
 scopedVariables :: TypecheckedModule -> Map.Map Name [TyVar]
 scopedVariables = Map.map functionVariables . functionTypes
 
-checkedAbstractions :: (Data a) => a -> [AbsBinds]
-checkedAbstractions value
+lexicalAbstractions ::
+    (Data a) => ([Id], [EvBind]) -> a -> [(([Id], [EvBind]), AbsBinds)]
+lexicalAbstractions inherited value
     | Just abstraction <- cast value =
-        abstraction : checkedAbstractions (abs_binds abstraction)
+        let evidence =
+                inherited
+                    <> ( abs_ev_vars abstraction
+                       , concatMap immutableBindings (abs_ev_binds abstraction)
+                       )
+         in (evidence, abstraction)
+                : lexicalAbstractions evidence (abs_binds abstraction)
+    | Just (FunBind (wrapper, _) _ matches) <-
+        cast value :: Maybe (HsBind GhcTc) =
+        lexicalAbstractions (inherited <> wrapperEvidence wrapper) matches
     | isJust (cast value :: Maybe Var)
         || isJust (cast value :: Maybe Type)
         || isJust (cast value :: Maybe HsWrapper) =
         []
-    | otherwise = concat (gmapQ checkedAbstractions value)
+    | otherwise = concat (gmapQ (lexicalAbstractions inherited) value)
+    where
+        immutableBindings (EvBinds bindings) = bagToList bindings
+        immutableBindings _ = []
 
 wrapperVariables :: HsWrapper -> [TyVar]
 wrapperVariables (WpCompose left right) =
