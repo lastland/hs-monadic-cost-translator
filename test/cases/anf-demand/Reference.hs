@@ -176,8 +176,7 @@ nestedLetArgM x = do
     unused <- M.lazy $ do
         y <- M.lazy (badM x)
         a <- M.force y
-        b <- M.force y
-        pure (a + b)
+        pure (a + a)
     ignoreM unused x
 scalarM x = M.tick >> M.force x
 scalarWorkM x = do
