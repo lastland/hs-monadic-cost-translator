@@ -189,6 +189,14 @@ and uses pure typed views that preserve thunk identities and annotations.
 This path needs no extra caller constraints or runtime operations. It does not
 cover arbitrary polymorphic applications or recursive bindings.
 
+Within these payload expressions, saturated calls to module-level source
+functions of type `forall a. a -> a` are also supported. The function must have
+exactly one quantified `Type` parameter, an unrestricted arrow, and no class
+context. Its argument must itself meet the payload-expression conditions above.
+The translator suspends that argument at the polymorphic payload type and calls
+the ordinary translated function, retaining its entry tick and lazy argument.
+Local functions and other application types do not qualify for this path.
+
 Dictionary-sensitive locals also use native allocation when they have one
 generalized type parameter determining their dictionaries and every reference
 has unambiguous type evidence. When that parameter is the whole result, closed

@@ -26,17 +26,23 @@ import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCon (isAlgTyCon)
 import GHC.Core.Type
-    ( isLiftedTypeKind
+    ( getTyVar_maybe
+    , isLiftedTypeKind
+    , isManyTy
+    , splitFunTy_maybe
     , splitTyConApp_maybe
     , tyVarKind
     )
+import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.Name (getOccString)
 import GHC.Types.Unique.Set (elementOfUniqSet)
+import GHC.Types.Var (FunTyFlag (FTF_T_T))
 
 data Payload = Payload [TyVar] Type PayloadBody
 data PayloadBody
     = ConstructorPayload String [(String, Field)]
     | ConditionalPayload (LHsExpr GhcRn) Payload Payload
+    | ApplicationPayload String String Payload
 data Field = Ordinary (LHsExpr GhcRn) | Generalized Payload
 
 constructorPayload ::
@@ -68,6 +74,12 @@ planPayload env variables ty expression = do
                 ConditionalPayload condition
                     <$> planPayload env variables ty yes
                     <*> planPayload env variables ty no
+        HsVar _ located
+            | [argument] <- arguments
+            , Just target <- payloadFunction env (unLoc located) -> do
+                [slot] <- pure (argumentNames env (argumentKey expression) 1)
+                ApplicationPayload target slot
+                    <$> planPayload env variables ty argument
         HsVar _ located -> do
             let name = unLoc located
             (tc, types) <- splitTyConApp_maybe ty
@@ -95,6 +107,22 @@ planPayload env variables ty expression = do
                 dependent variable =
                     variable `elementOfUniqSet` tyCoVarsOfType ty'
 
+payloadFunction :: Env -> Name -> Maybe String
+payloadFunction env name = do
+    guard (isExternalName name)
+    Function target 1 <- lookupEnv name env
+    ty <- Map.lookup name (inferredBindings env)
+    case tcSplitSigmaTy ty of
+        ([variable], [], body)
+            | isLiftedTypeKind (tyVarKind variable)
+            , Just (FTF_T_T, multiplicity, argument, result) <-
+                splitFunTy_maybe body
+            , isManyTy multiplicity
+            , getTyVar_maybe argument == Just variable
+            , getTyVar_maybe result == Just variable ->
+                Just target
+        _ -> Nothing
+
 payloadType :: Env -> Payload -> Either String O.Ty
 payloadType env (Payload variables ty _) =
     O.forallT (map (O.b . getOccString) variables)
@@ -102,6 +130,9 @@ payloadType env (Payload variables ty _) =
 
 typedOperation :: String -> O.Ty -> O.Expr
 typedOperation name = O.typeApp (O.typeApp (O.v name) (O.t "M.MemoristM"))
+
+suspendPayload :: O.Ty -> O.Expr -> O.Expr
+suspendPayload ty action = O.app (typedOperation "M.lazy" ty) [action]
 
 payloadView :: O.Ty -> O.Expr -> O.Expr
 payloadView ty thunk =
@@ -115,6 +146,14 @@ emitPayload ::
     Payload ->
     Either String O.Expr
 emitPayload emit env payload@(Payload _ _ body) = case body of
+    ApplicationPayload target name argument -> do
+        ty <- payloadType env argument
+        action <- emitPayload emit env argument
+        pure
+            ( O.doE
+                [O.bind name (suspendPayload ty action)]
+                (O.app (O.typeApp (O.v target) ty) [O.v name])
+            )
     ConditionalPayload condition yes no ->
         conditionalAction
             <$> emit condition
@@ -139,7 +178,7 @@ emitPayload emit env payload@(Payload _ _ body) = case body of
             ty <- payloadType env nested
             action <- emitPayload emit env nested
             pure
-                ( [O.bind name (O.app (typedOperation "M.lazy" ty) [action])]
+                ( [O.bind name (suspendPayload ty action)]
                 , payloadView ty (O.v name)
                 )
 
@@ -172,7 +211,7 @@ allocatePayload emit env name (scoped, payload) continuation = do
             O.forallT
                 [O.bk (getOccString variable) (O.t "Type") | variable <- scoped]
                 (O.tc "M.MemoristM" [O.tc "M.Th" [ty]])
-        allocation = O.app (typedOperation "M.lazy" ty) [action]
+        allocation = suspendPayload ty action
         declarations =
             if null scoped
                 then []
