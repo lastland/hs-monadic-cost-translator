@@ -59,6 +59,17 @@ library
     other-modules:
         Cost.Translate.Frontend
         Cost.Translate.Datatypes
+        Cost.Translate.Datatypes.Assembly
+        Cost.Translate.Datatypes.BuiltinDemand
+        Cost.Translate.Datatypes.CharSupport
+        Cost.Translate.Datatypes.Constructor
+        Cost.Translate.Datatypes.Conversion
+        Cost.Translate.Datatypes.Declaration
+        Cost.Translate.Datatypes.Demand
+        Cost.Translate.Datatypes.DemandSupport
+        Cost.Translate.Datatypes.Generation
+        Cost.Translate.Datatypes.Selectors
+        Cost.Translate.Datatypes.Types
         Cost.Translate.Names
         Cost.Translate.Pretty
         Cost.Translate.Foldable
