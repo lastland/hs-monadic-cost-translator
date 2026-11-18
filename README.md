@@ -108,8 +108,9 @@ program = do
 Executing a global action again does not retain its earlier result. Memorist
 therefore does not currently recover source-global sharing costs through this
 interface: the worked `work/shared/f/g/test` example costs 5 rather than the
-source-model 4. This runtime limitation is tracked in
-[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2).
+source-model 4. Global sharing costs are outside the translator's current scope,
+as specified in
+[issue #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2#issuecomment-6972277826).
 The source cost model is unchanged; the translator does not introduce a separate
 global cache or evaluate computations to compensate for the discrepancy.
 
