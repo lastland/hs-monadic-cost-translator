@@ -4,43 +4,48 @@ import Control.Monad (replicateM)
 import qualified Example as Source
 import qualified Generated as G
 import qualified Memorist.Memorist as M
-import ReferenceSupport (Sample(..), Probe, demanded, failure, scalarSource, snapshot)
+import ReferenceSupport (Sample(..), Probe, demanded, scalarSource, snapshot)
 
 type Views a b = M.PairT (M.PairT a b) (M.PairT a b)
 
 probes :: [Probe]
 probes =
-    [ scalarSource "full/int-integer" (sourceSum True True . positive) $ \s ->
-        call (undefined :: Int) (undefined :: Integer) (positive s) >>= forceCopies True True
-    , scalarSource "full/integer-int" (sourceSum True True . positive) $ \s ->
-        call (undefined :: Integer) (undefined :: Int) (positive s) >>= forceCopies True True
-    , scalarSource "left/right-bottom-skipped" (const (sourceSum True False 0)) $ \_ ->
+    [ scalarSource "full/int-integer" (sourceSum True True . number) $ \s ->
+        call (0 :: Int) (0 :: Integer) (number s) >>= forceCopies True True
+    , scalarSource "full/integer-int" (sourceSum True True . number) $ \s ->
+        call (0 :: Integer) (0 :: Int) (number s) >>= forceCopies True True
+    , scalarSource "left/right-skipped" (const (sourceSum True False 0)) $ \_ ->
         callInts 0 >>= forceCopies True False
-    , scalarSource "right/left-bottom-skipped" (const (sourceSum False True (-1))) $ \_ ->
+    , scalarSource "right/left-skipped" (const (sourceSum False True (-1))) $ \_ ->
         callInts (-1) >>= forceCopies False True
-    , demanded "skip-all/bottom-count" (\_ _ -> ()) (\_ _ -> M.PairD M.Skip M.Skip)
-        (const (callInts undefined))
-    , demanded "roots-only/bottom-count" (\_ _ -> ()) (\_ _ -> rootDemand)
-        (const (callInts undefined))
-    , demanded "selected-leaves" projectSelected demandSelected (callInts . positive)
-    , failure "left/demanded-negative" (\_ -> callInts (-1) >>= forceCopies True False)
-    , failure "right/demanded-zero" (\_ -> callInts 0 >>= forceCopies False True)
-    , failure "leaf/demanded-bottom-count" (\_ -> callInts undefined >>= forceCopies True False)
-    , scalarSource "repeated/uncached" (\s -> repeats s * sourceSum True True (positive s)) $ \s -> do
-        a <- M.lazy (pure (undefined :: Int))
-        b <- M.lazy (pure (undefined :: Integer))
-        count <- M.lazy (pure (positive s))
+    , demanded "skip-all/paid-count-skipped" (\_ _ -> ()) (\_ _ -> M.PairD M.Skip M.Skip)
+        (paidCount . number)
+    , demanded "roots-only/paid-count-skipped" (\_ _ -> ()) (\_ _ -> rootDemand)
+        (paidCount . number)
+    , demanded "selected-leaves" projectSelected demandSelected (callInts . number)
+    , scalarSource "repeated/int-integer/uncached" repeatedSource $ \s -> do
+        a <- M.lazy (pure (0 :: Int))
+        b <- M.lazy (pure (0 :: Integer))
+        count <- M.lazy (pure (number s))
         sum <$> replicateM (repeats s) (generic a b count >>= forceCopies True True)
-    , scalarSource "repeated/cached" (\s -> repeats s * sourceSum True True (positive s)) $ \s -> do
-        cached <- M.lazy (callInts (positive s))
+    , scalarSource "repeated/int-integer/cached" repeatedSource $ \s -> do
+        cached <- M.lazy (callInts (number s))
+        sum <$> replicateM (repeats s) (M.force cached >>= forceCopies True True)
+    , scalarSource "repeated/integer-int/uncached" repeatedSource $ \s -> do
+        a <- M.lazy (pure (0 :: Integer))
+        b <- M.lazy (pure (0 :: Int))
+        count <- M.lazy (pure (number s))
+        sum <$> replicateM (repeats s) (generic a b count >>= forceCopies True True)
+    , scalarSource "repeated/integer-int/cached" repeatedSource $ \s -> do
+        cached <- M.lazy (call (0 :: Integer) (0 :: Int) (number s))
         sum <$> replicateM (repeats s) (M.force cached >>= forceCopies True True)
     , snapshot "identity/root-and-payload-aliases" $ \s -> M.value $ M.eval1 $ do
-        groups <- callInts (positive s) >>= names
+        groups <- callInts (number s) >>= names
         pure (valid groups)
     , snapshot "identity/fresh-invocations" $ \s -> M.value $ M.eval1 $ do
-        a <- M.lazy (pure (undefined :: Int))
-        b <- M.lazy (pure (undefined :: Integer))
-        count <- M.lazy (pure (positive s))
+        a <- M.lazy (pure (0 :: Int))
+        b <- M.lazy (pure (0 :: Integer))
+        count <- M.lazy (pure (number s))
         first <- generic a b count >>= names
         second <- generic a b count >>= names
         pure (valid first && valid second && all (`notElem` concat second) (concat first))
@@ -58,15 +63,23 @@ call a b count = do
     generic x y n
 
 callInts :: Int -> M.MemoristM (Views Int Integer)
-callInts = call (undefined :: Int) (undefined :: Integer)
+callInts = call (0 :: Int) (0 :: Integer)
 
-positive :: Sample -> Int
-positive = (1 +) . abs . number
+-- Skipping leaves must not charge the total captured count's extra tick.
+paidCount :: Int -> M.MemoristM (Views Int Integer)
+paidCount n = do
+    a <- M.lazy (pure (0 :: Int))
+    b <- M.lazy (pure (0 :: Integer))
+    count <- M.lazy (M.tick >> pure n)
+    generic a b count
+
+repeatedSource :: Sample -> Int
+repeatedSource s = repeats s * sourceSum True True (number s)
 
 sourceSum :: Bool -> Bool -> Int -> Int
 sourceSum l r n = selected first + selected second
   where
-    (first, second) = Source.views (undefined :: Int) (undefined :: Integer) n
+    (first, second) = Source.views (0 :: Int) (0 :: Integer) n
     selected (a,b) = (if l then a else 0) + (if r then fromInteger b else 0)
 
 forceCopies :: (Integral a, Integral b) => Bool -> Bool -> Views a b -> M.MemoristM Int

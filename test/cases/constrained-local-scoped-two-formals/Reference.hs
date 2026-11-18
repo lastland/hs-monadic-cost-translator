@@ -11,10 +11,10 @@ viewsM _ _ count = do
         left <- M.lazy $ do
             M.tick
             n <- M.force count
-            pure (if n < 0 then error "left failure" else 10)
+            pure (if n < 0 then 6 else 10)
         right <- M.lazy $ do
             M.tick
             n <- M.force count
-            pure (if n == 0 then error "right failure" else 14)
+            pure (if n == 0 then 22 else 14)
         pure (M.PairT left right)
     pure (M.PairT shared shared)
