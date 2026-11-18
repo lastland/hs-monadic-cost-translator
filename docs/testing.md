@@ -481,6 +481,15 @@ loops, but distinct helper-result roots. Fresh outer calls reuse caller thunks
 and allocate disjoint local vectors. With positive repetition count `k`, fresh
 calls cost `k*(2*d + 7)`, while a cached call costs `2*d + 7`. The original
 `count == 0` branch and ordinary `head` warning remain unchanged.
+One ordinary loop returns four at cost `d + 4`; two uncached loops return eight
+at cost `2*d + 5`. Caching the helper result in the source instead costs `d + 4`
+and aliases its result roots. A result from every recursive frame returns
+`4*(d + 1)` at cost `d + 4`: every frame shares the same producer. Two distinct
+equal-RHS shared bindings return eight at cost `2*d + 7` and retain disjoint
+field vectors. Repeated fresh/cached one-loop and two-loop calls preserve these
+costs per invocation versus per cached result, reusing the same caller thunks.
+Protected broken-root helper results and broken-head complete list spines cost
+`2*d + 3`, without demanding the broken value; both full demands raise.
 
 ## Private Runtime Allocator
 

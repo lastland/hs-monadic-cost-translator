@@ -1,5 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Generated (Scalar, oneM) where
+module Generated (Scalar, oneM, oneLoopM, twiceM, cachedM, framesM, separateM, brokenHeadM, brokenRootM) where
 
 import qualified Memorist.Data.List as L
 import qualified Memorist.Example.List as ML
@@ -54,4 +54,79 @@ oneM input count = do
             ML.zipWithM callback inputs counts
         ML.headM zipped
     right <- M.lazy (helper input count)
+    pure (M.PairT left right)
+
+loop :: M.Th (V a) -> M.Th (V a) -> M.Th a -> M.Th Int -> M.MemoristM (P a)
+loop left right input count = do
+    M.tick
+    k <- M.force count
+    if k == 0 then pure (M.PairT left right) else do
+        next <- M.lazy (pure (k - 1))
+        loop left right input next
+
+oneLoopM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (P a)
+oneLoopM input count = do
+    M.tick
+    shared <- M.lazy body
+    loop shared shared input count
+
+twiceM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (Q a)
+twiceM input count = do
+    M.tick
+    shared <- M.lazy body
+    left <- M.lazy (loop shared shared input count)
+    right <- M.lazy (loop shared shared input count)
+    pure (M.PairT left right)
+
+cachedM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (Q a)
+cachedM input count = do
+    M.tick
+    shared <- M.lazy body
+    result <- M.lazy (loop shared shared input count)
+    pure (M.PairT result result)
+
+framesM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (L.ListT (P a))
+framesM input count = do
+    M.tick
+    shared <- M.lazy body
+    let walk argument = do
+            M.tick
+            k <- M.force argument
+            result <- M.lazy (pure (M.PairT shared shared))
+            rest <- M.lazy (if k == 0 then pure L.NilT else do
+                next <- M.lazy (pure (k - 1))
+                walk next)
+            pure (L.ConsT result rest)
+    -- The source input is deliberately unused, including at every self-call.
+    let _ = input
+    walk count
+
+separateM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (Q a)
+separateM input count = do
+    M.tick
+    leftShared <- M.lazy body
+    rightShared <- M.lazy body
+    left <- M.lazy (loop leftShared rightShared input count)
+    right <- M.lazy (loop leftShared rightShared input count)
+    pure (M.PairT left right)
+
+brokenHeadM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (Q a)
+brokenHeadM input count = do
+    M.tick
+    shared <- M.lazy $ do
+        list <- M.lazy $ do
+            first <- M.lazy (error "recursive head failure")
+            rest <- M.lazy (pure L.NilT)
+            pure (L.ConsT first rest)
+        pure (M.JustT list)
+    left <- M.lazy (loop shared shared input count)
+    right <- M.lazy (loop shared shared input count)
+    pure (M.PairT left right)
+
+brokenRootM :: (Eq a, Num a) => M.Th a -> M.Th Int -> M.MemoristM (Q a)
+brokenRootM input count = do
+    M.tick
+    shared <- M.lazy (error "recursive root failure")
+    left <- M.lazy (loop shared shared input count)
+    right <- M.lazy (loop shared shared input count)
     pure (M.PairT left right)

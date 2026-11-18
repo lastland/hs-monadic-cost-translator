@@ -2,12 +2,13 @@
 module Case (probes) where
 
 import Control.Monad (replicateM)
+import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import qualified Example as Source
 import qualified Generated as G
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
-import ReferenceSupport (Sample(..), Probe, demanded, scalarSource, snapshot)
+import ReferenceSupport (Sample(..), Probe, demanded, failure, scalarSource, snapshot)
 
 type P a = M.PairT (M.MaybeT (L.ListT a)) (M.MaybeT (L.ListT a))
 type PureP a = (Maybe [a], Maybe [a])
@@ -71,6 +72,7 @@ probes =
     , demanded "original/selected-helper-result-roots" projectHelperRoots demandHelperRoots
         (`withInputs` generic)
     ]
+    ++ preservationProbes
 
 projectHelperRoots :: Sample -> Result Int -> (Maybe Bool, Maybe Bool)
 projectHelperRoots sample (M.PairT left right) =
@@ -114,3 +116,114 @@ disjoint a b = all (`notElem` b) a
 validGroups :: [[M.ThName]] -> Bool
 validGroups [a,b,c,d] = length a == 4 && a == b && a == c && a == d
 validGroups _ = False
+
+genericOneLoop :: (Eq a, Num a, G.Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (P a)
+genericOneLoop = G.oneLoopM
+
+genericTwice, genericCached, genericSeparate, genericBrokenHead, genericBrokenRoot :: (Eq a, Num a, G.Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (Result a)
+genericTwice = G.twiceM
+genericCached = G.cachedM
+genericSeparate = G.separateM
+genericBrokenHead = G.brokenHeadM
+genericBrokenRoot = G.brokenRootM
+
+genericFrames :: (Eq a, Num a, G.Scalar a) => M.Th a -> M.Th Int -> M.MemoristM (L.ListT (P a))
+genericFrames = G.framesM
+
+depth :: Sample -> Int
+depth = max 0 . width
+
+forceFrames :: Num a => L.ListT (P a) -> M.MemoristM a
+forceFrames L.NilT = pure 0
+forceFrames (L.ConsT h t) = (+) <$> (M.force h >>= forceP) <*> (M.force t >>= forceFrames)
+
+preservationProbes :: [Probe]
+preservationProbes =
+    [ scalarSource "one-loop/generic-int/full" (sumP . Source.oneLoop (undefined :: Int) . depth)
+        (\s -> withInputs s genericOneLoop >>= forceP)
+    , scalarSource "one-loop/generic-integer/full" (fromInteger . sumP . Source.oneLoop (undefined :: Integer) . depth) $ \s -> do
+        input <- M.lazy (pure (undefined :: Integer))
+        count <- M.lazy (pure (depth s))
+        fromInteger <$> (genericOneLoop input count >>= forceP)
+    , scalarSource "twice/full" (sourceSum . Source.twice (undefined :: Int) . depth)
+        (\s -> withInputs s genericTwice >>= forceResult)
+    , scalarSource "cached-helper/full" (sourceSum . Source.cached (undefined :: Int) . depth)
+        (\s -> withInputs s genericCached >>= forceResult)
+    , scalarSource "frames/full" (sum . map sumP . Source.frames (undefined :: Int) . depth)
+        (\s -> withInputs s genericFrames >>= forceFrames)
+    , scalarSource "separate/full" (sourceSum . Source.separate (undefined :: Int) . depth)
+        (\s -> withInputs s genericSeparate >>= forceResult)
+    , scalarSource "one-loop/repeated-fresh" (\s -> repeats s * sumP (Source.oneLoop (undefined :: Int) (depth s))) $ \s ->
+        withInputs s $ \input count -> sum <$> replicateM (repeats s) (genericOneLoop input count >>= forceP)
+    , scalarSource "one-loop/repeated-cached" (\s -> repeats s * sumP (Source.oneLoop (undefined :: Int) (depth s))) $ \s ->
+        withInputs s $ \input count -> do
+            cached <- M.lazy (genericOneLoop input count)
+            sum <$> replicateM (repeats s) (M.force cached >>= forceP)
+    , scalarSource "twice/repeated-fresh" (\s -> repeats s * sourceSum (Source.twice (undefined :: Int) (depth s))) $ \s ->
+        withInputs s $ \input count -> sum <$> replicateM (repeats s) (genericTwice input count >>= forceResult)
+    , scalarSource "twice/repeated-cached" (\s -> repeats s * sourceSum (Source.twice (undefined :: Int) (depth s))) $ \s ->
+        withInputs s $ \input count -> do
+            cached <- M.lazy (genericTwice input count)
+            sum <$> replicateM (repeats s) (M.force cached >>= forceResult)
+    , demanded "twice/selected-helper-roots" projectHelperRoots demandHelperRoots (`withInputs` genericTwice)
+    , demanded "broken-root/helper-roots" (projectHelperRoots . both) (demandHelperRoots . both) (`withInputs` genericBrokenRoot)
+    , demanded "broken-head/full-list-spines" projectSpines demandSpines (`withInputs` genericBrokenHead)
+    , failure "broken-head/full" (\s -> withInputs s genericBrokenHead >>= forceResult)
+    , failure "broken-root/full" (\s -> withInputs s genericBrokenRoot >>= forceResult)
+    , identities "twice/shared-vectors" $ \s -> do
+        result <- withInputs s genericTwice
+        vectors <- names result
+        pure (distinctResultRoots result && validGroups vectors)
+    , identities "cached-helper/aliased-result" $ \s -> do
+        result@(M.PairT a b) <- withInputs s genericCached
+        vectors <- names result
+        pure (M.tname a == M.tname b && validGroups vectors)
+    , identities "twice/fresh-outers-disjoint" $ \s -> withInputs s $ \input count -> do
+        first <- genericTwice input count >>= names
+        second <- genericTwice input count >>= names
+        pure (validGroups first && validGroups second && disjoint (concat first) (concat second))
+    , identities "separate/bindings-disjoint" $ \s -> do
+        vectors <- withInputs s genericSeparate >>= names
+        pure (case vectors of
+            [a,b,c,d] -> length a == 4 && length b == 4 && a == c && b == d && disjoint a b
+            _ -> False)
+    , identities "frames/all-recursive-frames-alias" $ \s -> do
+        entries <- withInputs s genericFrames >>= namesFrames
+        pure (length entries == depth s + 1 && case entries of
+            [] -> False
+            (_,a,_):_ -> all (\(_,b,c) -> a == b && a == c) entries &&
+                length (nub [n | (n,_,_) <- entries]) == length entries)
+    , identities "frames/fresh-outers-disjoint" $ \s -> withInputs s $ \input count -> do
+        first <- genericFrames input count >>= namesFrames
+        second <- genericFrames input count >>= namesFrames
+        pure (case (first,second) of
+            ((_,a,_):_,(_,b,_):_) -> length a == 4 && length b == 4 && disjoint a b
+            _ -> False)
+    ]
+  where
+    identities label program = snapshot label (M.value . M.eval1 . program)
+    both s = s { leftDemand = True, rightDemand = True }
+
+projectSpines :: Sample -> Result Int -> ((Int,Int),(Int,Int))
+projectSpines _ (M.PairT a b) = (viewP (M.tval a),viewP (M.tval b))
+  where
+    viewP (M.PairT c d) = (viewV (M.tval c),viewV (M.tval d))
+    viewV M.NothingT = 0
+    viewV (M.JustT t) = lengthL (M.tval t)
+    lengthL L.NilT = 0
+    lengthL (L.ConsT _ t) = 1 + lengthL (M.tval t)
+
+demandSpines :: Sample -> Result Int -> M.PairD (M.PairD (M.MaybeD (L.ListD Int)) (M.MaybeD (L.ListD Int))) (M.PairD (M.MaybeD (L.ListD Int)) (M.MaybeD (L.ListD Int)))
+demandSpines _ _ = M.PairD (M.Need pair) (M.Need pair)
+  where
+    pair = M.PairD payload payload
+    payload = M.Need (M.JustD (M.Need (L.ConsD M.Skip (M.Need L.NilD))))
+
+namesFrames :: L.ListT (P a) -> M.MemoristM [(M.ThName,[M.ThName],[M.ThName])]
+namesFrames L.NilT = pure []
+namesFrames (L.ConsT h t) = do
+    M.PairT a b <- M.force h
+    left <- namesV a
+    right <- namesV b
+    rest <- M.force t >>= namesFrames
+    pure ((M.tname h,left,right):rest)
