@@ -58,6 +58,25 @@ library
         Cost.Translate
     other-modules:
         Cost.Translate.Frontend
+        Cost.Translate.Frontend.Allocation
+        Cost.Translate.Frontend.Emit
+        Cost.Translate.Frontend.Environment
+        Cost.Translate.Frontend.Expressions
+        Cost.Translate.Frontend.Gates
+        Cost.Translate.Frontend.LocalValues
+        Cost.Translate.Frontend.Logs
+        Cost.Translate.Frontend.Module
+        Cost.Translate.Frontend.ModulePlan
+        Cost.Translate.Frontend.NamePlan
+        Cost.Translate.Frontend.PatternPaths
+        Cost.Translate.Frontend.Patterns
+        Cost.Translate.Frontend.Prepare
+        Cost.Translate.Frontend.Prune
+        Cost.Translate.Frontend.Resolve
+        Cost.Translate.Frontend.Sections
+        Cost.Translate.Frontend.Signatures
+        Cost.Translate.Frontend.Strict
+        Cost.Translate.Frontend.Syntax
         Cost.Translate.Datatypes
         Cost.Translate.Datatypes.Assembly
         Cost.Translate.Datatypes.BuiltinDemand
