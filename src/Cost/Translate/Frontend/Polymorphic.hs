@@ -7,7 +7,11 @@ import Control.Monad (guard, zipWithM)
 import Cost.Translate.Callable (spine)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions (reuseThunk, suspendArgument)
+import Cost.Translate.Frontend.Expressions
+    ( conditionalAction
+    , reuseThunk
+    , suspendArgument
+    )
 import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)
@@ -29,7 +33,10 @@ import GHC.Core.Type
 import GHC.Types.Name (getOccString)
 import GHC.Types.Unique.Set (elementOfUniqSet)
 
-data Payload = Payload [TyVar] Type String [(String, Field)]
+data Payload = Payload [TyVar] Type PayloadBody
+data PayloadBody
+    = ConstructorPayload String [(String, Field)]
+    | ConditionalPayload (LHsExpr GhcRn) Payload Payload
 data Field = Ordinary (LHsExpr GhcRn) | Generalized Payload
 
 constructorPayload ::
@@ -55,19 +62,29 @@ constructorPayload env name ty match = do
 planPayload :: Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
 planPayload env variables ty expression = do
     let (headExpression, arguments) = spine expression
-    name <- case unLoc headExpression of
-        HsVar _ located -> Just (unLoc located)
+    body <- case unLoc headExpression of
+        HsIf _ condition yes no
+            | null arguments ->
+                ConditionalPayload condition
+                    <$> planPayload env variables ty yes
+                    <*> planPayload env variables ty no
+        HsVar _ located -> do
+            let name = unLoc located
+            (tc, types) <- splitTyConApp_maybe ty
+            guard (isAlgTyCon tc)
+            constructor <-
+                lookup name [(getName dc, dc) | dc <- tyConDataCons tc]
+            guard (isVanillaDataCon constructor)
+            target <- resolvedConstructor env name
+            let fields =
+                    map scaledThing (dataConInstOrigArgTys constructor types)
+                site = argumentKey expression
+                names = argumentNames env site (length arguments)
+            guard (length fields == length arguments)
+            planned <- zipWithM field fields arguments
+            pure (ConstructorPayload target (zip names planned))
         _ -> Nothing
-    (tc, types) <- splitTyConApp_maybe ty
-    guard (isAlgTyCon tc)
-    constructor <- lookup name [(getName dc, dc) | dc <- tyConDataCons tc]
-    guard (isVanillaDataCon constructor)
-    target <- resolvedConstructor env name
-    let fields = map scaledThing (dataConInstOrigArgTys constructor types)
-        names = argumentNames env (argumentKey expression) (length arguments)
-    guard (length fields == length arguments)
-    planned <- zipWithM field fields arguments
-    pure (Payload variables ty target (zip names planned))
+    pure (Payload variables ty body)
     where
         field ty' argument =
             case filter dependent variables of
@@ -79,7 +96,7 @@ planPayload env variables ty expression = do
                     variable `elementOfUniqSet` tyCoVarsOfType ty'
 
 payloadType :: Env -> Payload -> Either String O.Ty
-payloadType env (Payload variables ty _ _) =
+payloadType env (Payload variables ty _) =
     O.forallT (map (O.b . getOccString) variables)
         <$> renderType (sourceDatatypes env) ty
 
@@ -97,14 +114,23 @@ emitPayload ::
     Env ->
     Payload ->
     Either String O.Expr
-emitPayload emit env payload@(Payload _ _ con fields) = do
-    ty <- payloadType env payload
-    arguments <- mapM field fields
-    pure
-        ( O.doE
-            (concatMap fst arguments)
-            (O.app (typedOperation "pure" ty) [O.call con (map snd arguments)])
-        )
+emitPayload emit env payload@(Payload _ _ body) = case body of
+    ConditionalPayload condition yes no ->
+        conditionalAction
+            <$> emit condition
+            <*> emitPayload emit env yes
+            <*> emitPayload emit env no
+    ConstructorPayload con fields -> do
+        ty <- payloadType env payload
+        arguments <- mapM field fields
+        pure
+            ( O.doE
+                (concatMap fst arguments)
+                ( O.app
+                    (typedOperation "pure" ty)
+                    [O.call con (map snd arguments)]
+                )
+            )
     where
         field (name, Ordinary expression) = case reuseThunk env expression of
             Just thunk -> pure ([], thunk)
@@ -153,7 +179,7 @@ allocatePayload emit env name (scoped, payload) continuation = do
                 else [O.sig body bodyType, O.val body [] allocation]
         producer = if null scoped then allocation else O.v body
         signature = case payload of
-            Payload variables source _ _ ->
+            Payload variables source _ ->
                 O.forallT (map (O.b . getOccString) variables)
                     . O.tc "M.Th"
                     . (: [])
