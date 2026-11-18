@@ -35,9 +35,7 @@ moduleEnvironment ::
     (Env, Map.Map Name [Type])
 moduleEnvironment strict datatypes literals types hints checkedScopes group =
     let binds = concatMap snd (topLevelGroups group)
-        topNames =
-            Set.fromList
-                [unLoc n | L _ (FunBind _ n _) <- binds]
+        topNames = Set.fromList [unLoc n | L _ (FunBind _ n _) <- binds]
         specialized =
             specializedLocals
                 datatypes
@@ -82,6 +80,7 @@ moduleEnvironment strict datatypes literals types hints checkedScopes group =
                     group
                 )
                 strict
+                (explicitScopes group)
      in (env, specialized)
 
 topLevelGroups :: HsGroup GhcRn -> [(RecFlag, [LHsBind GhcRn])]

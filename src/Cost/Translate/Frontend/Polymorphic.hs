@@ -1,6 +1,3 @@
--- | Elaborate constructor introductions under their generalized expected type.
--- Plan the entire dependent constructor tree before translating any field: a
--- monomorphic suspension cannot subsequently acquire a polymorphic payload.
 module Cost.Translate.Frontend.Polymorphic
     ( constructorPayload
     , allocatePayload
@@ -36,19 +33,23 @@ data Payload = Payload [TyVar] Type String [(String, Field)]
 data Field = Ordinary (LHsExpr GhcRn) | Generalized Payload
 
 constructorPayload ::
-    Env -> Name -> Type -> Match GhcRn (LHsExpr GhcRn) -> Maybe Payload
+    Env ->
+    Name ->
+    Type ->
+    Match GhcRn (LHsExpr GhcRn) ->
+    Maybe ([Name], Payload)
 constructorPayload env name ty match = do
-    -- Keep the existing native and dictionary-dependent paths unchanged.
     case nativeSharing (sourceDatatypes env) Map.empty ty of
         Right Nothing -> pure ()
         _ -> Nothing
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
+        scoped = Map.findWithDefault [] name (scopedTypeVariables env)
         rhs = m_grhss match
     guard (not (null variables) && all (isLiftedTypeKind . tyVarKind) variables)
     case (grhssLocalBinds rhs, grhssGRHSs rhs) of
         (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
-            planPayload env variables body expression
+            (scoped,) <$> planPayload env variables body expression
         _ -> Nothing
 
 planPayload :: Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
@@ -120,14 +121,14 @@ allocatePayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->
     Env ->
     Name ->
-    Payload ->
+    ([Name], Payload) ->
     O.Expr ->
     Either String O.Expr
 allocatePayload _ env name _ continuation
     | let used = usedNames continuation
     , localName env name `Set.notMember` used =
         pure continuation
-allocatePayload emit env name payload continuation = do
+allocatePayload emit env name (scoped, payload) continuation = do
     ty <- payloadType env payload
     action <- emitPayload emit env payload
     let local = localName env name
@@ -136,6 +137,21 @@ allocatePayload emit env name payload continuation = do
                 (local ++ "anchor")
                 name
                 (plannedAnchors (namePlan env))
+        body =
+            Map.findWithDefault
+                (local ++ "body")
+                name
+                (plannedBodies (namePlan env))
+        bodyType =
+            O.forallT
+                [O.bk (getOccString variable) (O.t "Type") | variable <- scoped]
+                (O.tc "M.MemoristM" [O.tc "M.Th" [ty]])
+        allocation = O.app (typedOperation "M.lazy" ty) [action]
+        declarations =
+            if null scoped
+                then []
+                else [O.sig body bodyType, O.val body [] allocation]
+        producer = if null scoped then allocation else O.v body
         signature = case payload of
             Payload variables source _ _ ->
                 O.forallT (map (O.b . getOccString) variables)
@@ -144,12 +160,13 @@ allocatePayload emit env name payload continuation = do
                     <$> renderType (sourceDatatypes env) source
     sharedType <- signature
     pure
-        ( O.doE
-            [O.bind root (O.app (typedOperation "M.lazy" ty) [action])]
-            ( O.letE
-                [ O.sig local sharedType
-                , O.val local [] (payloadView ty (O.v root))
-                ]
-                continuation
-            )
+        ( O.letE declarations $
+            O.doE
+                [O.bind root producer]
+                ( O.letE
+                    [ O.sig local sharedType
+                    , O.val local [] (payloadView ty (O.v root))
+                    ]
+                    continuation
+                )
         )

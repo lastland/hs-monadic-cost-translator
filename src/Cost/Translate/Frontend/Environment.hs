@@ -42,6 +42,7 @@ data Env = Env
     , singleConstructors :: Set.Set String
     , namePlan :: NamePlan
     , strictWhnfValues :: Set.Set Name
+    , scopedTypeVariables :: Map.Map Name [Name]
     }
 
 lookupEnv :: Name -> Env -> Maybe Binding

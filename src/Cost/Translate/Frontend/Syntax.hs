@@ -10,9 +10,11 @@ module Cost.Translate.Frontend.Syntax
     , fieldPath
     , stringPattern
     , argumentKey
+    , explicitScopes
     ) where
 
 import Data.Data (Data, cast, gmapQ)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (maybeToList)
 import GHC
 import GHC.Data.FastString (FastString, unpackFS)
@@ -21,6 +23,15 @@ import GHC.Types.SourceText (SourceText (NoSourceText))
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)
+
+explicitScopes :: HsGroup GhcRn -> Map.Map Name [Name]
+explicitScopes group =
+    Map.fromList
+        [ (unLoc name, map hsLTyVarName binders)
+        | L _ (TypeSig _ names signature) <- collect group :: [LSig GhcRn]
+        , HsOuterExplicit _ binders <- [sig_bndrs (unLoc (hswc_body signature))]
+        , name <- names
+        ]
 
 identity :: Name -> String
 identity n =
