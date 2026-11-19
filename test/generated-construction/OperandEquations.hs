@@ -15,3 +15,10 @@ erased False (x, _) = x `seq` False
 
 ignoreField :: (a, Bool) -> Bool
 ignoreField (_unused, flag) = flag
+
+relay :: (a, Bool) -> M.MemoristM Bool
+relay pair = let pass = forcePair in pass pair
+
+grow :: Bool -> (a, Bool) -> Bool
+grow True pair = grow False (Just pair, True)
+grow False pair = ignoreField pair

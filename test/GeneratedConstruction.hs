@@ -8,6 +8,7 @@ import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAst (pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
+import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
@@ -80,13 +81,14 @@ checkGeneratedConstruction output = do
             representations = homeReprs rt checkedPrograms
         qcResult <- quickCheckResult
         qc <- quickCheckRoles qcResult checkedModules
-        let uses = quickCheckUses qcResult programs
+        let uses = quickCheckUses qcResult
         (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
             let (syntaxProblems, sites) = checkSyntax rt qc (uses checked) homes methods viewNames views viewCalls checked
             evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
-        pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
+        pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
+            checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 
 checkGeneratedConstructionSpecimens :: IO ()
@@ -100,7 +102,7 @@ checkGeneratedConstructionSpecimens = do
         [(12, qcValue "OperandPropertyCall.strict")]
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
-         (16, qcValue "OperandEquations.erased")]
+         (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay")]
     accepts "OperandIgnored.hs"
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]

@@ -17,3 +17,7 @@ runErased = erased
 
 prop_pair :: M.Th Bool -> Q.Property
 prop_pair x = Q.property (M.value (M.eval1 (runPair (M.tval x `seq` Q.arbitrary, True))))
+
+prop_relay :: M.Th Bool -> Q.Property
+prop_relay x = Q.property (M.value (M.eval1
+    (relay (M.tval x `seq` (Q.arbitrary :: Draw), True))))
