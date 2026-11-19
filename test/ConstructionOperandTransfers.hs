@@ -7,19 +7,24 @@ import ConstructionAst (children, collectAst, pretty, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
 import Data.Data (Data, cast)
+import Data.Foldable (toList)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
+import GHC.Core.ConLike (ConLike(..))
+import GHC.Core.DataCon (dataConImplBangs, dataConOrigArgTys, dataConOrigResTy, isBanged)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (getTyVar_maybe, mkScaledFunTys, mkTyVarTy, splitAppTys, splitFunTys, splitPiTys, substTy)
 import GHC.Core.Unify (tcMatchTy)
 import qualified GHC.Data.Strict as Strict
-import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
+import GHC.Hs.Syn.Type (hsExprType, hsLPatType, lhsExprType)
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
+import GHC.Types.FieldLabel (flSelector)
 import GHC.Types.Id.Make (seqId)
+import GHC.Types.Name.Reader (greName)
 import GHC.Types.SrcLoc (getBufSpan)
 import GHC.Types.Var.Set (elemVarSet)
 
@@ -115,9 +120,9 @@ typedCall expr = do
         Strict.Nothing -> Nothing
 
 -- Retain force sites from every equation, even erased ones. The wired-in seq
--- forces its first operand; a bang forces the matched value. Other variable
--- and selector occurrences can refer to known callees, but passing their
--- result back to the caller does not put it in a force position in this body.
+-- forces its first operand; strict patterns and fields force their values.
+-- A variable or selector can refer to a known callee, but returning its result
+-- does not put that result in a force position in this body.
 bodyUses :: Data a => QuickCheck -> a -> ([Type], [Call])
 bodyUses qc = walk
   where
@@ -130,4 +135,40 @@ bodyUses qc = walk
                   ([scaledThing first | name == getName seqId,
                       first:_ <- [fst (splitFunTys (rho ty))]], [call])
             | Just pat@(L _ BangPat{}) <- cast node :: Maybe (LPat GhcTc) = ([hsLPatType pat], [])
+            | Just e <- cast node, Strict.Just _ <- getBufSpan (getLocA e),
+              Just con <- constructorHead (unLoc (e :: LHsExpr GhcTc)) = (strictFields con (lhsExprType e), [])
+            | Just RecordCon{rcon_con = n, rcon_ext = actual} <- cast node :: Maybe (HsExpr GhcTc),
+              Strict.Just _ <- getBufSpan (getLocA n), RealDataCon con <- unLoc n =
+                (strictFields con (hsExprType actual), [])
+            | Just (ExpandedThingTc (OrigExpr RecordUpd{rupd_flds = RegularRecUpdFields parents _}) expanded) <- cast node =
+                (updatedStrictFields [greName f | parent <- toList parents, f <- toList (rnRecUpdLabels parent)] expanded, [])
             | otherwise = ([], [])
+
+-- Use the actual constructor wrapper's instantiated argument types in
+-- declaration order, for positional, partially applied and labelled construction.
+strictFields :: DataCon -> Type -> [Type]
+strictFields con ty = [scaledThing arg | (bang, arg) <- zip (dataConImplBangs con) (fst (splitFunTys (rho ty))), isBanged bang]
+
+constructorHead :: HsExpr GhcTc -> Maybe DataCon
+constructorHead (XExpr (ConLikeTc (RealDataCon con) _ _)) = Just con
+constructorHead (XExpr (WrapExpr (HsWrap _ e))) = constructorHead e
+constructorHead (HsAppType _ e _) = constructorHead (unLoc e)
+constructorHead (HsPar _ e) = constructorHead (unLoc e)
+constructorHead (ExprWithTySig _ e _) = constructorHead (unLoc e)
+constructorHead _ = Nothing
+
+-- Updating a lazy field need not force any new value at an unchanged strict
+-- slot. GHC's update cases choose the constructors; the written field labels
+-- choose only the assignments. A type-changing update uses the result type.
+updatedStrictFields :: [Name] -> HsExpr GhcTc -> [Type]
+updatedStrictFields labels = go
+  where
+    go (HsLet _ _ body) = go (unLoc body)
+    go (XExpr (WrapExpr (HsWrap _ e))) = go e
+    go (HsCase RecUpd _ matches) =
+        [substTy sub (scaledThing arg) | L _ match <- unLoc (mg_alts matches),
+            L _ ConPat{pat_con = L _ (RealDataCon con)} <- m_pats match,
+            Just sub <- [tcMatchTy (dataConOrigResTy con) (mg_res_ty (mg_ext matches))],
+            (field, bang, arg) <- zip3 (dataConFieldLabels con) (dataConImplBangs con) (dataConOrigArgTys con),
+            flSelector field `elem` labels, isBanged bang]
+    go _ = []

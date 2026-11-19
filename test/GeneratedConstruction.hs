@@ -119,6 +119,9 @@ checkGeneratedConstructionSpecimens = do
     mixed "OperandForceSites.hs" (map TopBinding ["prop_first", "prop_lazy", "prop_second", "prop_rebound"]) "OperandForceSites.hs"
         [(33, qcValue "OperandForceSites.first"), (36, qcValue "OperandForceSites.strictId"),
          (37, qcValue "OperandForceSites.bangFirst")]
+    mixed "OperandConstructorSites.hs" (map TopBinding ["prop_lazy", "prop_unchanged"]) "OperandConstructorSites.hs"
+        [(20, qcValue "OperandConstructorSites.build"), (21, qcValue "OperandConstructorSites.buildRecord"),
+         (22, qcValue "OperandConstructorSites.replaceHard")]
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]
     mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"
