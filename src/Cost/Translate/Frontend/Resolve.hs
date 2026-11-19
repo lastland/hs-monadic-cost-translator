@@ -4,18 +4,21 @@ module Cost.Translate.Frontend.Resolve
     , functionResolver
     , remainingArity
     , resolvedConstructor
+    , booleanConstant
     ) where
 
 import Cost.Translate.Callable (callArity)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Syntax (builtin)
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Primitive (primitiveAdapter)
 import Cost.Translate.Typed (sourceKey)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
 import GHC
+import GHC.Builtin.Names (otherwiseIdName)
+import GHC.Builtin.Types (falseDataCon, trueDataCon)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Types.Name (getOccString)
 
 resolve :: Env -> Name -> Maybe Binding
 resolve env name = case lookupEnv name env of
@@ -54,53 +57,11 @@ resolveBuiltin name
                 )
                 2
             )
-    | Just operation <- primitive name = Just operation
+    | Just adapter <- primitiveAdapter name = Just (Adapter adapter 2)
     | otherwise = Nothing
     where
         listModule = "GHC.Internal.List"
         foldableModule = "GHC.Internal.Data.Foldable"
-
-primitive :: Name -> Maybe Binding
-primitive name
-    | any (\m -> builtin name m occurrence) modules =
-        Just
-            ( adapter
-                ( O.doE
-                    [forceA, O.bind "b" forceB]
-                    (O.ret (O.op occurrence valueA (O.v "b")))
-                )
-            )
-    | any (\m -> builtin name m "&&") classes =
-        Just
-            ( adapter
-                ( O.doE
-                    [forceA]
-                    (O.ifE valueA forceB (O.ret (O.v falseName)))
-                )
-            )
-    | any (\m -> builtin name m "||") classes =
-        Just
-            ( adapter
-                ( O.doE
-                    [forceA]
-                    (O.ifE valueA (O.ret (O.v trueName)) forceB)
-                )
-            )
-    | otherwise = Nothing
-    where
-        occurrence = getOccString name
-        adapter body = Adapter (O.lam (map O.p ["ta", "tb"]) body) 2
-        force n = O.call "M.force" [O.v n]
-        forceA = O.bind "a" (force "ta")
-        forceB = force "tb"
-        valueA = O.v "a"
-        classes = ["GHC.Classes", "GHC.Internal.Classes"]
-        modules
-            | occurrence `elem` ["+", "-", "*"] = ["GHC.Internal.Num"]
-            | occurrence `elem` ["==", "/=", "<", ">", "<=", ">="] = classes
-            | occurrence `elem` ["/", "div", "mod", "quot", "rem"] =
-                ["GHC.Internal.Real"]
-            | otherwise = []
 
 resolveAt :: Env -> LHsExpr GhcRn -> Name -> Maybe Binding
 resolveAt env expression name = case resolve env name of
@@ -126,14 +87,14 @@ resolvedConstructor env name
     | Just (Constructor con _ _) <- resolve env name = Just con
     | builtin name typesModule ":" = Just "L.ConsT"
     | builtin name typesModule "[]" = Just "L.NilT"
-    | builtin name typesModule trueName = Just trueName
-    | builtin name typesModule falseName = Just falseName
+    | name == getName trueDataCon = Just "True"
+    | name == getName falseDataCon = Just "False"
     | otherwise = Nothing
     where
         typesModule = "GHC.Types"
 
-trueName :: String
-trueName = "True"
-
-falseName :: String
-falseName = "False"
+booleanConstant :: Name -> Maybe Bool
+booleanConstant name
+    | name == otherwiseIdName || name == getName trueDataCon = Just True
+    | name == getName falseDataCon = Just False
+    | otherwise = Nothing

@@ -13,6 +13,7 @@ import Cost.Translate.Frontend.Polymorphic
 import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Primitive (Destination (..))
 import Cost.Translate.Sharing (sharingPaths, useTypes)
 import Cost.Translate.Typed (hasFreshAnnotationVariables)
 import Data.Map.Strict qualified as Map
@@ -73,13 +74,8 @@ emitGuardStatements ::
     Either String O.Expr
 emitGuardStatements scope body [] _ = emitExpr scope body
 emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next = do
-    condition <- emitExpr scope expr
     remaining <- emitGuardStatements scope body gs next
-    pure
-        ( O.doE
-            [O.bind "guardResult" condition]
-            (O.ifE (O.v "guardResult") remaining next)
-        )
+    emitCondition scope expr remaining next
 emitGuardStatements scope body (s@(L _ (BindStmt _ pat expr)) : gs) next =
     let n = actionName scope "guardThunk" (getLocA s)
      in withMatchThunk scope n expr $ \reference ->
@@ -193,6 +189,7 @@ emitLocalValue signatures scope binding name match done = do
                             else remaining
                 allocatePayload
                     (emitExpr scope)
+                    (emitCondition scope)
                     scope
                     (unLoc name)
                     plan
@@ -276,10 +273,9 @@ emitExpr env located = case unLoc located of
             located
             <$> emitExpr env expr
     HsIf _ condition yes no -> do
-        cond <- emitExpr env condition
         yesAction <- emitExpr env yes
         noAction <- emitExpr env no
-        pure (conditionalAction cond yesAction noAction)
+        emitCondition env condition yesAction noAction
     HsLet _ locals body -> withLocals env locals (`emitExpr` body)
     ExplicitTuple _ [Present _ a, Present _ b] Boxed ->
         emitApplied env located (returnConstructor "M.PairT") [a, b]
@@ -296,8 +292,25 @@ emitExpr env located = case unLoc located of
     OpApp _ left operator right -> emitOperator env located left operator right
     _ -> unsupportedExpression located
 
+emitCondition ::
+    Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr
+emitCondition env located yes no = case unLoc located of
+    HsPar _ nested -> emitCondition env nested yes no
+    HsVar _ name
+        | Just value <- booleanConstant (unLoc name) ->
+            Right (if value then yes else no)
+    _
+        | Just action <- emitSaturated env (emitThunk env) located branches ->
+            action
+    _ -> do
+        condition <- emitExpr env located
+        pure (conditionalAction condition yes no)
+    where
+        branches = Branching yes no
+
 emitApplication :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitApplication env located = case unLoc fun of
+    _ | Just action <- emitSaturated env suspend located Returning -> action
     HsVar _ name | isComposition (unLoc name) -> callable
     HsVar _ name
         | builtin (unLoc name) "GHC.Internal.Err" "error"
@@ -341,6 +354,9 @@ emitOperator ::
     LHsExpr GhcRn ->
     Either String O.Expr
 emitOperator env located left operator right = case unLoc operator of
+    _
+        | Just action <- emitSaturated env (emitThunk env) located Returning ->
+            action
     HsVar _ name
         | isComposition (unLoc name) ->
             emitCallable (partialName env) resolver (emitThunk env) located

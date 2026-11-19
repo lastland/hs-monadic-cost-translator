@@ -100,6 +100,7 @@ library
         Cost.Translate.Datatypes.Types
         Cost.Translate.Names
         Cost.Translate.Pretty
+        Cost.Translate.Primitive
         Cost.Translate.Foldable
         Cost.Translate.Validation
         Cost.Translate.Kinds
