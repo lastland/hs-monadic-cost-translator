@@ -1,24 +1,30 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
-module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, nestedSource, ordinaryCoreBindings, components) where
+module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
+    nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings)
+import ConstructionAst (bindingName, children, collectAst, nestedBindings, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
+import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
 import Control.Monad (zipWithM)
 import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
 import qualified GHC.Core as C
-import GHC.Core.Coercion (coercionLKind, coercionRKind)
+import GHC.Core.Coercion (coercionLKind, coercionRKind, topNormaliseNewType_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.Type (isFunTy, splitTyConApp_maybe)
+import GHC.Core.TyCon (isDataTyCon)
+import GHC.Core.Type (isPiTy, isTyVarTy, splitTyConApp_maybe)
+import GHC.Hs.Syn.Type (hsExprType, lhsExprType)
 import GHC.Tc.Types.Evidence (HsWrapper(..))
-import GHC.Tc.Utils.TcType (tcSplitNestedSigmaTys)
 import GHC.Types.Basic (Boxity(Boxed))
+import GHC.Types.Name (isInternalName)
 import GHC.Types.Name.Set (NameSet)
 
-data Locals = Locals { quickCheckBindings :: QuickCheck, expressionValues :: Set.Set Name, independentIds :: Set.Set Name }
+data Locals = Locals
+    { quickCheckBindings :: QuickCheck, expressionValues :: Set.Set Name, independentIds :: Set.Set Name
+    , ipSites :: Map.Map Name SrcSpan }
 
 data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan | ComponentAt SrcSpan SrcSpan
 
@@ -34,6 +40,7 @@ parts node
         [] -> bodyParts b
         ns -> ([b], ns)
     | Just binding <- cast node = ([binding], [])
+    | Just (_ :: IPBind GhcRn) <- cast node = mempty
     | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [unLoc n])
     | Just (_ :: NameSet) <- cast node = mempty
     | Just (_ :: Name) <- cast node = mempty
@@ -78,31 +85,27 @@ components PatBind{pat_lhs = pat, pat_rhs = GRHSs _ [L _ (GRHS _ [] rhs)] (Empty
     field _ _ = Nothing
 components _ = Nothing
 
-localBindings :: QuickCheck -> [TypecheckedModule] -> Locals
-localBindings qc modules = Locals qc values (reachable aliases independent)
+-- An explicit ?binding defines a dynamically scoped dictionary. Its RHS has
+-- ordinary obligations even if the surrounding property never selects it.
+implicitBodies :: HsGroup GhcRn -> [LHsExpr GhcRn]
+implicitBodies group = [rhs | IPBind _ _ rhs <- collectAst group]
+
+localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
+localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionaries) (reachable aliases independent)) dictionaries
   where
-    roots = [bodyParts b | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m], b <- fst (parts group)]
+    groups = [group | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
+    roots = [bodyParts b | group <- groups, b <- fst (parts group)]
+    ips = [parts rhs | group <- groups, rhs <- implicitBodies group]
     local b = concat [(b, ns, refs) : concatMap local nested | (ns, (nested, refs)) <- regions]
       where
         regions | value b, Just fields <- components b =
                     [(collectPatBinders CollNoDictBinders p, parts e) | (p, e) <- fields]
                 | otherwise = [(names b, bodyParts b)]
-    locals = concatMap (concatMap local . fst) roots
+    locals = concatMap (concatMap local . fst) (roots ++ ips)
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
-    -- A point-free helper can have an opaque family signature. Keep the
-    -- function shape witnessed at its typechecked definition or use; never
-    -- reduce potentially recursive families or interpret the helper itself.
-    asFunctions = concat [functionCasts w | m <- typed, w <- collectAst m]
-    functionCasts (WpCompose outer inner) = functionCasts outer ++ functionCasts inner
-    functionCasts (WpCast co) = [t | let l = coercionLKind co; r = coercionRKind co,
-        (t, other) <- [(l, r), (r, l)], isFunTy other]
-    functionCasts _ = []
-    callable t = isFunTy t || (maybe True (isTypeFamilyTyCon . fst) (splitTyConApp_maybe t) && any (eqType t) asFunctions)
-    valueIds = Set.fromList [getName v | m <- typed, binding <- collectAst m :: [HsBind GhcTc],
-        v <- collectHsBindBinders CollNoDictBinders binding,
-        let (_, _, result) = tcSplitNestedSigmaTys (idType v), not (callable result)]
+    valueIds = dataBinders rt aliases typed
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
     value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
@@ -112,10 +115,56 @@ localBindings qc modules = Locals qc values (reachable aliases independent)
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
     live = reachable deps (Set.fromList (concatMap snd roots ++ concat [refs | (b, _, refs) <- locals, generator b]))
     consumed ns = not (null ns) && all (`Set.member` live) ns
-    ordinary = reachable deps (Set.fromList [ref | (b, ns, refs) <- locals, not (generator b),
-        not (value b && consumed ns), ref <- refs])
+    ordinary = reachable deps (Set.fromList (concatMap snd ips ++ [ref | (b, ns, refs) <- locals, not (generator b),
+        not (value b && consumed ns), ref <- refs]))
     values = Set.fromList [n | (b, ns, _) <- locals, value b, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
     independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
+    dictionaries = Map.fromList [(getName v, getLocA label) | m <- typed, IPBind v label _ <- collectAst m :: [IPBind GhcTc]]
+
+data Result = DataValue | Executable | Unknown deriving Eq
+
+-- Type/dictionary abstractions and translated actions are work, even when
+-- their final result is Bool. A newtype around a function is not scalar data.
+result :: Runtime -> Type -> Result
+result rt ty
+    | isPiTy ty || computation ty || isPiTy rep || computation rep = Executable
+    | Just (tc, _) <- splitTyConApp_maybe rep, isDataTyCon tc || isPrimTyCon tc = DataValue
+    | otherwise = Unknown
+  where
+    computation t = maybe False ((== runtimeName rt "Memorist.Base.ANT" "MemoristT") . getName . fst) (splitTyConApp_maybe t)
+    rep = maybe ty snd (topNormaliseNewType_maybe ty)
+
+dataBinders :: Runtime -> Map.Map Name [Name] -> [TypecheckedSource] -> Set.Set Name
+dataBinders rt aliases typed = Set.fromList [getName v | b <- binds, v <- collectHsBindBinders CollNoDictBinders b,
+    case result rt (idType v) of
+        DataValue -> True
+        Unknown -> Set.member (getName v) witnessed && Set.notMember (getName v) executed
+        Executable -> False]
+  where
+    binds = concatMap collectAst typed :: [HsBind GhcTc]
+    witnessed = reachable aliases (Set.fromList [getName v | FunBind _ n matches <- binds, let v = unLoc n,
+        result rt (idType v) == Unknown, matchGroupArity matches == 0,
+        let rhss = [rhs | L _ m <- unLoc (mg_alts matches), L _ (GRHS _ _ rhs) <- grhssGRHSs (m_grhss m)],
+        not (null rhss), all (valueRhs rt (idType v) . unLoc) rhss])
+    executed = reachable aliases (Set.fromList [n | m <- typed, e <- collectAst m, Just (_, n) <- [typedVariable e],
+        Set.member n witnessed, result rt (lhsExprType e) == Executable])
+
+-- Inspect only a definition's result wrapper. An abstract payload may also be
+-- the existing value of an enclosing thunk, projected at its checked type.
+-- Neither a different binder's cast nor an arbitrary callee is a witness.
+valueRhs :: Runtime -> Type -> HsExpr GhcTc -> Bool
+valueRhs rt ty = at
+  where
+    at (XExpr (WrapExpr (HsWrap w e))) = castToResult w || at e
+    at (HsPar _ e) = at (unLoc e)
+    at (ExprWithTySig _ e _) = at (unLoc e)
+    at e@(HsApp _ f x) | isTyVarTy ty, eqType ty (hsExprType e),
+        Just (_, selector) <- typedVariable f, roleOf rt selector == Just Payload,
+        Just (_, input) <- typedVariable x = isInternalName input
+    at _ = False
+    castToResult (WpCompose outer inner) = castToResult outer || castToResult inner
+    castToResult (WpCast co) = eqType ty (coercionRKind co) && result rt (coercionLKind co) == DataValue
+    castToResult _ = False
 
 reachable :: Map.Map Name [Name] -> Set.Set Name -> Set.Set Name
 reachable edges initial = go initial (Set.toList initial)
@@ -148,3 +197,7 @@ ordinaryCoreBindings locals bs = filter (not . isQuickCheckBinding qc . fst) bs 
         let exempt = isQuickCheckBinding qc v
             resume = testing && not exempt && Set.member (getName v) (independentIds locals)
         in [pair | resume] ++ concatMap (inside (exempt || (testing && not resume))) (nestedBindings rhs)
+
+-- GHC's IP dictionary Id can have no source span; its declaration has one.
+coreLocation :: Locals -> Id -> SrcSpan
+coreLocation locals v = Map.findWithDefault (nameSrcSpan n) n (ipSites locals) where n = getName v

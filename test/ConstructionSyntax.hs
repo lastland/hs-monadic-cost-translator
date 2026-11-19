@@ -3,7 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
-import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), nestedSource, quickCheckBindings)
+import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), implicitBodies, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -68,7 +68,7 @@ checkParsedSyntax parsed =
 
 checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
 checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
-    Just (group, _, _, _, _) -> walk noSrcSpan group
+    Just (group, _, _, _, _) -> foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group)
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     qc = quickCheckBindings locals
@@ -86,6 +86,7 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
         -- GHC caches a declaration's free variables on its renamed node. The
         -- actual uses are inside the method bodies, where their roles are known.
         | Just (_ :: NameSet) <- cast value = ([], [])
+        | Just (_ :: IPBind GhcRn) <- cast value = ([], [])  -- checked separately, including under exempt RHSs
         -- A declared field introduces a selector; no value is selected here.
         | Just (_ :: ConDeclField GhcRn) <- cast value = ([], [])
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
