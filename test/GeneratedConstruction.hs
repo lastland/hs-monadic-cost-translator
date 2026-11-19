@@ -221,10 +221,9 @@ checkGeneratedConstructionSpecimens = do
     rejects "SumGeneratorDead.hs" [(17, eval1)]
     rejectsAt "SumTagEscape.hs" [(8, unknown "GHC.Magic.dataToTag#")]
     accepts "DefaultLabels.hs"
-    mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs"
-        [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels"),
-         (23, unknown "DefaultLabels.$dmlabels"), (26, unknown "DefaultLabels.$dmlabels"),
-         (29, unknown "DefaultLabels.$dmlabels")]
+    mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs" $
+        [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels")] ++
+        [(line, unknown "DefaultLabels.$dmlabels") | line <- [23, 26, 29]]
     rejectsAt "ErasedDataDefault.hs" [(9, forbidden tval), (11, unknown "ErasedDataDefault.$dmmarks")]
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
