@@ -238,19 +238,21 @@ checkGeneratedConstructionSpecimens = do
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
-    -- Mask just the target's operation, keeping its path/line and the genuine
-    -- dependency diagnostic. The matcher must distinguish the two reports.
+    -- Select reports to mask by exact path/line, independently of the matcher
+    -- under test. Keep the location and the import's same-operation report.
     rejectsDespiteImport name line dependency importedLine reason = do
         output <- specimen name
         imported <- specimen dependency
         typechecks output
         diagnostics <- rejection output
         let target = (site output line, reason)
-            mask report | matchesDiagnostic target report = fst target ++ " unexpected operation"
+            dependencySite = (site imported importedLine, reason)
+            mask report | fst target `isPrefixOf` report = fst target ++ " unexpected operation"
                         | otherwise = report
+            masked = unlines (map mask (lines diagnostics))
         requireDiagnostic diagnostics target
-        requireDiagnostic diagnostics (site imported importedLine, reason)
-        when (matchesDiagnostic target (unlines (map mask (lines diagnostics)))) $
+        requireDiagnostic masked dependencySite
+        when (matchesDiagnostic target masked) $
             fail (output ++ ": dependency masked missing target operation: " ++ reason)
     rejectsCompleteBox = do
         temporary <- getTemporaryDirectory
