@@ -10,10 +10,13 @@ import Data.Maybe (mapMaybe, isNothing)
 import GHC
 import GHC.Builtin.Types (intTy, liftedTypeKind, listTyConName, nilDataConName)
 import GHC.Core.Class (classTyVars)
+import GHC.Core.DataCon (dataConFullSig, dataConInstOrigArgTys)
+import GHC.Core.FamInstEnv (FamInst(..))
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
+import GHC.Core.TyCon (isAlgTyCon)
 import GHC.Core.Type (piResultTys, splitForAllTyVars, splitFunTys, splitTyConApp_maybe, mkTyVarTy, tyVarKind)
-import GHC.Tc.Types (tcg_tcs)
+import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
 import GHC.Types.SourceText (il_value)
 import GHC.Core.TyCo.Rep (scaledThing)
 
@@ -23,6 +26,7 @@ data Schema = Schema
     , constructors :: [Name]
     , qc :: [(String, Name)]
     , genType :: Name
+    , demandTypes :: [TyCon]
     , interfaces :: [Interface]
     , genFields :: [Name]
     , shrinkFields :: [Name]
@@ -32,11 +36,17 @@ data Schema = Schema
 demandSupport :: Runtime -> [Name] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Name)], [Name])
 demandSupport runtime' dataNames checked = do
     gen <- maybe (fail "construction support: missing pre-resolved Gen type") pure (lookup "Gen" (observationTypes runtime'))
-    let classes = mapMaybe tyConClass_maybe [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
+    let homeTypes = [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
+        classes = mapMaybe tyConClass_maybe homeTypes
         protocol = mapMaybe (demandInterface runtime' (getName gen)) classes
-        schema = Schema runtime' dataNames (observationNames runtime') (getName gen) protocol [] [] []
+        demands = nub [tc | m <- checked, equation <- tcg_fam_insts (fst (tm_internals_ m)),
+            fi_fam equation == runtimeName runtime' "Memorist.Data.Interface.Demand" "Dem",
+            Just (tc, _) <- [splitTyConApp_maybe (fi_rhs equation)], tc `elem` homeTypes]
+        schema = Schema runtime' dataNames (observationNames runtime') (getName gen) demands protocol [] [] []
         sourceBindings = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
+        typedBindings = [(getLocA name, idType (unLoc name)) | m <- checked,
+            FunBind _ name _ <- collectAst (tm_typechecked_source m) :: [HsBind GhcTc]]
     candidates <- forM sourceBindings $ \binding -> case binding of
         FunBind _ name _ -> do
             thing <- lookupName (unLoc name)
@@ -48,12 +58,39 @@ demandSupport runtime' dataNames checked = do
         arbitrary = helpers exactArbitraryField
         complete = schema { genFields = map snd generate, shrinkFields = map snd shrink, arbitraryFields = map snd arbitrary }
         methods = [(getLocA name, unLoc name) | binding@(FunBind _ name _) <- sourceBindings,
-            exactMethod complete (unLoc name) binding]
+            exactMethod complete (unLoc name) binding] ++
+            [(getLocA name, unLoc name) | binding@(FunBind _ name _) <- sourceBindings,
+                unLoc name `elem` qcName complete "arbitrary",
+                [ty] <- [[ty | (location, ty) <- typedBindings, location == getLocA name]],
+                exactDatatypeArbitrary complete binding ty]
         aliases = [(getLocA name, unLoc name) | (binding@(FunBind _ name _), Just ty) <- candidates,
             exactAlias complete binding ty]
         restricted = nub (map snd (generate ++ shrink ++ arbitrary ++ aliases) ++
             concat [[generator, shrinker] | Interface _ generator shrinker <- protocol])
     pure (generate ++ shrink ++ arbitrary ++ methods ++ aliases, restricted)
+
+-- A generator role belongs to an actual home Dem equation, not to an arbitrary
+-- pure result type or a helper spelling. Its selected method's checked monotype
+-- fixes the result constructor and every field's real ThD type.
+exactDatatypeArbitrary :: Schema -> HsBind GhcRn -> Type -> Bool
+exactDatatypeArbitrary policy binding ty = unary (genType policy) ty $ \result -> case splitTyConApp_maybe result of
+    Just (tc, arguments) | tc `elem` demandTypes policy, isAlgTyCon tc, not (isNewTyCon tc),
+            [constructor] <- tyConDataCons tc, simple constructor,
+            let fields' = map scaledThing (dataConInstOrigArgTys constructor arguments),
+            all (\field -> unary (runtimeName (rt policy) "Memorist.Data.Interface.Demand" "ThD") field (const True)) fields',
+            Just [([], expression)] <- equations binding,
+            Just [sized] <- call (qcName policy "sized") expression,
+            (L _ (HsLam _ LamSingle matches), []) <- spine sized,
+            [L _ match] <- unLoc (mg_alts matches), [budget] <- m_pats match,
+            Just _ <- plainPattern budget, Just body <- oneRhs match,
+            Just (name, generated) <- applicative policy body, name == getName constructor,
+            length generated == length fields' -> all (fieldGenerator budget (length fields')) generated
+    _ -> False
+  where
+    simple constructor = case dataConFullSig constructor of (_, [], [], [], _, _) -> True; _ -> False
+    fieldGenerator budget count generator = case call (arbitraryFields policy) generator of
+        Just [size] -> budgetFor policy budget count size
+        _ -> False
 
 -- Match the entire abstract interface by types and superclass, not its name.
 -- Its implementation remains a caller/dictionary contract, not verified code

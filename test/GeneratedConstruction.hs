@@ -182,10 +182,13 @@ checkGeneratedConstructionSpecimens = do
     rejectsBecause "SizedDemandOtherInput.hs" ["unsupported observation schema for Memorist.Data.Interface.Demand.arbDemandFrom"]
     rejectsBecause "SizedDemandEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
     rejectsBecause "SizedDemandDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
+    rejectsBecause "DatatypeGeneratorWrongRole.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
+    rejectsBecause "DatatypeGeneratorEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
+    rejectsBecause "DatatypeGeneratorDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
          "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs",
-         "SizedDemandControl.hs"]
+         "SizedDemandControl.hs", "DatatypeGeneratorControl.hs"]
     putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
