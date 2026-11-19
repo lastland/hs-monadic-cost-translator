@@ -58,12 +58,13 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> QuickCheckUses -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc qcUses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc uses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     exempt = quickCheckBody qc checked
+    qcUses = uses checked
     updates = ambiguousUpdateReferences (tm_typechecked_source checked)
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
