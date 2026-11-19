@@ -57,6 +57,7 @@ typedVariable :: LHsExpr GhcTc -> Maybe (SrcSpan, Name)
 typedVariable expression = at (getLocA expression) (unLoc expression)
   where
     at location (HsVar _ name) = Just (location, getName (unLoc name))
+    at location (HsRecSel _ field) = Just (location, getName (foExt field))
     at _ (HsAppType _ function _) = typedVariable function
     at _ (HsPar _ function) = typedVariable function
     at _ (ExprWithTySig _ function _) = typedVariable function

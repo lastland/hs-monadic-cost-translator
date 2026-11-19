@@ -91,9 +91,13 @@ checkSyntax rt qc qcUses homes methods restricted views viewCalls checked = case
                 form = unLoc expression
                 shape = if expressionForm form then ([], []) else
                     ([pretty here ++ ": unsupported executable expression: " ++ pretty form], [])
-                site = case form of HsVar _ name | unLoc name `elem` methods -> ([], [(here, unLoc name)]); _ -> ([], [])
+                reference = case form of
+                    HsVar _ name -> Just (unLoc name)
+                    HsRecSel _ field -> Just (foExt field)
+                    _ -> Nothing
+                site = ([], [(here, name) | Just name <- [reference], name `elem` methods])
                 body = case form of
-                    HsVar _ (L _ name) | permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
+                    _ | Just name <- reference, permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
                         ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
                     XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
                         L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
