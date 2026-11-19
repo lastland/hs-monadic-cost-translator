@@ -24,3 +24,6 @@ instance Labels (Bool -> Bool)
 
 newtype Callback = Callback (Bool -> Bool)
 instance Labels Callback
+
+data BoxedCallback = BoxedCallback (Bool -> Bool)
+instance Labels BoxedCallback
