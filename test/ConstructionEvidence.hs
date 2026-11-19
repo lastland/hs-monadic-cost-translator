@@ -9,15 +9,18 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType)
+import GHC.Builtin.Names (dataToTagClassName)
+import GHC.Builtin.PrimOps (PrimOp(..))
 import qualified GHC.Core as C
 import GHC.Core.Class (classSCSelIds, classOpItems, classTyCon)
+import GHC.Core.Coercion (Role(Representational), coercionRKind, eqCoercion, mkSymCo, mkUnbranchedAxInstCo)
 import GHC.Core.DataCon (dataConFullSig, dataConOrigArgTys, dataConInstOrigArgTys)
 import GHC.Core.FamInstEnv (FamInst(..))
 import GHC.Core.InstEnv (ClsInst(..))
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.TyCon (isAlgTyCon)
+import GHC.Core.TyCo.Rep (Coercion, scaledThing)
+import GHC.Core.TyCon (isAlgTyCon, newTyConCo)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, mkTyConTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.OrdList (fromOL)
@@ -26,14 +29,14 @@ import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types (tcg_ev_binds, tcg_fam_insts, tcg_insts, tcg_tcs)
 import GHC.Tc.Types.Evidence (TcEvBinds(..))
-import GHC.Types.Id (isDFunId, isDataConId_maybe)
+import GHC.Types.Id (isDFunId, isDataConId_maybe, isPrimOpId_maybe)
 import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.Var (isId)
 import GHC.Unit.Module.ModGuts (mg_binds)
 
-data Family = Computation | RepresentationMethod | ScalarMethod | EmptyUsageDefault | UnknownMethod deriving (Eq)
-data Evidence = Given Type | Instance Name Type [Evidence] | Super Type Evidence | Unknown String
+data Family = Computation | RepresentationMethod | ScalarMethod | EmptyUsageDefault | ConstructorTagMethod | UnknownMethod deriving (Eq)
+data Evidence = Given Type | Instance Name Type [Evidence] | Super Type Evidence | CompilerTag Type Type | Unknown String
 data Use = Use Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
@@ -57,7 +60,10 @@ methodFamilies rt = do
         thing <- lookupName name
         pure [(actual, family) | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier],
             (method, Just (actual, _)) <- classOpItems cls, getName method == name]
-    pure (Map.union selected (Map.fromList defaults))
+    tag <- lookupName dataToTagClassName
+    let tags = [(getName method, ConstructorTagMethod) | Just (ATyCon tc) <- [tag],
+            Just cls <- [tyConClass_maybe tc], [method] <- [classMethods cls]]
+    pure (Map.unions [selected, Map.fromList defaults, Map.fromList tags])
 
 methodNames :: Runtime -> Ghc [Name]
 methodNames rt = Map.keys <$> methodFamilies rt
@@ -72,7 +78,7 @@ checkEvidence rt homes demands support checked sites = do
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
     derived <- derivedDemandMethods rt checked environment
-    let rootProblems = concat [concatMap (checkUse rt homes demands (getName binder `elem` derived)) (uses selected environment givens rhs) |
+    let rootProblems = concat [concatMap (checkUse rt homes demands (lookup (getName binder) derived)) (uses selected environment givens rhs) |
             (binder, rhs) <- concatMap pairs program, getName binder `notElem` support]
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -97,13 +103,13 @@ checkEvidence rt homes demands support checked sites = do
             Nothing -> ["cannot desugar the retained source method certificates"]
     pure (rootProblems ++ siteProblems)
   where
-    problems = concatMap (checkUse rt homes demands False)
+    problems = concatMap (checkUse rt homes demands Nothing)
 
 -- Stock deriving on a concrete, checked demand datatype is a declaration role.
 -- Bind that role through the actual instance head, dictionary constructor and
 -- typed method fields, never logical source spans or $c names. Selected field
 -- evidence is still checked below rather than skipping the derived body.
-derivedDemandMethods :: Runtime -> TypecheckedModule -> Environment -> Ghc [Name]
+derivedDemandMethods :: Runtime -> TypecheckedModule -> Environment -> Ghc [(Name, Type)]
 derivedDemandMethods rt checked environment = do
     classes <- fmap concat $ forM ["Prelude.==", "Prelude.showsPrec"] $ \label -> case lookup label (standardNames rt) of
         Just name -> do
@@ -149,7 +155,7 @@ derivedDemandMethods rt checked environment = do
                 length methods == length fields',
                 let expected = map scaledThing (dataConInstOrigArgTys actual [argument]),
                 length expected == length methods,
-                and (zipWith (eqType . idType) methods expected) -> map getName methods
+                and (zipWith (eqType . idType) methods expected) -> [(getName method, argument) | method <- methods]
         _ -> []
     dictionaryBody seen expression = case expression of
         C.Var v | getName v `Set.notMember` seen, Just rhs <- Map.lookup (getName v) environment ->
@@ -158,12 +164,16 @@ derivedDemandMethods rt checked environment = do
         C.Tick _ body -> dictionaryBody seen body
         _ -> expression
 
-checkUse :: Runtime -> [Module] -> [TyCon] -> Bool -> Use -> [String]
+checkUse :: Runtime -> [Module] -> [TyCon] -> Maybe Type -> Use -> [String]
 checkUse rt homes demands observation (Use name family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
-    verdict | family == UnknownMethod =
+    verdict | family == ConstructorTagMethod = case (observation, types, dictionaries) of
+            (Just target, [level, ty], [CompilerTag actualLevel actualTy])
+                | eqType ty target, eqType ty actualTy, eqType level actualLevel -> Nothing
+            _ -> Just "constructor tags require the exact compiler dictionary in a checked stock-derived demand method"
+            | family == UnknownMethod =
         if maybe False (`elem` homes) (nameModule_maybe name) &&
             case dictionaries of evidence : _ -> lexical evidence || safeHome evidence; _ -> False
         then Nothing else Just "unknown executable method/default dependency"
@@ -174,13 +184,14 @@ checkUse rt homes demands observation (Use name family types dictionaries) =
             RepresentationMethod | safeRepr evidence && representationCarrier -> Nothing
                 | otherwise -> Just "reprM requires a checked local, audited runtime, or lexical Repr method contract"
             ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
-                | not observation && demandOperand ty -> Just "demand-data methods require a checked observation declaration"
-                | observation && demandScalar ty evidence -> Nothing
+                | Nothing <- observation, demandOperand ty -> Just "demand-data methods require a checked observation declaration"
+                | Just _ <- observation, demandScalar ty evidence -> Nothing
                 | scalarType ty && ordinary evidence -> Nothing
                 | lexical evidence || safeHome evidence -> Nothing
                 | otherwise -> Just "unknown concrete scalar instance"
             EmptyUsageDefault | demandPredicate evidence -> Nothing
                 | otherwise -> Just "audited empty-usage default requires its Demand dictionary"
+            ConstructorTagMethod -> Just "unchecked constructor tag method"
             UnknownMethod -> Just "unknown executable method/default dependency"
         _ -> Just "unsaturated selector has no selected instance evidence"
     root (Super _ parent) = root parent
@@ -260,6 +271,7 @@ checkUse rt homes demands observation (Use name family types dictionaries) =
         Super predicate _ -> demand predicate
         Given predicate -> demand predicate
         Instance _ predicate _ -> demand predicate
+        CompilerTag{} -> False
         Unknown _ -> False
     demand predicate = case getClassPredTys_maybe predicate of
         Just (cls, [_]) -> getName cls == runtimeName rt "Memorist.Data.Interface.Demand" "Demand"
@@ -295,6 +307,7 @@ uses selected = walk
         _ -> Nothing
     trace env given seen expression = case expression of
         C.Tick _ body -> trace env given seen body
+        C.Cast body coercion | Just (level, ty) <- compilerTag body coercion -> CompilerTag level ty
         C.Cast{} -> Unknown "coerced dictionary"
         _ -> case C.collectArgs expression of
             (C.Var identifier, arguments)
@@ -307,11 +320,23 @@ uses selected = walk
                   [arg] <- [a | a <- arguments, not (C.isTyCoArg a)] -> Super (exprType expression) (trace env given seen arg)
             _ -> Unknown (pretty expression)
 
+-- GHC supplies this one newtype dictionary when stock Eq compares constructor
+-- tags. No other dictionary cast, callback or source operation receives a role.
+compilerTag :: C.CoreExpr -> Coercion -> Maybe (Type, Type)
+compilerTag expression coercion = case (C.collectArgs expression, getClassPredTys_maybe (coercionRKind coercion)) of
+    ((C.Var primitive, [C.Type actualLevel, C.Type actualTy]), Just (cls, [level, ty]))
+        | getName cls == dataToTagClassName, isNewTyCon (classTyCon cls),
+          isPrimOpId_maybe primitive `elem` map Just [DataToTagSmallOp, DataToTagLargeOp],
+          eqType level actualLevel, eqType ty actualTy,
+          eqCoercion coercion (mkSymCo (mkUnbranchedAxInstCo Representational (newTyConCo (classTyCon cls)) [level, ty] [])) -> Just (level, ty)
+    _ -> Nothing
+
 renderEvidence :: Evidence -> String
 renderEvidence (Given ty) = "given " ++ pretty ty
 renderEvidence (Instance name ty dependencies) = describeName name ++ " :: " ++ pretty ty ++
     concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
+renderEvidence (CompilerTag level ty) = "compiler constructor tag " ++ pretty level ++ " " ++ pretty ty
 renderEvidence (Unknown why) = "unresolved " ++ why
 
 coreGivens :: C.CoreExpr -> [Id]

@@ -80,19 +80,28 @@ homeDemandTypes runtime' checked = nub
 exactDatatypeArbitrary :: Schema -> HsBind GhcRn -> Type -> Bool
 exactDatatypeArbitrary policy binding ty = unary (genType policy) ty $ \result -> case splitTyConApp_maybe result of
     Just (tc, arguments) | tc `elem` demandTypes policy, isAlgTyCon tc, not (isNewTyCon tc),
-            [constructor] <- tyConDataCons tc, simple constructor,
-            let fields' = map scaledThing (dataConInstOrigArgTys constructor arguments),
-            all (\field -> unary (runtimeName (rt policy) "Memorist.Data.Interface.Demand" "ThD") field (const True)) fields',
+            let choices = tyConDataCons tc, not (null choices), all simple choices,
+            let fieldsOf constructor = map scaledThing (dataConInstOrigArgTys constructor arguments),
+            all (all (\field -> unary (runtimeName (rt policy) "Memorist.Data.Interface.Demand" "ThD") field (const True)) . fieldsOf) choices,
             Just [([], expression)] <- equations binding,
             Just [sized] <- call (qcName policy "sized") expression,
             (L _ (HsLam _ LamSingle matches), []) <- spine sized,
             [L _ match] <- unLoc (mg_alts matches), [budget] <- m_pats match,
             Just _ <- plainPattern budget, Just body <- oneRhs match,
-            Just (name, generated) <- applicative policy body, name == getName constructor,
-            length generated == length fields' -> all (fieldGenerator budget (length fields')) generated
+            Just branches <- alternatives (length choices) body,
+            Just generated <- mapM (applicative policy) branches,
+            length generated == length choices, length (nub (map fst generated)) == length choices -> and
+                [case [constructor | constructor <- choices, getName constructor == name] of
+                    [constructor] -> let count = length (fieldsOf constructor)
+                        in length fields' == count && all (fieldGenerator budget count) fields'
+                    _ -> False | (name, fields') <- generated]
     _ -> False
   where
     simple constructor = case dataConFullSig constructor of (_, [], [], [], _, _) -> True; _ -> False
+    alternatives 1 body = Just [body]
+    alternatives _ body | Just [list] <- call (qcName policy "oneof") body,
+        (L _ (ExplicitList _ branches), []) <- spine list = Just branches
+    alternatives _ _ = Nothing
     fieldGenerator budget count generator = case call (arbitraryFields policy) generator of
         Just [size] -> budgetFor policy budget count size
         _ -> False
