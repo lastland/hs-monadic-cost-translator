@@ -1,9 +1,13 @@
 module Cost.Translate.Sharing.Specialization where
 
-import Control.Monad (unless, zipWithM)
+import Control.Applicative ((<|>))
+import Control.Monad (guard, unless, zipWithM)
+import Cost.Translate.Datatypes (renderType)
+import Cost.Translate.Kinds (renderKind)
 import Cost.Translate.Validation (scalarType)
 import Data.List (nubBy)
 import GHC (TyCon, TyVar, Type)
+import GHC.Builtin.Names qualified as Builtin
 import GHC.Builtin.Types
     ( liftedTypeKind
     , listTyCon
@@ -16,13 +20,16 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type
     ( getTyVar_maybe
     , isPredTy
+    , splitAppTy_maybe
     , splitForAllTyVars
     , splitFunTys
     , splitTyConApp_maybe
     , substTyWith
+    , typeKind
     )
 import GHC.Core.Unify (typesCantMatch)
 import GHC.Types.Basic (Boxity (..))
+import GHC.Types.Name (Name, getName)
 import GHC.Types.Var (tyVarKind)
 import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 
@@ -36,7 +43,20 @@ constrainedVariables ty = [v | v <- vars, v `elemVarSet` free]
 
 specializedSharing ::
     [TyCon] -> [TyVar] -> [Type] -> Type -> [Maybe Type] -> Maybe [Type]
-specializedSharing datatypes scopeVariables givens ty uses
+specializedSharing datatypes scopeVariables givens ty uses =
+    closedSharing
+        datatypes
+        (matchParameters True datatypes scopeVariables vars result)
+        ty
+        uses
+        <|> genericSharing datatypes scopeVariables givens ty uses
+    where
+        (vars, body) = splitForAllTyVars ty
+        result = snd (splitFunTys body)
+
+genericSharing ::
+    [TyCon] -> [TyVar] -> [Type] -> Type -> [Maybe Type] -> Maybe [Type]
+genericSharing datatypes scopeVariables givens ty uses
     | length vars > 1
     , all ((`eqType` liftedTypeKind) . tyVarKind) vars
     , all (`elem` constrainedVariables ty) vars
@@ -85,6 +105,74 @@ specializedSharing datatypes scopeVariables givens ty uses
                 [element] -> Just element
                 _ -> Nothing
         closedResult value = maybe False closedScalar (resultParameter value)
+
+closedSharing ::
+    [TyCon] ->
+    (Type -> Maybe [(TyVar, Type)]) ->
+    Type ->
+    [Maybe Type] ->
+    Maybe [Type]
+closedSharing datatypes matcher ty uses = do
+    guard (not (null vars) && not (null uses))
+    guard (all (`elem` constrainedVariables ty) vars)
+    guard (all isPredTy predicates)
+    types <- sequence uses
+    let distinct = nubBy eqType types
+    mapM_ instantiate distinct
+    pure distinct
+    where
+        (vars, body) = splitForAllTyVars ty
+        (arguments, result) = splitFunTys body
+        predicates = map scaledThing arguments
+        instantiate value = do
+            guard (isEmptyVarSet (tyCoVarsOfType value))
+            matches <- matcher value
+            replacements <- mapM (`lookup` matches) vars
+            let substitute = substTyWith vars replacements
+            guard (substitute result `eqType` value)
+            mapM_ (replacement substitute) (zip vars replacements)
+            guard (all (targetDictionary . substitute) predicates)
+            representable value
+        replacement substitute (variable, actual) = do
+            guard (isEmptyVarSet (tyCoVarsOfType actual))
+            guard (typeKind actual `eqType` substitute (tyVarKind variable))
+            either (const Nothing) (const (Just ())) $
+                renderKind datatypes (typeKind actual)
+            representable actual
+        representable value =
+            either (const Nothing) (const (Just ())) $
+                renderType datatypes value
+
+targetDictionary :: Type -> Bool
+targetDictionary predicate
+    | Just (constructor, [argument]) <- splitTyConApp_maybe predicate =
+        if getName constructor == Builtin.foldableClassName
+            then foldableDictionary argument
+            else
+                getName constructor `elem` scalarClasses
+                    && closedScalar argument
+    | otherwise = False
+
+foldableDictionary :: Type -> Bool
+foldableDictionary argument = case splitTyConApp_maybe argument of
+    Just (constructor, []) -> constructor `elem` [listTyCon, maybeTyCon]
+    Just (constructor, [_]) -> constructor == tupleTyCon Boxed 2
+    _ -> False
+
+scalarClasses :: [Name]
+scalarClasses =
+    [ Builtin.numClassName
+    , Builtin.eqClassName
+    , Builtin.ordClassName
+    , Builtin.fractionalClassName
+    , Builtin.floatingClassName
+    , Builtin.integralClassName
+    , Builtin.realClassName
+    , Builtin.realFracClassName
+    , Builtin.realFloatClassName
+    , Builtin.enumClassName
+    , Builtin.boundedClassName
+    ]
 
 pairwiseDisjoint :: [Type] -> Bool
 pairwiseDisjoint [] = True
@@ -143,7 +231,17 @@ parameters ::
     Type ->
     Type ->
     Maybe [(TyVar, Type)]
-parameters datatypes scopeVariables vars shape value
+parameters = matchParameters False
+
+matchParameters ::
+    Bool ->
+    [TyCon] ->
+    [TyVar] ->
+    [TyVar] ->
+    Type ->
+    Type ->
+    Maybe [(TyVar, Type)]
+matchParameters applications datatypes scopeVariables vars shape value
     | Just variable <- getTyVar_maybe shape
     , variable `elem` vars =
         Just [(variable, value)]
@@ -158,7 +256,13 @@ parameters datatypes scopeVariables vars shape value
     , actualConstructor == constructor
     , length actualElements == length elements =
         concat <$> zipWithM descend elements actualElements
+    | applications
+    , Just (function, argument) <- splitAppTy_maybe shape
+    , Just (actualFunction, actualArgument) <- splitAppTy_maybe value = do
+        functions <- descend function actualFunction
+        arguments <- descend argument actualArgument
+        pure (functions ++ arguments)
     | otherwise = Nothing
     where
         constructors = datatypes ++ [maybeTyCon, listTyCon, tupleTyCon Boxed 2]
-        descend = parameters datatypes scopeVariables vars
+        descend = matchParameters applications datatypes scopeVariables vars
