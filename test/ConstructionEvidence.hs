@@ -87,8 +87,8 @@ checkEvidence rt homes demands support checked sites = do
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
-        expressions <- mapM (\(location, _) -> mapM dsLExpr
-            [expression | expression <- typed, getLocA expression == location]) sites
+        expressions <- mapM (\site -> mapM dsLExpr
+            [expression | expression <- typed, typedMethodHead expression == Just site]) sites
         pure (dictionaries, raw, expressions)
     let siteProblems = case result of
             Just (dictionaries, raw, expressions) ->
@@ -104,6 +104,19 @@ checkEvidence rt homes demands support checked sites = do
     pure (rootProblems ++ siteProblems)
   where
     problems = concatMap (checkUse rt homes demands Nothing)
+
+-- Explicit type application retains its dictionary on a typed prefix, not on
+-- the bare HsVar. Follow only that prefix and compiler wrappers back to the same
+-- located method Id. Never borrow evidence from a surrounding term/application.
+typedMethodHead :: LHsExpr GhcTc -> Maybe (SrcSpan, Name)
+typedMethodHead expression = at (getLocA expression) (unLoc expression)
+  where
+    at location (HsVar _ name) = Just (location, getName (unLoc name))
+    at _ (HsAppType _ function _) = typedMethodHead function
+    at _ (HsPar _ function) = typedMethodHead function
+    at _ (ExprWithTySig _ function _) = typedMethodHead function
+    at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
+    at _ _ = Nothing
 
 -- Stock deriving on a concrete, checked demand datatype is a declaration role.
 -- Bind that role through the actual instance head, dictionary constructor and
