@@ -10,7 +10,7 @@ instance M.Demand Observation where
     type Dem Observation = Observation
     fullDemand input = input
 
--- Repeating one constructor does not certify the missing alternative.
+-- The six-combinator contract does not prescribe a generator's alternatives.
 instance QC.Arbitrary Observation where
     arbitrary = QC.sized (\size -> QC.oneof [pure Absent, pure Absent])
     shrink _ = []

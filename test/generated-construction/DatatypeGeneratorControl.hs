@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
-module DatatypeGeneratorControl where
+module DatatypeGeneratorControl (Producer(..), Observation(..), sampleField) where
 
+import QuickCheckRoles (sampleField)
 import qualified Memorist.Memorist as M
 import qualified Test.QuickCheck as QC
 
@@ -12,10 +13,6 @@ instance M.Demand Producer where
     fullDemand (Producer field) = Observation (M.fullDemand field)
     usage (Producer field) (Observation demanded) = M.usage field demanded `M.union` M.empty
 
-sampleField :: QC.Arbitrary a => Int -> QC.Gen (M.ThD a)
-sampleField size = if size <= 1 then pure M.Skip
-    else QC.liftArbitrary (QC.resize (size - 2) QC.arbitrary)
-
 instance QC.Arbitrary Observation where
     arbitrary = QC.sized (\size -> Observation <$> sampleField (size `div` 1))
-    shrink _ = []
+    shrink _ = QC.sized (\_ -> pure ()) `seq` []

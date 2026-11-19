@@ -11,8 +11,7 @@ instance M.Demand Char where
 
 instance Observation Char where
     generate _ = pure
+    shrinkCompatible _ _ = let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int)) in []
 
 instance M.DemandArb Char where
-    arbDemandFrom input = QC.sized (\size ->
-        let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int))
-        in generate size input)
+    arbDemandFrom input = QC.sized (`generate` input)

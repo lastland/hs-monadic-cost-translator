@@ -22,4 +22,4 @@ deriving instance Show Observation
 instance QC.Arbitrary Observation where
     arbitrary = QC.sized (\size -> QC.oneof
         [pure Absent, Present <$> sampleField (size `div` 2) <*> sampleField (size `div` 2)])
-    shrink _ = []
+    shrink _ = QC.oneof [pure Absent] `seq` []

@@ -14,7 +14,5 @@ instance M.Demand Producer where
     usage (Producer field) (Observation demanded) = M.usage field demanded `M.union` M.empty
 
 instance QC.Arbitrary Observation where
-    arbitrary = QC.sized (\size ->
-        let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int))
-        in Observation <$> sampleField (size `div` 1))
-    shrink _ = []
+    arbitrary = QC.sized (\size -> Observation <$> sampleField (size `div` 1))
+    shrink _ = let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int)) in []

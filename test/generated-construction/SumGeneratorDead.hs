@@ -13,6 +13,5 @@ instance M.Demand Observation where
 
 instance QC.Arbitrary Observation where
     arbitrary = QC.sized (\size -> QC.oneof
-        [pure Absent, let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int))
-                      in Present <$> sampleField (size `div` 1)])
-    shrink _ = []
+        [pure Absent, Present <$> sampleField (size `div` 1)])
+    shrink _ = let unused = M.value (M.eval1 (pure 17 :: M.MemoristM Int)) in []
