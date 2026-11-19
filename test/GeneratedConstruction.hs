@@ -113,6 +113,8 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
+    accepts "ParamReprUse.hs"
+    rejectsAt "ParamReprBad.hs" [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval), (29, reprFailure)]
     rejectsAt "HomeReprUnsafe.hs" [(10, functorWrapper), (11, forbidden tval)]
     rejectsAt "HomeReprGiven.hs" [(8, selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier")]
     rejectsAt "HomeReprDelegation.hs" [(9, carrier "pure")]
@@ -231,6 +233,7 @@ checkGeneratedConstructionSpecimens = do
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
     selected op = "unapproved selected method " ++ op
+    reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
     protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
