@@ -21,3 +21,6 @@ unresolved = labels
 
 -- The class signature has a type variable here, but this field takes a function.
 instance Labels (Bool -> Bool)
+
+newtype Callback = Callback (Bool -> Bool)
+instance Labels Callback

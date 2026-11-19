@@ -223,7 +223,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "DefaultLabels.hs"
     mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs"
         [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels"),
-         (23, unknown "DefaultLabels.$dmlabels")]
+         (23, unknown "DefaultLabels.$dmlabels"), (26, unknown "DefaultLabels.$dmlabels")]
     rejectsAt "ErasedDataDefault.hs" [(9, forbidden tval), (11, unknown "ErasedDataDefault.$dmmarks")]
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
