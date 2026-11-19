@@ -14,9 +14,10 @@ import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
 import GHC.Data.FastString (mkFastString)
+import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Id.Make (seqId)
-import GHC.Types.SrcLoc (srcSpanToRealSrcSpan)
+import GHC.Types.SrcLoc (getBufSpan)
 import GHC.Types.Var (isId)
 import GHC.Types.Var.Set (elemVarSet)
 
@@ -47,9 +48,9 @@ quickCheckUses result programs = inModule
         source = tm_typechecked_source checked
         sites = Set.fromList (mapMaybe site (collectAst source))
         bangs = Set.fromList [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
-            result (hsLPatType pat), RealSrcSpan span' _ <- [getLocA pat]]
-        used location name = maybe False (\span' -> Set.member (span', name) sites) (srcSpanToRealSrcSpan location)
-        forced location = maybe False (`Set.member` bangs) (srcSpanToRealSrcSpan location)
+            result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]]
+        used location name = maybe False (\span' -> Set.member (span', name) sites) (inputSpan location)
+        forced location = maybe False (`Set.member` bangs) (inputSpan location)
         -- For `seq x ...` report the QC operand itself. In a section or
         -- bare specialization there is no source operand to report.
         applied = Set.fromList [key | HsApp _ f _ <- collectAst source :: [HsExpr GhcTc],
@@ -65,7 +66,12 @@ quickCheckUses result programs = inModule
             if result ty || (not (null positions) && specialized) then Just key else Nothing
     variableSite expression = do
         (location, name) <- typedVariable expression
-        (,name) <$> srcSpanToRealSrcSpan location
+        (,name) <$> inputSpan location
+    -- The two compiler passes read the same buffer. LINE pragmas can give
+    -- distinct operations the same diagnostic position, even in one module.
+    inputSpan location = case getBufSpan location of
+        Strict.Just bytes -> Just bytes
+        Strict.Nothing -> Nothing
 
 firstOrder :: Type -> Bool
 firstOrder = null . fst . splitPiTys
