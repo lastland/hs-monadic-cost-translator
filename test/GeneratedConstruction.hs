@@ -124,6 +124,9 @@ checkGeneratedConstructionSpecimens = do
     mixed "QuickCheckFieldUse.hs" [TopBinding "ignoreItem", TopBinding "readBool"] "QuickCheckFieldUse.hs"
         [(9, qcValue "QuickCheckFieldUse.item")]
     accepts "QuickCheckMappedLines.hs"
+    mappedViews <- specimen "MappedViewGraph.hs"
+    typechecks mappedViews
+    rejection mappedViews >>= \reports -> requireAt reports "SharedViewInput.hs" [(50, forbidden tval)]
     mixed "QuickCheckStrictArgument.hs" [TopBinding "strict", TopBinding "prop_specialized"] "QuickCheckStrictArgument.hs"
         [(11, qcValue "QuickCheckStrictArgument.strict"), (14, qcValue "GHC.Prim.seq"),
          (17, "strict pattern forces a QuickCheck value outside a generator or property")]
