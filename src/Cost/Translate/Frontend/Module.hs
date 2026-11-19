@@ -12,7 +12,7 @@ import Cost.Translate.Frontend.Syntax (arity)
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Pretty (Section)
-import Cost.Translate.Sharing (Specialization)
+import Cost.Translate.Sharing (AllocationScope (..), Specialization)
 import Cost.Translate.Specialize (specializeHelpers)
 import Cost.Translate.Typed qualified as Typed
 import Data.Map.Strict qualified as Map
@@ -47,17 +47,14 @@ emitModule strict target source hash dts original literals hints checked group =
         (helperTypes, adjustType) = specializeHelpers group checked hints
         types = helperTypes `Map.union` Map.map adjustType original
         adjustedHints = Map.map adjustType hints
-        checkedScopes =
-            Map.mapWithKey
-                ( \name info ->
-                    ( [ variable
-                      | name `Map.notMember` helperTypes
-                      , variable <- Typed.functionVariables info
-                      ]
-                    , map adjustType (Typed.functionGivens info)
-                    )
-                )
-                checked
+        checkedScopes = Map.mapWithKey scope checked
+        scope name info
+            | name `Map.member` helperTypes = make [] (Just [])
+            | otherwise = make (Typed.functionVariables info) declared
+            where
+                (givens, declared) = Typed.functionGivens info
+                adjust = map adjustType
+                make vs = AllocationScope vs (adjust givens) . fmap adjust
         (constructorEnv, specialized) =
             moduleEnvironment
                 strict

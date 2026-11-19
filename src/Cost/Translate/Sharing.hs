@@ -1,6 +1,7 @@
 module Cost.Translate.Sharing
     ( constrainedVariables
     , specializedSharing
+    , AllocationScope (..)
     , Specialization (..)
     , planSpecializations
     , sharingType
