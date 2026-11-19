@@ -5,7 +5,7 @@ module ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault) where
 
 import ConstructionAst (collectAst, equations)
 import ConstructionDictionary (Environment, Evidence(..), Use(..), trace)
-import ConstructionRuntime (Family(UnknownMethod))
+import ConstructionRuntime (Family(UnknownMethod), scalarType)
 import Control.Monad (guard)
 import Data.Foldable (toList)
 import qualified Data.Map.Strict as Map
@@ -14,7 +14,7 @@ import GHC
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon)
 import GHC.Core.Coercion (Role(Nominal))
-import GHC.Core.DataCon (dataConRepArity)
+import GHC.Core.DataCon (dataConInstOrigArgTys, dataConRepArity, dataConUnivTyVars)
 import GHC.Core.FamInstEnv (FamInstEnvs, reduceTyFamApp_maybe)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Reduction (reductionReducedType)
@@ -92,12 +92,21 @@ firstOrderMethod :: FamInstEnvs -> Type -> Bool
 firstOrderMethod families signature = all (dataTy True) (result : map scaledThing args)
   where
     (args, result) = splitFunTys signature
+    dataTy _ ty | scalarType ty = True
     dataTy canReduceFamily ty = case splitTyConApp_maybe ty of
         Just (tc, ts)
             | isFamilyTyCon tc -> canReduceFamily && maybe False (dataTy False . reductionReducedType)
                     (reduceTyFamApp_maybe families Nominal tc ts)
-            | isDataTyCon tc && not (isPredTy ty) -> all (dataTy canReduceFamily) ts
+            | isDataTyCon tc && not (isPredTy ty), let cons = tyConDataCons tc, not (null cons) ->
+                all (dataTy canReduceFamily) ts && all (firstOrderFields ty ts) cons
         _ -> False
+    -- Check one declaration, not a transitive graph of datatype definitions.
+    -- A field may be scalar, one of the checked arguments, or the exact same
+    -- instantiated datatype (as in a list tail). A changed recursive head,
+    -- a hidden callback or an unavailable constructor shape has no proof here.
+    firstOrderFields ty ts dc = isVanillaDataCon dc && length (dataConUnivTyVars dc) == length ts &&
+        all (known . scaledThing) (dataConInstOrigArgTys dc ts)
+      where known field = scalarType field || eqType field ty || any (eqType field) ts
 
 selectsDataDefault :: [Defaults] -> Use -> Bool
 selectsDataDefault modules = selected
