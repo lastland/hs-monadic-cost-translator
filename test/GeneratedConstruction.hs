@@ -264,10 +264,18 @@ checkGeneratedConstructionSpecimens = do
         copyFile source input
         translated <- translateFile input output
         either (fail . ("Box must translate before the construction verdict: " ++)) pure translated
+        checkBox output
+        -- Exercise the same verdict after a layout-only change to the artifact.
+        shifted <- createTempDirectory directory "shifted-"
+        copyFile input (shifted </> "Example.hs")
+        let shiftedOutput = shifted </> "Generated.hs"
+        readFile output >>= writeFile shiftedOutput . ('\n' :)
+        checkBox shiftedOutput
+    checkBox output = do
         typechecks output
-        expectAt output output [(308, forbidden tval), (308, forbidden "Memorist.Data.Interface.Data.abstract"),
-            (319, forbidden "Memorist.Data.Interface.Demand.usage"), (319, forbidden "Memorist.Base.Thunk.empty"),
-            (319, forbidden "Memorist.Base.Thunk.union")]
+        expectRejection output [(output ++ ":", forbidden op) | op <-
+            [tval, "Memorist.Data.Interface.Data.abstract", "Memorist.Data.Interface.Demand.usage",
+             "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]]
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
