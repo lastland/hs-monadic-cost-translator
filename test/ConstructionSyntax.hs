@@ -93,14 +93,16 @@ checkSyntax rt qc homes methods restricted views viewCalls updates checked = cas
                     RecordUpd { rupd_expr = input, rupd_flds = RegularRecUpdFields _ fields } ->
                         walk here input `plus` foldr plus ([], [])
                             [walk here (hfbRHS (unLoc field)) `plus` case unLoc (hfbLHS (unLoc field)) of
-                                Unambiguous name label -> checkName (getLocA label) name
+                                Unambiguous name label -> checkOperation (getLocA label) name
                                 Ambiguous _ label -> case nub [n | (loc, n) <- updates, loc == getLocA label] of
-                                    [name] -> checkName (getLocA label) name
+                                    [name] -> checkOperation (getLocA label) name
                                     _ -> ([pretty (getLocA label) ++ ": unresolved ambiguous record update selector"], [])
                             | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
              in if here `elem` viewCalls then expansionProblems expression else shape `plus` site `plus` body
+        | Just field <- cast value :: Maybe (HsRecField GhcRn (LPat GhcRn)) = recordField location field
+        | Just field <- cast value :: Maybe (HsRecField GhcRn (LHsExpr GhcRn)) = recordField location field
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
             (if patternForm (unLoc pattern') then ([], []) else
                 ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'
@@ -114,9 +116,15 @@ checkSyntax rt qc homes methods restricted views viewCalls updates checked = cas
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
     plus (a, b) (c, d) = (a ++ c, b ++ d)
+    -- Matching or assigning a labelled field is not applying its selector.
+    -- The constructor, field ownership, and nested pattern/expression still count.
+    recordField :: Data rhs => SrcSpan -> HsRecField GhcRn rhs -> ([String], [(SrcSpan, Name)])
+    recordField location field = checkOperation (getLocA label) (foExt (unLoc label)) `plus` walk location (hfbRHS field)
+      where label = hfbLHS field
     checkName location name | isQuickCheckBinding qc name =
         ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
-    checkName location name = if permitted name then ([], []) else
+    checkName location name = checkOperation location name
+    checkOperation location name = if permitted name then ([], []) else
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
     permitted name | name `elem` restricted = False
