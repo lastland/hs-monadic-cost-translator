@@ -28,23 +28,33 @@ data SourceBody = Declaration (HsBind GhcRn) | Component (LPat GhcRn) (LHsExpr G
 -- shrinker, not a use by the generator that encloses both of them.
 parts :: Data a => a -> ([HsBind GhcRn], [Name])
 parts node
-    -- A bang-wildcard has no independently usable name. Evaluating the
-    -- enclosing expression enters this RHS even with no variable occurrence.
-    | Just b@PatBind{pat_lhs = pat} <- cast node, forcedWildcard pat = bodyParts b
+    -- The enclosing expression forces this RHS without a variable occurrence.
+    -- A strict name can also have ordinary consumers; a wildcard has none.
+    | Just b <- cast node, forcedBinder b = case names b of
+        [] -> bodyParts b
+        ns -> ([b], ns)
     | Just binding <- cast node = ([binding], [])
     | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [unLoc n])
     | Just (_ :: NameSet) <- cast node = mempty
     | Just (_ :: Name) <- cast node = mempty
     | otherwise = mconcat (children parts node)
 
-forcedWildcard :: LPat GhcRn -> Bool
-forcedWildcard (L _ (ParPat _ pat)) = forcedWildcard pat
-forcedWildcard (L _ (BangPat _ pat)) = wildcard (unLoc pat)
+forcedBinder :: HsBind GhcRn -> Bool
+forcedBinder PatBind{pat_lhs = pat} = strictPat pat
   where
-    wildcard WildPat{} = True
-    wildcard (ParPat _ p) = wildcard (unLoc p)
-    wildcard _ = False
-forcedWildcard _ = False
+    strictPat (L _ (ParPat _ p)) = strictPat p
+    strictPat (L _ (BangPat _ p)) = simpleBinder p
+    strictPat _ = False
+forcedBinder FunBind{fun_matches = matches} = case unLoc (mg_alts matches) of
+    [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True
+    _ -> False
+forcedBinder _ = False
+
+simpleBinder :: LPat (GhcPass p) -> Bool
+simpleBinder (L _ (ParPat _ p)) = simpleBinder p
+simpleBinder (L _ VarPat{}) = True
+simpleBinder (L _ WildPat{}) = True
+simpleBinder _ = False
 
 bodyParts :: HsBind GhcRn -> ([HsBind GhcRn], [Name])
 bodyParts = mconcat . children parts
@@ -63,13 +73,9 @@ components PatBind{pat_lhs = pat, pat_rhs = GRHSs _ [L _ (GRHS _ [] rhs)] (Empty
     tuple (L _ (TuplePat _ ps Boxed)) (L _ (ExplicitTuple _ args Boxed))
         | length ps == length args = concat <$> zipWithM field ps args
     tuple _ _ = Nothing
-    field p (Present _ e) | simple p = Just [(p, e)]
+    field p (Present _ e) | simpleBinder p = Just [(p, e)]
                           | otherwise = tuple p e
     field _ _ = Nothing
-    simple (L _ (ParPat _ p)) = simple p
-    simple (L _ VarPat{}) = True
-    simple (L _ WildPat{}) = True
-    simple _ = False
 components _ = Nothing
 
 localBindings :: QuickCheck -> [TypecheckedModule] -> Locals

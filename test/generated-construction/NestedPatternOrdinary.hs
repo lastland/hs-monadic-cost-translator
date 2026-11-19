@@ -43,3 +43,12 @@ ordinaryForce :: M.Th Bool -> Q.Property
 ordinaryForce t =
     let shrink () = let !_ = M.tval t in [False]
     in Q.property True
+
+sharedForce :: M.Th Bool -> Q.Property
+sharedForce t =
+    let !seen = M.tval t
+        shrink () = [seen]
+    in Q.property True
+
+unforced :: M.Th Bool -> Q.Property
+unforced t = let _ = M.tval t in Q.property True

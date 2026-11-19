@@ -25,3 +25,9 @@ selected t =
     let (seen, flag) = (t == t, False)
         shrink () = [flag]
     in Q.property seen
+
+forcedAlias :: M.Th Bool -> Q.Property
+forcedAlias t =
+    let observed = M.tval t
+        !seen = observed
+    in Q.property True
