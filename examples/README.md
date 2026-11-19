@@ -1,6 +1,6 @@
 # `cost-translate` Examples
 
-This directory contains twelve pure Haskell modules within the supported subset documented in the [root README](../README.md): seven introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
+This directory contains thirteen pure Haskell modules within the supported subset documented in the [root README](../README.md): eight introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
 
 ### Introductory Modules
 
@@ -8,7 +8,8 @@ This directory contains twelve pure Haskell modules within the supported subset 
 | :--- | :--- |
 | [`Basic.hs`](Basic.hs) | Function entry ticks, `let` sharing, unused bottoms |
 | [`Guards.hs`](Guards.hs) | Ordered equations, guards in `case`, literal patterns, short-circuiting |
-| [`Lists.hs`](Lists.hs) | `map`, `foldr`, `foldl`, `zipWith`, `scanl`, `filter`, and infinite producers |
+| [`Lists.hs`](Lists.hs) | `map`, folds, `zipWith`, `scanl`, `filter`, and finite prefixes with `repeat`, `take`, and `replicate` |
+| [`InsertionSort.hs`](InsertionSort.hs) | Stable insertion sort with `insert` and `insertionSort` |
 | [`Datatypes.hs`](Datatypes.hs) | Recursive and nested datatypes, explicit demands, top-level values |
 | [`Records.hs`](Records.hs) | Record fields and selectors, infix constructors, `Maybe` and pair fields |
 | [`HigherKinded.hs`](HigherKinded.hs) | Higher-kinded fields, `Fix`, non-regular recursion, conversions |
@@ -160,6 +161,10 @@ the global-sharing cost limitation in the `Shared.hs` section below.
 | `fromPure1 filteredM (5 :: Int)` | `5` | `4` |
 | `fromPure1 observeM (5 :: Int)` | `6` | `4` |
 | `fromPure1 restM (5 :: Int)` | `6` | `5` |
+| `fromPure2 takeM (0 :: Int) (undefined :: [Int])` | `[]` | `1` |
+| `fromPure2 replicateM (3 :: Int) (5 :: Int)` | `[5, 5, 5]` | `8` |
+
+`replicate 3 5` takes three elements from the infinite list `repeat 5`. It costs one tick for `replicate`, four for `take`, and three for `repeat`. The final `take 0` returns `[]` without demanding another element of `repeat`; negative counts stop the same way.
 
 `zipped`, `scanned`, and `filtered` never force their undefined list tails. `observe` reads the second element of the infinite `stream` producer via pattern matching, and `rest` reads it via `head` after `tail`. Evaluating `stream` under an explicit finite demand (`import Memorist.Data.List` for `ConsD`) charges only for the demanded prefix:
 
@@ -168,6 +173,15 @@ infcost' (fromPure1 streamM (5 :: Int))
          (ConsD (Need 5) (Need (ConsD (Need 6) (Need (ConsD (Need 7) Skip)))))
 -- Cost 3
 ```
+
+### `InsertionSort.hs`
+
+`insert` places a value before the first equal or larger element in a sorted list and reuses the remaining suffix. `insertionSort` sorts the tail recursively, then inserts the head. Inserting before a tie keeps equal elements in their original order.
+
+| Call | Value | Cost |
+| :--- | :--- | :--- |
+| `fromPure2 insertM (2 :: Int) [1, 2, 4 :: Int]` | `[1, 2, 2, 4]` | `2` |
+| `fromPure1 insertionSortM [3, 1, 2, 1 :: Int]` | `[1, 1, 2, 3]` | `13` |
 
 ### `Datatypes.hs`
 
