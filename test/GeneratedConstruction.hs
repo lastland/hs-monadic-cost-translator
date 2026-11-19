@@ -121,6 +121,7 @@ updateConstructors _ = []
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
@@ -276,6 +277,21 @@ checkGeneratedConstructionSpecimens = do
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
+    checksDiagnosticSites = do
+        output <- specimen "MixedDiagnosticSites.hs"
+        imported <- specimen "HiddenConstruction.hs"
+        typechecks output
+        diagnostics <- rejection output
+        let range = "unsupported executable expression: [1 .. 3]"
+            -- Keep the multiline expression and the unrelated import; remove
+            -- the Core reports on the binder independently of either matcher.
+            masked = unlines (filter (not . isInfixOf "unapproved selected method GHC.Internal.Enum.enumFromTo:") (lines diagnostics))
+        requireAt masked imported [(6, forbidden tval)]
+        dirty <- try @IOException (cleanAt masked output [12])
+        case dirty of
+            Left problem | range `isInfixOf` ioeGetErrorString problem -> pure ()
+            _ -> fail (output ++ ": steps passed as clean or failed for the wrong reason: " ++ show dirty)
+        requireAt masked output [(13, range)]
     checksQuickCheckMixed = do
         -- Only the exempt operand is forbidden in the two ordinary seq uses.
         let escape name = "QuickCheck binding used outside a generator or property: " ++ name
