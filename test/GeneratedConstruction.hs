@@ -3,19 +3,18 @@ module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstruc
 import Control.Exception (IOException, displayException, try)
 import Control.Monad (forM, forM_, unless)
 import Cost.Translate (translateFile)
-import Data.Data (Data, cast, gmapQ)
+import Data.Data (Data)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
-import Data.Maybe (isJust, maybeToList)
-import ConstructionAst (pretty)
+import ConstructionAst (collectAst)
 import ConstructionEvidence (checkEvidence, methodNames)
 import ConstructionRoles (supportCoreNames, homeDemandTypes)
-import ConstructionRuntime (runtime, runtimeOwns, roleOf, Role(..), describeName)
+import ConstructionRuntime (runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GHC
     ( AmbiguousFieldOcc(..), GhcTc, HsExpr(..), HsFieldBind(..)
-    , HsMatchContext(..), Id, LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan, Type
+    , HsMatchContext(..), LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
@@ -23,10 +22,9 @@ import GHC
     , runGhc, setSessionDynFlags, setTargets, tm_renamed_source, tm_typechecked_source, typecheckModule
     , unLoc, ghcLink
     )
-import GHC.Core.ConLike (ConLike, conLikeName)
+import GHC.Core.ConLike (conLikeName)
 import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
 import GHC.Paths (libdir)
-import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
 import GHC.Types.GREInfo (conLikeName_Name)
 import GHC.Types.Name.Reader (greName)
 import GHC.Types.SrcLoc (noLoc)
@@ -73,12 +71,10 @@ checkGeneratedConstruction output = do
         fmap concat $ forM checkedModules $ \checked -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
-                let (syntaxProblems, sites) = checkSyntax rt homes methods viewNames views viewCalls group
-                    updates = [pretty location ++ ": unapproved runtime operation " ++ describeName name ++
-                        " is forbidden in generated code" | (location, name) <- ambiguousUpdateReferences (tm_typechecked_source checked),
-                        runtimeOwns rt name, roleOf rt name `notElem` [Just Primitive, Just Representation, Just DemandData]]
+                let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
+                    (syntaxProblems, sites) = checkSyntax rt homes methods viewNames views viewCalls updates group
                 evidenceProblems <- checkEvidence rt (homeDemandTypes rt checkedModules) (supportCoreNames views checked) checked sites
-                pure (syntaxProblems ++ updates ++ evidenceProblems)
+                pure (syntaxProblems ++ evidenceProblems)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
     unless (null problems) (fail (unlines problems))
 
@@ -90,6 +86,7 @@ ambiguousUpdateReferences checked =
     [ (getLocA label, greName field)
     | ExpandedThingTc (OrigExpr RecordUpd { rupd_flds = RegularRecUpdFields parents fields }) expanded <- collectAst checked
     , parent <- toList parents
+    , length fields == length (rnRecUpdLabels parent)
     , any ((`elem` updateConstructors expanded) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
     , (binding, field) <- zip fields (toList (rnRecUpdLabels parent))
     , Ambiguous _ label <- [unLoc (hfbLHS (unLoc binding))]
@@ -104,18 +101,6 @@ updateConstructors (HsCase RecUpd _ matches) =
     , ConPat _ constructor _ <- map unLoc (m_pats (unLoc match))
     ]
 updateConstructors _ = []
-
--- The construction interface is closed: a newly exported value is not permitted
--- merely because the old evaluator blacklist did not anticipate it.
-collectAst :: (Data a, Data b) => b -> [a]
-collectAst value
-    -- Typechecked syntax contains semantic graphs, which are not source uses.
-    | isJust (cast value :: Maybe Id) = []
-    | isJust (cast value :: Maybe Type) = []
-    | isJust (cast value :: Maybe ConLike) = []
-    | isJust (cast value :: Maybe HsWrapper) = []
-    | isJust (cast value :: Maybe TcEvBinds) = []
-    | otherwise = maybeToList (cast value) ++ concat (gmapQ collectAst value)
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
@@ -157,6 +142,7 @@ checkGeneratedConstructionSpecimens = do
         ,(24, "Memorist.Base.Core.usageAnnot")]
     rejects "RecordUpdate.hs" [(6, "Memorist.Base.Core.value")]
     rejects "AmbiguousRecordUpdate.hs" [(10, "Memorist.Base.Core.value")]
+    rejectsBecause "ExternalRecordUpdate.hs" ["ExternalRecordUpdate.hs:10:", "unapproved external operation Test.QuickCheck.Test.maxSuccess"]
     rejects "AnnotatedPattern.hs" [(6, "Memorist.Base.Core.Annotated"), (11, "Memorist.Base.Core.Annotated")]
     rejects "AnnotatedRecordPatterns.hs"
         [(7, "Memorist.Base.Core.Annotated"), (10, "Memorist.Base.Core.Annotated")

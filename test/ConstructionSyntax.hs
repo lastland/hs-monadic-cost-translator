@@ -5,6 +5,7 @@ module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionAst
 import ConstructionRuntime
 import Data.Data (Data, cast)
+import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import GHC
 import GHC.Types.Id.Make (rightSectionName)
@@ -49,8 +50,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted views viewCalls group = (expansionProblems, []) `plus` walk noSrcSpan group
+checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
+checkSyntax rt homes methods restricted views viewCalls updates group = (expansionProblems, []) `plus` walk noSrcSpan group
   where
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
@@ -79,8 +80,11 @@ checkSyntax rt homes methods restricted views viewCalls group = (expansionProble
                     RecordUpd { rupd_expr = input, rupd_flds = RegularRecUpdFields _ fields } ->
                         walk here input `plus` foldr plus ([], [])
                             [walk here (hfbRHS (unLoc field)) `plus` case unLoc (hfbLHS (unLoc field)) of
-                                Unambiguous name _ -> walk here name
-                                Ambiguous{} -> ([], []) | field <- fields]
+                                Unambiguous name label -> checkName (getLocA label) name
+                                Ambiguous _ label -> case nub [n | (loc, n) <- updates, loc == getLocA label] of
+                                    [name] -> checkName (getLocA label) name
+                                    _ -> ([pretty (getLocA label) ++ ": unresolved ambiguous record update selector"], [])
+                            | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
              in if here `elem` viewCalls then ([], []) else shape `plus` site `plus` body
@@ -91,14 +95,15 @@ checkSyntax rt homes methods restricted views viewCalls group = (expansionProble
         | Just (_ :: RuleDecl GhcRn) <- cast value = bad "rewrite rule"
         | Just (_ :: AnnDecl GhcRn) <- cast value = bad "annotation splice"
         | Just name <- cast value :: Maybe Name, isVarName name || isDataConName name || isFieldName name =
-            if permitted name then ([], []) else
-                ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
-                  " operation " ++ describeName name ++ " is forbidden in generated code"], [])
+            checkName location name
         | otherwise = descend location value
       where
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
     plus (a, b) (c, d) = (a ++ c, b ++ d)
+    checkName location name = if permitted name then ([], []) else
+        ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
+          " operation " ++ describeName name ++ " is forbidden in generated code"], [])
     permitted name | name `elem` restricted = False
     permitted name = case nameModule_maybe name of
         Nothing -> True
