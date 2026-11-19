@@ -23,22 +23,31 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
 import GHC.Core.DataCon (dataConInstOrigArgTys)
-import GHC.Core.TyCo.FVs (tyCoVarsOfType)
+import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypesWellScoped)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.TyCon (isAlgTyCon)
 import GHC.Core.Type
     ( getTyVar_maybe
     , isLiftedTypeKind
     , isManyTy
+    , mkTyVarTy
+    , splitForAllForAllTyBinders
     , splitForAllTyVars
     , splitFunTy_maybe
     , splitTyConApp_maybe
+    , substTyWith
     , tyVarKind
     )
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.Name (getOccString)
 import GHC.Types.Unique.Set (elementOfUniqSet)
-import GHC.Types.Var (FunTyFlag (FTF_T_T))
+import GHC.Types.Var
+    ( FunTyFlag (FTF_T_T)
+    , binderFlag
+    , binderVar
+    , isInferredForAllTyFlag
+    , setTyVarKind
+    )
 
 data Payload = Payload [TyVar] Type PayloadBody
 data PayloadBody
@@ -59,25 +68,32 @@ constructorPayload env name ty match = do
         _ -> Nothing
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
-        scopedNames = Map.findWithDefault [] name (scopedTypeVariables env)
-        original = fst (splitForAllTyVars ty)
-        scoped = if null scopedNames then [] else original
         rhs = m_grhss match
-    guard (not (null variables) && all (payloadKind . tyVarKind) variables)
-    guard (null scopedNames || map getName original == scopedNames)
+    guard (not (null variables))
+    scoped <- payloadScope env name ty
+    _ <- either (const Nothing) Just (payloadBinders env variables)
     case (grhssLocalBinds rhs, grhssGRHSs rhs) of
         (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
             (scoped,) <$> planPayload env variables body expression
         _ -> Nothing
 
-payloadKind :: Type -> Bool
-payloadKind kind
-    | isLiftedTypeKind kind = True
-    | Just (FTF_T_T, multiplicity, input, result) <- splitFunTy_maybe kind =
-        isManyTy multiplicity
-            && isLiftedTypeKind input
-            && isLiftedTypeKind result
-    | otherwise = False
+payloadScope :: Env -> Name -> Type -> Maybe [TyVar]
+payloadScope env name ty
+    | null names = Just []
+    | otherwise = do
+        guard (map (getName . binderVar) explicit == names)
+        _ <- either (const Nothing) Just (payloadBinders env original)
+        pure original
+    where
+        names = Map.findWithDefault [] name (scopedTypeVariables env)
+        original = fst (splitForAllTyVars ty)
+        explicit =
+            filter
+                ( \binder ->
+                    not (isInferredForAllTyFlag (binderFlag binder))
+                        || getName (binderVar binder) `elem` names
+                )
+                (fst (splitForAllForAllTyBinders ty))
 
 planPayload :: Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
 planPayload env variables ty expression = do
@@ -144,12 +160,27 @@ payloadType env (Payload variables ty _) =
         <*> renderType (sourceDatatypes env) ty
 
 payloadBinders :: Env -> [TyVar] -> Either String [O.Binder]
-payloadBinders env = mapM binder
+payloadBinders env variables = do
+    guardNames
+    mapM binder variables
     where
+        captured =
+            filter
+                (`notElem` variables)
+                (tyCoVarsOfTypesWellScoped (map tyVarKind variables))
+        occurrences = map getOccString (variables ++ captured)
+        guardNames
+            | length occurrences == Set.size (Set.fromList occurrences) =
+                Right ()
+            | otherwise = Left "ambiguous payload binder scope"
+        kinds = substTyWith variables (map mkTyVarTy variables)
         binder variable
             | isLiftedTypeKind (tyVarKind variable) =
                 pure (O.b (getOccString variable))
-            | otherwise = renderBinder (sourceDatatypes env) variable
+            | otherwise =
+                renderBinder
+                    (sourceDatatypes env)
+                    (setTyVarKind variable (kinds (tyVarKind variable)))
 
 typedOperation :: String -> O.Ty -> O.Expr
 typedOperation name = O.typeApp (O.typeApp (O.v name) (O.t "M.MemoristM"))
