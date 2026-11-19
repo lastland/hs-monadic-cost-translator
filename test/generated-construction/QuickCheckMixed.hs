@@ -38,3 +38,8 @@ unwrap = coerce
 
 cast :: Draw Int -> Int
 cast = unsafeCoerce
+
+class Ordinary a where
+    observe :: a -> Bool
+    observe _ = (Q.arbitrary :: Draw Int) `seq` True
+instance Ordinary ()

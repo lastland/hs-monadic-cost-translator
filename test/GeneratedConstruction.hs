@@ -284,7 +284,8 @@ checkGeneratedConstructionSpecimens = do
              (28, escape "QuickCheckRoles.sampleField"), (29, escape "QuickCheckMixed.claim"),
              (30, external "Test.QuickCheck.Gen.MkGen"), (31, external "Test.QuickCheck.Property.MkProperty"),
              (34, external "Test.QuickCheck.Gen.unGen"), (37, external "GHC.Prim.coerce"),
-             (40, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce")]
+              (40, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"),
+              (44, external "Test.QuickCheck.Arbitrary.arbitrary")]
     -- Select reports to mask by exact path/line, independently of the matcher
     -- under test. Keep the location and the import's same-operation report.
     rejectsDespiteImport name line dependency importedLine reason = do

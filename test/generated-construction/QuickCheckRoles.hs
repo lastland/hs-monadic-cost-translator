@@ -13,3 +13,11 @@ sampleField size = if size <= 1 then pure M.Skip
 fieldLaw :: Int -> Verdict
 fieldLaw size = Random.forAll (sampleField size :: Draw (M.ThD Int)) $ \demand ->
     Random.property (size > 1 || demand == M.Skip)
+
+class Samples a where
+    draw :: a -> Draw Bool
+    draw _ = Random.arbitrary
+instance Samples ()
+
+defaultLaw :: Verdict
+defaultLaw = Random.forAll (draw ()) Random.property
