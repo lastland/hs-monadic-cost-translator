@@ -33,18 +33,14 @@ ordinaryOperandTransfers :: (Type -> Bool) -> QuickCheck -> [TypecheckedModule] 
 ordinaryOperandTransfers result qc modules = concatMap report sources
   where
     sources = map tm_typechecked_source modules
-    bodies = Map.fromList [(getName (unLoc n), body) | source <- sources,
-        FunBind _ n matches <- collectAst source :: [HsBind GhcTc], not (isQuickCheckBinding qc (unLoc n)),
-        let MatchGroupTc args res _ = mg_ext matches
-            scheme = mkScaledFunTys args res
-            (observed, direct) = bodyUses qc matches
-            body = Body scheme observed direct,
-        firstOrder scheme]
+    bodies = Map.fromList (concatMap (mapMaybe (ordinaryBody qc) . collectAst) sources)
     exports = Map.fromList [(getName poly, getName mono) | source <- sources, ABE poly mono _ _ <- collectAst source]
-    resolve name = Map.findWithDefault name name exports
+    resolve seen name
+        | Just body <- Map.lookup name bodies = Just (name, body)
+        | Set.member name seen = Nothing
+        | otherwise = Map.lookup name exports >>= resolve (Set.insert name seen)
     instantiate (_, name, ty) = do
-        let key = resolve name
-        body <- Map.lookup key bodies
+        (key, body) <- resolve Set.empty name
         let actual = rho ty
         if firstOrder actual then (key,body,) <$> tcMatchTy (template body) actual else Nothing
 
@@ -82,6 +78,33 @@ rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
 firstOrder :: Type -> Bool
 firstOrder = all (null . fst . splitPiTys . scaledThing) . fst . splitFunTys
 
+ordinaryBody :: QuickCheck -> HsBind GhcTc -> Maybe (Name, Body)
+ordinaryBody qc binding = do
+    identifier <- bindingId binding
+    let record scheme rhs
+            | firstOrder scheme, not (isQuickCheckBinding qc identifier) =
+                let (observed, direct) = bodyUses qc rhs in Just (getName identifier, Body scheme observed direct)
+            | otherwise = Nothing
+    case binding of
+        FunBind _ _ matches -> let MatchGroupTc args res _ = mg_ext matches in record (mkScaledFunTys args res) matches
+        PatBind{pat_lhs = pat, pat_rhs = rhs} -> record (hsLPatType pat) rhs
+        _ -> Nothing
+
+-- A single variable pattern names its own RHS, just as a zero-argument
+-- equation does. A field of a destructured value is not such an alias.
+bindingId :: HsBind GhcTc -> Maybe Id
+bindingId (FunBind _ n _) = Just (unLoc n)
+bindingId PatBind{pat_lhs = pat} = variable (unLoc pat)
+  where
+    variable (VarPat _ n) = Just (unLoc n)
+    variable (ParPat _ p) = variable (unLoc p)
+    variable (SigPat _ p _) = variable (unLoc p)
+    variable (BangPat _ p) = variable (unLoc p)
+    variable (LazyPat _ p) = variable (unLoc p)
+    variable (XPat (CoPat _ p _)) = variable p
+    variable _ = Nothing
+bindingId _ = Nothing
+
 typedCall :: LHsExpr GhcTc -> Maybe Call
 typedCall expr = do
     (location, name) <- typedVariable expr
@@ -99,7 +122,7 @@ bodyUses qc = walk
   where
     walk :: Data a => a -> ([Type], [Call])
     walk node
-        | Just (FunBind _ n _) <- cast node :: Maybe (HsBind GhcTc), isQuickCheckBinding qc (unLoc n) = ([], [])
+        | Just binding <- cast node, Just n <- bindingId binding, isQuickCheckBinding qc n = ([], [])
         | otherwise = own <> mconcat (children walk node)
       where
         own | Just e <- cast node, Just call@(_, name, ty) <- typedCall e =
