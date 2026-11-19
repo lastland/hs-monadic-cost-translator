@@ -243,6 +243,7 @@ checkGeneratedConstructionSpecimens = do
         ["ImportAliasControl.hs", "LocalShadowing.hs", "ConcreteConstructionControl.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
           "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs", "TypeOnlyControl.hs",
           "ExplicitMethodControl.hs", "ForallClosureControl.hs"]
+    mixed "NestedOrdinaryWhere.hs" [TopBinding "claim"] "NestedOrdinaryWhere.hs" [(9, forbidden tval)]
     putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
