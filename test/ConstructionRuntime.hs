@@ -112,7 +112,7 @@ standardInstances ordinary = do
         pure [(getName identifier, (getName cls, [ty])) | instance' <- declared, let identifier = is_dfun instance',
             ([], body) <- [splitForAllTyVars (idType identifier)], ([], predicate) <- [splitFunTys body],
             Just (cls, [ty]) <- [getClassPredTys_maybe predicate], getName cls == expected,
-            (scalarType ty && not (eqType ty (mkTyConApp integerTyCon []))) || eqType ty (mkTyConApp identity [])]
+            scalarType ty || eqType ty (mkTyConApp identity [])]
 
 summaries :: [(String, String, Role)]
 summaries =
