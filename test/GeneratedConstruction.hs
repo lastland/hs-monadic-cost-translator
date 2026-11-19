@@ -93,6 +93,7 @@ checkGeneratedConstruction output = do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    checksImplicitForcing
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
@@ -200,11 +201,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "SchemaTypeOnly.hs" [(12, view "preserve")]
     rejectsAt "SchemaOpaque.hs" [(16, view "preserve")]
     rejects "SchemaDeadHelper.hs" [(8, tval)]
-    deferred <- specimen "DeferredCertificate.hs"
-    typechecks deferred
-    options <- rejection deferred
-    unless ((deferred ++ ": unsupported construction compiler options: deferred errors") `elem` lines options) $
-        fail (deferred ++ ": missing deferred-errors rejection, got " ++ options)
+    specimen "DeferredCertificate.hs" >>= rejectsOption "deferred errors"
     rejectsAt "SplicedDeclaration.hs" [(1, "unsupported executable form: Template Haskell")]
     rejectsAt "RebindableExpansion.hs" [(13, "unsupported executable expansion")]
     accepts "ReboundDemand.hs"
@@ -277,6 +274,22 @@ checkGeneratedConstructionSpecimens = do
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
     charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
+    rejectsOption reason output = do
+        typechecks output
+        problems <- rejection output
+        let expected = output ++ ": unsupported construction compiler options: " ++ reason
+        unless (expected `elem` lines problems) (fail ("missing " ++ expected ++ "\nGot: " ++ problems))
+    checksImplicitForcing = do
+        let name = "QuickCheckImplicitForcing.hs"
+        accepts name
+        source <- specimen name >>= readFile
+        let check mode pragma = withSystemTempDirectory ("construction-" ++ mode ++ "-") $ \directory -> do
+                let output = directory </> name
+                writeFile output ("{-# LANGUAGE " ++ pragma ++ " #-}\n" ++ source)
+                rejectsOption ("implicit forcing (" ++ mode ++ ")") output
+        -- Isolate argument forcing from the strict fields normally implied by Strict.
+        check "Strict" "Strict, NoStrictData"
+        check "StrictData" "StrictData"
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"

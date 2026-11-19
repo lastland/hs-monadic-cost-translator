@@ -13,6 +13,8 @@ import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import GHC
 import GHC.Core.ConLike (conLikeName)
+import GHC.Driver.Session (xopt)
+import qualified GHC.LanguageExtensions.Type as Extension
 import GHC.Types.GREInfo (conLikeName_Name)
 import GHC.Types.Id.Make (rightSectionName)
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
@@ -29,6 +31,10 @@ checkCompilerOptions summary =
         [("deferred errors", any (`gopt` options)
             [Opt_DeferTypeErrors, Opt_DeferTypedHoles, Opt_DeferOutOfScopeVariables])
         ,("compiler plugins", not (null (pluginModNames options) && null (externalPluginSpecs options)))
+        -- Strict leaves an ordinary VarPat in the typed tree and inserts a Core
+        -- case. StrictData can instead hide the force in a constructor wrapper.
+        ,("implicit forcing (Strict)", xopt Extension.Strict options)
+        ,("implicit forcing (StrictData)", xopt Extension.StrictData options)
         ,("preprocessed source", gopt Opt_Pp options || original /= Just (ms_hspp_file summary))]
     , active]
   where
