@@ -1,6 +1,6 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
-    instantiateUse, predicateOf, projected, descendant, sameEvidence, sameUse) where
+    instantiateUse, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
 
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
@@ -11,14 +11,16 @@ import qualified Data.Set as Set
 import GHC hiding (exprType)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
-import GHC.Core.Coercion (coercionLKind, coercionRKind)
+import GHC.Core.Coercion (Role(..), coercionLKind, coercionRKind)
 import GHC.Core.Coercion.Axiom (toBranchedAxiom)
 import GHC.Core.TyCo.Rep (Coercion(..), MCoercion(..))
 import GHC.Core.DataCon (dataConWorkId)
+import GHC.Core.FamInstEnv (emptyFamInstEnv, reduceTyFamApp_maybe)
 import GHC.Core.Predicate (getClassPredTys_maybe)
+import GHC.Core.Reduction (reductionReducedType)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.TyCon (newTyConCo_maybe, tyConSingleDataCon)
-import GHC.Core.Type (getTyVar_maybe, isPredTy, substTyWith)
+import GHC.Core.TyCon (isClosedSynFamilyTyConWithAxiom_maybe, newTyConCo_maybe, tyConSingleDataCon)
+import GHC.Core.Type (getTyVar_maybe, isPredTy, splitTyConApp_maybe, substTyWith)
 import GHC.Core.Utils (exprType)
 import GHC.Types.Id (isDFunId, realIdUnfolding)
 import GHC.Types.Var (isId, isTyVar)
@@ -33,6 +35,8 @@ trace env given seen expression = case expression of
     C.Cast body co | Just (_, sel) <- superclassAxiom Unpack co,
             let source = trace env given seen body, Just predicate <- predicateOf source, eqType predicate (coercionLKind co) ->
         Super sel (coercionRKind co) source
+    C.Cast body co | familyTransport co, source@Instance{} <- trace env given seen body,
+            Just predicate <- predicateOf source, eqType predicate (coercionLKind co) -> source
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
@@ -82,6 +86,25 @@ instantiateUse field args ds carrier = do
 
 data Direction = Pack | Unpack deriving (Eq)
 
+-- A single nominal step is sufficient here and does not chase recursive
+-- equations. GHC selects the branch; closed families need no instance env.
+closedFamilyStep :: Type -> Maybe Type
+closedFamilyStep ty = do
+    (tc, args) <- splitTyConApp_maybe ty
+    _ <- isClosedSynFamilyTyConWithAxiom_maybe tc
+    reductionReducedType <$> reduceTyFamApp_maybe (emptyFamInstEnv, emptyFamInstEnv) Nominal tc args
+
+-- The only transport we peel is a class lifted over the reverse equation.
+-- Keep the selected DFun as evidence rather than looking up a replacement.
+familyTransport :: Coercion -> Bool
+familyTransport co@(TyConAppCo Representational tc [SymCo step@(AxiomInstCo ax _ _)]) =
+    case (getClassPredTys_maybe (coercionLKind co), splitTyConApp_maybe (coercionLKind step)) of
+        (Just (cls, [_]), Just (family, _)) -> classTyCon cls == tc &&
+            isClosedSynFamilyTyConWithAxiom_maybe family == Just ax &&
+            maybe False (eqType (coercionRKind step)) (closedFamilyStep (coercionLKind step))
+        _ -> False
+familyTransport _ = False
+
 -- A class with a single superclass and no methods may have a newtype
 -- dictionary. Its own newtype axiom (possibly eta-reduced and applied) is
 -- the constructor in reverse and the selector forward. Endpoint equality
@@ -124,7 +147,13 @@ projected homes ev@Super{} = normalize [] ev
                 let (bs, body) = C.collectBinders rhs
                     typeBinders = filter isTyVar bs
                 guard (length typeBinders == length ts && eqType (substTyWith typeBinders ts (exprType body)) p)
+                -- GHC may fuse field transport and newtype packing into
+                -- one cast, or bind the transported dictionary separately.
                 case body of
+                    C.Cast payload (TransCo transport pack) | familyTransport transport,
+                        Just (owner, selected) <- superclassAxiom Pack pack, owner == cls && selected == sel,
+                        eqType (coercionRKind transport) (coercionLKind pack) ->
+                            pure (bs, [C.Cast payload transport])
                     C.Cast payload co | Just (owner, selected) <- superclassAxiom Pack co,
                         owner == cls && selected == sel && eqType (exprType payload) (coercionLKind co) ->
                             pure (bs, [payload])
@@ -147,7 +176,10 @@ projected homes ev@Super{} = normalize [] ev
             template = trace (dictionaryBindings homes) (Set.fromList names) Set.empty field
         result <- normalize ((sel, df, origin) : path) (substitute (substTyWith variables ts) (zip names ds) template)
         actual <- predicateOf result
-        guard (eqType predicate actual)
+        guard (eqType predicate actual || case (getClassPredTys_maybe predicate, getClassPredTys_maybe actual) of
+            (Just (wanted, [operand]), Just (found, [ty])) ->
+                wanted == found && maybe False (eqType ty) (closedFamilyStep operand)
+            _ -> False)
         pure result
     normalize path (Instance df ty ts ds) = Instance df ty ts <$> mapM (normalize path) ds
     normalize _ given@Given{} = Just given

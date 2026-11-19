@@ -148,7 +148,8 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
             ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                 | demandOperand ty -> Just "demand-data methods have no observation exemption"
                 | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
-                | scalarType ty && selectedPredicate ty evidence && ordinary evidence -> Nothing
+                | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
+                    selectedPredicate ty evidence && ordinary evidence -> Nothing
                 | otherwise -> Just "unknown concrete scalar instance"
             ForbiddenMethod -> Just "runtime observation/accounting methods have no construction permission"
             UnknownMethod -> Just "unknown executable method/default dependency"
