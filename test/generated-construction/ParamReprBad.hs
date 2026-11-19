@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, TypeFamilies #-}
+{-# LANGUAGE ExistentialQuantification, FlexibleContexts, TypeFamilies #-}
 module ParamReprBad where
 
 import ParamRepr
@@ -27,3 +27,13 @@ instance M.Repr a => M.Repr (Context a) where
 
 contextual :: Context Int -> M.MemoristM (Context Int)
 contextual = M.reprM
+
+data Hidden = forall b. Hidden (Box b)
+data Holder a = Holder a Hidden
+instance M.Repr (Holder a) where
+    type Rep (Holder a) = Holder a
+    reprM (Holder tag (Hidden hidden)) = (\box -> Holder tag (Hidden box)) <$> M.reprM hidden
+    abstract = id
+
+holder :: Holder Bool -> M.MemoristM (Holder Bool)
+holder = M.reprM

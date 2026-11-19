@@ -114,9 +114,11 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     accepts "ParamReprUse.hs"
-    rejectsAt "ParamReprBad.hs" [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval), (29, reprFailure)]
+    rejectsAt "ParamReprBad.hs"
+        [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval),
+         (29, reprFailure), (35, reprFailure)]
     rejectsAt "HomeReprUnsafe.hs" [(10, functorWrapper), (11, forbidden tval)]
-    rejectsAt "HomeReprGiven.hs" [(8, selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier")]
+    rejectsAt "HomeReprGiven.hs" [(8, reprFailure)]
     rejectsAt "HomeReprDelegation.hs" [(9, carrier "pure")]
     accepts "IntegerSummaryControl.hs"
     rejects "IntegerSummaryBypass.hs" [(7, "Memorist.Data.Interface.Data.abstract"), (10, "Memorist.Base.Thunk.tval")]

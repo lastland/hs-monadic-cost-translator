@@ -30,7 +30,7 @@ import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.Var (isId)
 
-data Evidence = Given Name Type | Instance Name Type [Evidence] | Super Type Evidence | Unknown String
+data Evidence = Given Name Type | Instance Name Type [Type] [Evidence] | Super Type Evidence | Unknown String
 data Use = Use Name Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
@@ -141,7 +141,7 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     root evidence = evidence
     predicateOf (Super predicate _) = Just predicate
     predicateOf (Given _ predicate) = Just predicate
-    predicateOf (Instance _ predicate _) = Just predicate
+    predicateOf (Instance _ predicate _ _) = Just predicate
     predicateOf Unknown{} = Nothing
     selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
         Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty
@@ -149,7 +149,7 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     -- Only closed, exact standard instance heads registered by Runtime qualify.
     -- A given dictionary or a package/unit match is not a method certificate.
     ordinary evidence = case root evidence of
-        Instance owner predicate [] | not (runtimeOwns rt owner),
+        Instance owner predicate _ [] | not (runtimeOwns rt owner),
                 Just (cls, arguments) <- boundInstance rt owner,
                 Just (actual, selected) <- getClassPredTys_maybe predicate ->
             cls == getName actual && length arguments == length selected && and (zipWith eqType arguments selected)
@@ -167,7 +167,7 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     memorist ty evidence
         | selectedPredicate ty evidence && conditional ty evidence = True
         | isMemoristType rt ty, selectedPredicate ty evidence = case root evidence of
-            Instance owner predicate children' | runtimeOwns rt owner -> case (boundInstance rt owner, getClassPredTys_maybe predicate) of
+            Instance owner predicate _ children' | runtimeOwns rt owner -> case (boundInstance rt owner, getClassPredTys_maybe predicate) of
                 (Just (cls, _), Just (selected, arguments)) -> cls == getName selected &&
                     not (null arguments) && eqType (last arguments) ty && all ordinary children'
                 _ -> False
@@ -175,10 +175,10 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
         | otherwise = False
     -- Neither a home nor an audited runtime reprM grants its abstract field.
     concreteRepr ty evidence = case evidence of
-        Instance owner predicate [] | selectedHome homes owner ty,
+        Instance owner predicate instantiation [] | selectedHome homes caller owner instantiation ty,
                 Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
             getName cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr" && eqType argument ty
-        Instance owner predicate dependencies | runtimeOwns rt owner,
+        Instance owner predicate _ dependencies | runtimeOwns rt owner,
                 Just (cls, _) <- boundInstance rt owner,
                 cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr",
                 Just (actual, [argument]) <- getClassPredTys_maybe predicate,
@@ -188,12 +188,15 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
                 length dependencies == length arguments && and (zipWith concreteRepr arguments dependencies)
             _ -> False
         _ -> False
+    caller = case dictionaries of
+        [_, evidence] | Given binder _ <- root evidence -> Just binder
+        _ -> Nothing
     representationCarrier = case (types, dictionaries) of
         ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->
                 -- The second dictionary belongs to reprM's carrier, not Repr.
                 conditional carrier evidence || isMemoristType rt carrier && case root evidence of
-                    Instance owner predicate children' | runtimeOwns rt owner,
+                    Instance owner predicate _ children' | runtimeOwns rt owner,
                             Just (boundClass, _) <- boundInstance rt owner,
                             Just (actual, arguments) <- getClassPredTys_maybe predicate ->
                         boundClass == getName actual && not (null arguments) && eqType (last arguments) carrier && all ordinary children'
@@ -234,7 +237,7 @@ uses selected = walk
         C.Cast{} -> Unknown "coerced dictionary"
         _ -> case C.collectArgs expression of
             (C.Var identifier, arguments)
-                | isDFunId identifier -> Instance (getName identifier) (exprType expression)
+                | isDFunId identifier -> Instance (getName identifier) (exprType expression) [ty | C.Type ty <- arguments]
                     [trace env given seen arg | arg <- arguments, not (C.isTyCoArg arg), isPredTy (exprType arg)]
                 | null arguments, getName identifier `Set.member` given -> Given (getName identifier) (idType identifier)
                 | null arguments, getName identifier `Set.notMember` seen, Just rhs <- Map.lookup (getName identifier) env ->
@@ -245,7 +248,7 @@ uses selected = walk
 
 renderEvidence :: Evidence -> String
 renderEvidence (Given _ ty) = "given " ++ pretty ty
-renderEvidence (Instance name ty dependencies) = describeName name ++ " :: " ++ pretty ty ++
+renderEvidence (Instance name ty _ dependencies) = describeName name ++ " :: " ++ pretty ty ++
     concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
 renderEvidence (Unknown why) = "unresolved " ++ why
