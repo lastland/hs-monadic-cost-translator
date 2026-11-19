@@ -120,6 +120,10 @@ collectAst value
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
+    accepts "OrdinarySummaryControl.hs"
+    rejects "OrdinarySummaryBypass.hs"
+        [(6, "Memorist.Base.Thunk.tval"), (9, "Memorist.Base.Core.value"), (12, "Memorist.Base.Thunk.tval")]
+    rejectsBecause "OrdinarySummaryBypass.hs" ["OrdinarySummaryBypass.hs:15:", "unapproved selected method GHC.Internal.Base.pure", "audited Memorist instance"]
     rejectsBecause "GenericDictionary.hs"
         ["unapproved selected method GHC.Internal.Base.>>=",
          "unapproved selected method Memorist.Data.Interface.Data.reprM",

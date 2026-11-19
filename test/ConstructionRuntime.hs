@@ -10,7 +10,7 @@ import Control.Monad (forM, unless)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import GHC
-import GHC.Builtin.Types (intTyCon, integerTyCon, boolTyCon, charTyCon, floatTyCon, doubleTyCon, unitTyCon, nilDataCon, consDataCon)
+import GHC.Builtin.Types (intTyCon, integerTyCon, boolTyCon, charTyCon, floatTyCon, doubleTyCon, unitTyCon, unitDataCon, nilDataCon, consDataCon)
 import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
@@ -90,7 +90,7 @@ runtime = do
     standard <- standardInstances ordinary
     pure (Runtime (moduleUnit root) (Map.fromList entries) (Map.fromList types)
         (Map.fromList (standard ++ concat [is | (_, _, is) <- owners]))
-        (("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary))
+        (("syntax.()", getName unitDataCon) : ("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary))
 
 -- Select closed standard instance heads, not all definitions in a base unit.
 -- The compiler version is pinned; each use must still match the selected class,
@@ -151,7 +151,7 @@ typeSummaries =
 -- Methods still need a selected-carrier/instance certificate at each use site.
 ordinaryValues :: [(String, String)]
 ordinaryValues = [("Prelude", name) | name <-
-    [ "id", ".", "$", "const", "flip", "error", "undefined", "not", "&&", "||", "++"
+    [ "id", ".", "$", "const", "flip", "error", "undefined", "not", "&&", "||", "++", "otherwise", "seq"
     , "True", "False", "Just", "Nothing", "Left", "Right", "LT", "EQ", "GT"
     , "pure", "return", ">>=", ">>", "=<<", "fmap", "<$>", "<*>", "<*", "*>"
     , "+", "-", "*", "negate", "abs", "signum", "fromInteger", "fromRational"
