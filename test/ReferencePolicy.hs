@@ -51,6 +51,7 @@ diagnosticFixtures :: [(String, String)]
 diagnosticFixtures =
     [("syntax", "source error"), ("type", "source error"), ("lambda", "unsupported")
     ,("unused-local-lambda", "unsupported expression")
+    ,("unreachable-guard", "unsupported expression")
     ,("unused-vacuous-constructor-payload", "unsupported expression")
     ,("strict-semantics", "Strict"), ("recursive-value", "recursive value")
     ,("deriving", "deriving"), ("function-alias", "alias"), ("strict-field", "strict field")
