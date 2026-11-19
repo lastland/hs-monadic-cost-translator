@@ -67,12 +67,12 @@ checkEvidence rt demands support checked sites = do
     selected <- methodFamilies rt
     desugared <- desugarModule checked
     let program = mg_binds (coreModule desugared)
-        bindings = concatMap allBindings program
+        bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
         rootProblems = concat [concatMap (checkUse rt demands) (uses selected environment givens rhs) |
-            (binder, rhs) <- concatMap pairs program, getName binder `notElem` support]
+            (binder, rhs) <- C.flattenBinds program, getName binder `notElem` support]
     session <- getSession
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
@@ -85,7 +85,7 @@ checkEvidence rt demands support checked sites = do
         pure (dictionaries, raw, expressions)
     let siteProblems = case result of
             Just (dictionaries, raw, expressions) ->
-                let rawBindings = concatMap allBindings (C.Rec raw : dictionaries)
+                let rawBindings = allBindings (C.Rec raw : dictionaries)
                     env = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]) environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
@@ -198,7 +198,7 @@ uses selected = walk
         C.Lam binder body -> walk env (if isId binder && isPredTy (idType binder)
             then Set.insert (getName binder) given else given) body
         C.Let binding body ->
-            let bs = pairs binding
+            let bs = C.flattenBinds [binding]
                 next = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- bs]) env
             in walk next given body ++ concatMap (walk next given . snd) bs
         C.Cast body _ -> walk env given body
@@ -244,23 +244,8 @@ coreGivens :: C.CoreExpr -> [Id]
 coreGivens expression = case expression of
     C.Lam binder body -> [binder | isId binder, isPredTy (idType binder)] ++ coreGivens body
     C.App f x -> coreGivens f ++ coreGivens x
-    C.Let binding body -> concatMap (coreGivens . snd) (pairs binding) ++ coreGivens body
+    C.Let binding body -> concatMap coreGivens (C.rhssOfBind binding) ++ coreGivens body
     C.Case scrutinee _ _ alternatives -> coreGivens scrutinee ++ concat [coreGivens rhs | C.Alt _ _ rhs <- alternatives]
     C.Cast body _ -> coreGivens body
     C.Tick _ body -> coreGivens body
     _ -> []
-
-pairs :: C.CoreBind -> [(Id, C.CoreExpr)]
-pairs (C.NonRec binder rhs) = [(binder, rhs)]
-pairs (C.Rec bindings) = bindings
-
-allBindings :: C.CoreBind -> [(Id, C.CoreExpr)]
-allBindings binding = concat [(binder, rhs) : inside rhs | (binder, rhs) <- pairs binding]
-  where
-    inside (C.Let b body) = allBindings b ++ inside body
-    inside (C.App f x) = inside f ++ inside x
-    inside (C.Lam _ body) = inside body
-    inside (C.Case scrutinee _ _ alternatives) = inside scrutinee ++ concat [inside rhs | C.Alt _ _ rhs <- alternatives]
-    inside (C.Cast body _) = inside body
-    inside (C.Tick _ body) = inside body
-    inside _ = []

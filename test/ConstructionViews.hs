@@ -48,7 +48,7 @@ viewSupport :: Runtime -> [Module] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Nam
 viewSupport runtime' homes checked = do
     rt <- resolveViews runtime'
     programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checked
-    let definitions = concatMap (concatMap allBindings) programs
+    let definitions = concatMap allBindings programs
         source = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
         exactSource valid name = any (\binding -> binderName binding == Just name && valid binding) source
@@ -108,21 +108,6 @@ resolveViews runtime' = do
             Just (AConLike (RealDataCon actual)) -> pure actual
             _ -> fail "construction views: expected a real constructor"
     constructor _ = fail "construction views: ambiguous constructor"
-
-pairs :: C.CoreBind -> [(Id, C.CoreExpr)]
-pairs (C.NonRec v e) = [(v, e)]
-pairs (C.Rec bs) = bs
-
-allBindings :: C.CoreBind -> [(Id, C.CoreExpr)]
-allBindings binding = concat [(v, e) : inside e | (v, e) <- pairs binding]
-  where
-    inside (C.Let b e) = allBindings b ++ inside e
-    inside (C.App f x) = inside f ++ inside x
-    inside (C.Lam _ e) = inside e
-    inside (C.Case e _ _ as) = inside e ++ concat [inside rhs | C.Alt _ _ rhs <- as]
-    inside (C.Cast e _) = inside e
-    inside (C.Tick _ e) = inside e
-    inside _ = []
 
 isVar :: Id -> C.CoreExpr -> Bool
 isVar x (C.Var y) = x == y
@@ -277,7 +262,7 @@ administrative = go
     go body = body
 
 walkBinding :: Policy -> C.CoreBind -> [String]
-walkBinding policy binding = concat [walk expression | (v, expression) <- pairs binding, getName v `notElem` helperNames policy]
+walkBinding policy binding = concat [walk expression | (v, expression) <- C.flattenBinds [binding], getName v `notElem` helperNames policy]
   where
     walk expression = case C.collectArgs expression of
         (C.Var v, _) | getName v `elem` helperNames policy ->
