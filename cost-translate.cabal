@@ -182,6 +182,7 @@ test-suite cost-translate-test
         directory,
         filepath,
         ghc ==9.10.3,
+        ghc-boot-th ==9.10.3,
         ghc-paths,
         process,
         temporary
