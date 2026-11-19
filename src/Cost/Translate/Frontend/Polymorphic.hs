@@ -243,10 +243,10 @@ allocatePayload ::
     ([TyVar], Payload) ->
     O.Expr ->
     Either String O.Expr
-allocatePayload _ env name _ continuation
+allocatePayload emit env name (_, payload) continuation
     | let used = usedNames continuation
     , localName env name `Set.notMember` used =
-        pure continuation
+        emitPayload emit env payload >> pure continuation
 allocatePayload emit env name (scoped, payload) continuation = do
     ty <- payloadType env payload
     action <- emitPayload emit env payload
