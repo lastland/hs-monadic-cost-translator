@@ -92,6 +92,7 @@ checkGeneratedConstruction output = do
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 
+    checksMixedMakeInstances
 -- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
 -- Its selected constructor identifies the right parent, not merely a candidate
 -- with the same field spelling. Parent labels are ordered like update fields.
@@ -230,7 +231,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "DemandDerivingEscape.hs" [(8, demandEq), (11, demandEq)]
     rejectsAt "DemandManualInstance.hs" [(15, demandEq)]
     rejectsAt "DemandProtectedDeriving.hs" [(13, protectedEq)]
-    mixed "SumGeneratorMissing.hs" [InstanceMethod "Arbitrary" "Observation" "arbitrary"]
+    mixed "SumGeneratorMissing.hs" [InstanceMethod "Arbitrary" ["Observation"] "arbitrary"]
         "SumGeneratorMissing.hs" [(9, defaultUsage)]
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
@@ -277,8 +278,17 @@ checkGeneratedConstructionSpecimens = do
     defaultUsage = selected "Memorist.Data.Interface.Demand.$dmusage: runtime observation/accounting methods have no construction permission"
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
+    checksMixedMakeInstances = do
+        local <- specimen "MixedMakeInstances.hs"
+        imported <- specimen "QuickCheckRoles.hs"
+        typechecks local
+        diagnostics <- rejection local
+        let make tys = InstanceMethod "Make" tys "make"
+        checkDefinitions diagnostics local
+            [(make ["Draw", "Bool"], []), (make ["Char"], [external "Test.QuickCheck.Arbitrary.arbitrary"])]
+        cleanDefinitions diagnostics imported [make ["Gen", "Int"], make ["Property"]]
     oneof = external "Test.QuickCheck.Gen.oneof"
-    charGenerators = [InstanceMethod "Observation" "Char" "generate", InstanceMethod "DemandArb" "Char" "arbDemandFrom"]
+    charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"
@@ -346,7 +356,7 @@ checkGeneratedConstructionSpecimens = do
         shifted <- createTempDirectory directory "shifted-"
         copyFile input (shifted </> "Example.hs")
         let shiftedOutput = shifted </> "Generated.hs"
-        (_, binder) <- definition output definitions (InstanceMethod "Repr" "Box" "abstract")
+        (_, binder) <- definition output definitions (InstanceMethod "Repr" ["Box"] "abstract")
         case binder of
             RealSrcSpan location (Strict.Just bytes) -> do
                 (before, after) <- splitAt (bufPos (bufSpanEnd bytes)) <$> readFile output
@@ -358,14 +368,14 @@ checkGeneratedConstructionSpecimens = do
         reports <- rejection output >>= siteReports output
         let check = checkDefinition output definitions reports
         mapM_ check
-            [(InstanceMethod "Repr" "Box" "abstract", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
-             (InstanceMethod "Demand" "BoxT" "fullDemand", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
-             (InstanceMethod "Demand" "BoxT" "usage", map forbidden ["Memorist.Data.Interface.Demand.usage", "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]),
+            [(InstanceMethod "Repr" ["Box"] "abstract", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
+             (InstanceMethod "Demand" ["BoxT"] "fullDemand", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
+             (InstanceMethod "Demand" ["BoxT"] "usage", map forbidden ["Memorist.Data.Interface.Demand.usage", "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]),
              (TopBinding "shrinkField", [forbidden tval, external "Test.QuickCheck.Arbitrary.liftShrink"])]
         mapM_ (\key -> check (key, []))
             [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
-             InstanceMethod "GeneratedDemand" "BoxT" "genDemandBudget", InstanceMethod "Arbitrary" "BoxD" "arbitrary",
-             InstanceMethod "DemandArb" "BoxT" "arbDemandFrom"]
+             InstanceMethod "GeneratedDemand" ["BoxT"] "genDemandBudget", InstanceMethod "Arbitrary" ["BoxD"] "arbitrary",
+             InstanceMethod "DemandArb" ["BoxT"] "arbDemandFrom"]
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
@@ -377,10 +387,11 @@ checkGeneratedConstructionSpecimens = do
         diagnostics <- rejection output
         requireAt diagnostics path expected
         cleanDefinitions diagnostics output clean
-    cleanDefinitions diagnostics output keys = unless (null keys) $ do
+    cleanDefinitions diagnostics output keys = checkDefinitions diagnostics output [(key, []) | key <- keys]
+    checkDefinitions diagnostics output expected = unless (null expected) $ do
         definitions <- definitionSpans <$> parseHaskellModule output
         reports <- siteReports output diagnostics
-        mapM_ (\key -> checkDefinition output definitions reports (key, [])) keys
+        mapM_ (checkDefinition output definitions reports) expected
     requireAt diagnostics path expected = do
         reports <- siteReports path diagnostics
         let require target@(line, reason) = unless (hasSite target reports) $
@@ -401,14 +412,15 @@ checkGeneratedConstructionSpecimens = do
              "-outputdir", objects, "-package", "MemoristANT", "-package", "QuickCheck", output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
 
-data SpecimenDefinition = TopBinding String | InstanceMethod String String String deriving Eq
+data SpecimenDefinition = TopBinding String | InstanceMethod String [String] String deriving Eq
 
 type BindingSpans = [(SpecimenDefinition, SrcSpan, SrcSpan)] -- whole definition, then binder
 type SiteReport = (RealSrcSpan, String)
 
 instance Show SpecimenDefinition where
     show (TopBinding name) = name
-    show (InstanceMethod cls ty name) = name ++ " (instance " ++ cls ++ " " ++ ty ++ ")"
+    show (InstanceMethod cls args name) = name ++ " (instance " ++ cls ++ " " ++ ty ++ ")"
+      where ty = case args of [one] -> one; _ -> "(" ++ unwords args ++ ")"
 
 -- Some checks specify the operation or its reason ahead of concrete evidence.
 -- A longer identifier with the same prefix must not satisfy that expectation.
@@ -438,12 +450,17 @@ definitionSpans :: HsModule GhcPs -> BindingSpans
 definitionSpans parsed =
     [(TopBinding (occ name), getLocA decl, getLocA name)
     | decl@(L _ (ValD _ (FunBind _ name _))) <- hsmodDecls parsed] ++
-    [(InstanceMethod (occ cls) (occ ty) (occ name), getLocA binding, getLocA name)
+    [(InstanceMethod (occ cls) tys (occ name), getLocA binding, getLocA name)
     | L _ (InstD _ (ClsInstD _ inst)) <- hsmodDecls parsed,
       HsAppTy _ lhs rhs <- [unLoc (ignoreParens (getLHsInstDeclHead (cid_poly_ty inst)))],
-      HsTyVar _ _ cls <- [unLoc (ignoreParens lhs)], HsTyVar _ _ ty <- [unLoc (ignoreParens rhs)],
+      HsTyVar _ _ cls <- [unLoc (ignoreParens lhs)], Just tys <- [typeNames rhs],
       binding@(L _ (FunBind _ name _)) <- toList (cid_binds inst)]
-  where occ = occNameString . rdrNameOcc . unLoc
+  where
+    occ = occNameString . rdrNameOcc . unLoc
+    typeNames ty = case unLoc (ignoreParens ty) of
+        HsTyVar _ _ n -> Just [occ n]
+        HsAppTy _ f x | HsTyVar _ _ n <- unLoc (ignoreParens x) -> (++ [occ n]) <$> typeNames f
+        _ -> Nothing
 
 -- The guard exposes GHC's printed positions: a point, a one-line range, or
 -- a multi-line range. Its printed end column is inclusive; RealSrcSpan's is not.
