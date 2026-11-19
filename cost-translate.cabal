@@ -160,6 +160,7 @@ test-suite cost-translate-test
     other-modules:    FixturePolicy
                      GeneratedChecks
                      GeneratedConstruction
+                     ConstructionAllocation
                      ConstructionAst
                      ConstructionRuntime
                      ConstructionHomeRepr
