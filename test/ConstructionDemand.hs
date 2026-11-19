@@ -200,10 +200,16 @@ exactMethod policy name binding
     | name `elem` [s | Interface _ _ s <- interfaces policy] = allCases shrinkCase
     | roleOf (rt policy) name == Just DemandArbitraryMethod = case equations binding of
         Just [([], body)] -> variable body `elem` map Just (ordinary policy "pure")
+        Just [([pat], body)] | Just input <- plainPattern pat,
+                Just [generator] <- call (qcName policy "sized") body -> sizedFrom input generator
         _ -> False
     | otherwise = False
   where
     allCases predicate = case equations binding of Just cases -> not (null cases) && all (uncurry predicate) cases; _ -> False
+    sizedFrom input generator = case unLoc (fst (spine generator)) of
+        SectionR _ operation argument -> variable operation `elem` map Just generators && variable argument == Just input
+        _ -> False
+    generators = [generator | Interface _ generator _ <- interfaces policy]
     genCase [L _ (WildPat _)] body = variable body `elem` map Just (ordinary policy "pure")
     genCase [budget, pattern'] body | Just (_, fieldNames) <- fields policy pattern',
             Just (constructor, generated) <- applicative policy body, constructor `elem` constructors policy,
