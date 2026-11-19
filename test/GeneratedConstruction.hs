@@ -93,6 +93,8 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
+    mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
+        [(8, "QuickCheck value used outside a generator or property: <local>.k")]
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]
