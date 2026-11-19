@@ -4,6 +4,10 @@ __pycache__/
 *.hi
 *.o
 
+# Translated examples and their diagnostic logs.
+/examples/*M.hs
+/examples/*M.hs.log
+
 # External reference runtime; intentionally not part of version control.
 hs-pbt/
 

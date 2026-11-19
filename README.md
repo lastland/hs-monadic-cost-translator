@@ -40,7 +40,7 @@ Each run writes a companion log to `OUTPUT.hs.log` with binding arities, call-si
 
 If typechecking succeeds, the translator atomically renames the candidate to `OUTPUT.hs`. If source validation or candidate typechecking fails, the translator records the diagnostic (and any rejected candidate) in `OUTPUT.hs.log`, exits with a non-zero status, and leaves any existing `OUTPUT.hs` untouched.
 
-Runnable example modules and GHCi walkthroughs with expected values and tick counts live in [`examples/`](examples/) and [`examples/README.md`](examples/README.md).
+Run `make examples` from the repository root to translate every source in [`examples/`](examples/). The [examples guide](examples/README.md) includes GHCi walkthroughs with expected values and tick counts.
 
 ## Using Generated Code
 

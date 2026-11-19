@@ -42,6 +42,19 @@ Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `Q
 stack build
 ```
 
+### Translating All Examples
+
+Run this command from the repository root:
+
+```sh
+make examples
+```
+
+Make builds the translator and runtime with Stack, then translates every
+`examples/*.hs` except `*M.hs`, the suffix reserved for generated modules.
+For example, it writes `BasicM.hs` and `BasicM.hs.log` beside `Basic.hs`.
+Git ignores the generated modules and their logs.
+
 ### Translating and Inspecting an Example
 
 Translate and compile from the repository root while placing generated modules, logs, and compiler artifacts in a temporary directory `$work`. Because each generated module imports its source module qualified as `Source`, keep `-iexamples` on GHC's search path:
