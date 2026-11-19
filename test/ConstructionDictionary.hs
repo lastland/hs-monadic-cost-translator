@@ -35,8 +35,7 @@ trace env given seen expression = case expression of
     C.Cast body co | Just (_, sel) <- superclassAxiom Unpack co,
             let source = trace env given seen body, Just predicate <- predicateOf source, eqType predicate (coercionLKind co) ->
         Super sel (coercionRKind co) source
-    C.Cast body co | familyTransport co, source@Instance{} <- trace env given seen body,
-            Just predicate <- predicateOf source, eqType predicate (coercionLKind co) -> source
+    C.Cast body co | Just source <- traceTransport co (trace env given seen body) -> source
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
@@ -105,6 +104,13 @@ familyTransport co@(TyConAppCo Representational tc [SymCo step@(AxiomInstCo ax _
         _ -> False
 familyTransport _ = False
 
+traceTransport :: Coercion -> Evidence -> Maybe Evidence
+traceTransport co source = do
+    guard (familyTransport co)
+    Instance _ predicate _ _ <- pure source
+    guard (eqType predicate (coercionLKind co))
+    pure source
+
 -- A class with a single superclass and no methods may have a newtype
 -- dictionary. Its own newtype axiom (possibly eta-reduced and applied) is
 -- the constructor in reverse and the selector forward. Endpoint equality
@@ -150,21 +156,21 @@ projected homes ev@Super{} = normalize [] ev
                 -- GHC may fuse field transport and newtype packing into
                 -- one cast, or bind the transported dictionary separately.
                 case body of
-                    C.Cast payload (TransCo transport pack) | familyTransport transport,
+                    C.Cast payload (TransCo transport pack) |
                         Just (owner, selected) <- superclassAxiom Pack pack, owner == cls && selected == sel,
                         eqType (coercionRKind transport) (coercionLKind pack) ->
-                            pure (bs, [C.Cast payload transport])
+                            pure (bs, [payload], Just transport)
                     C.Cast payload co | Just (owner, selected) <- superclassAxiom Pack co,
                         owner == cls && selected == sel && eqType (exprType payload) (coercionLKind co) ->
-                            pure (bs, [payload])
+                            pure (bs, [payload], Nothing)
                     _ -> do
                         (C.Var worker, args) <- pure (C.collectArgs body)
                         guard (worker == dataConWorkId constructor)
-                        pure (bs, args)
-        (binders, args) <- case Map.lookup (getName df) (dictionaryBindings homes) of
+                        pure (bs, args, Nothing)
+        (binders, args, transport) <- case Map.lookup (getName df) (dictionaryBindings homes) of
             Just rhs -> fromBody rhs
             Nothing -> case realIdUnfolding df of
-                C.DFunUnfolding bs con args | con == constructor -> pure (bs, args)
+                C.DFunUnfolding bs con args | con == constructor -> pure (bs, args, Nothing)
                 C.CoreUnfolding{C.uf_tmpl = rhs} | isNewTyCon (classTyCon cls) -> fromBody rhs
                 _ -> Nothing
         let variables = filter isTyVar binders
@@ -173,7 +179,8 @@ projected homes ev@Super{} = normalize [] ev
         guard (length variables == length ts && length formals == length ds && length fields == length (classAllSelIds cls))
         field <- lookup sel (zip (classAllSelIds cls) fields)
         let names = map getName formals
-            template = trace (dictionaryBindings homes) (Set.fromList names) Set.empty field
+            source = trace (dictionaryBindings homes) (Set.fromList names) Set.empty field
+        template <- maybe (pure source) (`traceTransport` source) transport
         result <- normalize ((sel, df, origin) : path) (substitute (substTyWith variables ts) (zip names ds) template)
         actual <- predicateOf result
         guard (eqType predicate actual || case (getClassPredTys_maybe predicate, getClassPredTys_maybe actual) of
