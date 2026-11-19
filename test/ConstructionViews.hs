@@ -262,19 +262,21 @@ administrative = go
     go body = body
 
 walkBinding :: Policy -> C.CoreBind -> [String]
-walkBinding policy binding = concat [walk expression | (v, expression) <- C.flattenBinds [binding], getName v `notElem` helperNames policy]
+walkBinding policy binding = concat [walk (nameSrcSpan (getName v)) expression
+    | (v, expression) <- C.flattenBinds [binding], getName v `notElem` helperNames policy]
   where
-    walk expression = case C.collectArgs expression of
+    walk location expression = case C.collectArgs expression of
         (C.Var v, _) | getName v `elem` helperNames policy ->
-            ["unchecked structural view use/escape: " ++ pretty expression | not (validRoot policy expression)]
+            [pretty location ++ ": unchecked structural view use/escape: " ++ pretty expression | not (validRoot policy expression)]
         _ -> case expression of
-            C.App f x -> walk f ++ walk x
-            C.Lam _ body -> walk body
-            C.Let b body -> walkBinding policy b ++ walk body
-            C.Case scrutinee _ _ alternatives -> walk scrutinee ++ concat [walk rhs | C.Alt _ _ rhs <- alternatives]
-            C.Cast body _ -> walk body
-            C.Tick _ body -> walk body
+            C.App f x -> recur f ++ recur x
+            C.Lam _ body -> recur body
+            C.Let b body -> walkBinding policy b ++ recur body
+            C.Case scrutinee _ _ alternatives -> recur scrutinee ++ concat [recur rhs | C.Alt _ _ rhs <- alternatives]
+            C.Cast body _ -> recur body
+            C.Tick _ body -> recur body
             _ -> []
+      where recur = walk location
 
 binderName :: HsBind GhcRn -> Maybe Name
 binderName (FunBind _ name _) = Just (unLoc name)

@@ -71,7 +71,7 @@ checkEvidence rt demands support checked sites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        rootProblems = concat [concatMap (checkUse rt demands) (uses selected environment givens rhs) |
+        rootProblems = concat [atBinder binder (problems (uses selected environment givens rhs)) |
             (binder, rhs) <- C.flattenBinds program, getName binder `notElem` support]
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -90,7 +90,7 @@ checkEvidence rt demands support checked sites = do
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawProblems = concat [problems (uses selected env allGivens rhs) |
+                    rawProblems = concat [atBinder binder (problems (uses selected env allGivens rhs)) |
                         (binder, rhs) <- raw, getName binder `notElem` support]
                  in rawProblems ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
@@ -100,6 +100,7 @@ checkEvidence rt demands support checked sites = do
             Nothing -> ["cannot desugar the retained source method certificates"]
     pure (rootProblems ++ siteProblems)
   where
+    atBinder binder = map ((pretty (nameSrcSpan (getName binder)) ++ ": ") ++)
     problems = concatMap (checkUse rt demands)
 
 -- Explicit type application retains its dictionary on a typed prefix, not on

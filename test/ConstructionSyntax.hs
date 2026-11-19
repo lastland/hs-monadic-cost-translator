@@ -55,7 +55,7 @@ checkSyntax rt homes methods restricted views viewCalls updates group = (expansi
   where
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
-    expansionProblems = [pretty (getLocA expression) ++ ": unsupported executable expansion"
+    expansionProblems = [pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
         | expression@(L _ (XExpr expansion)) <- collectAst group :: [LHsExpr GhcRn], not (sectionExpansion expansion)]
     walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
     walk location value
@@ -65,8 +65,8 @@ checkSyntax rt homes methods restricted views viewCalls updates group = (expansi
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then ([], [])
              else walk (getLocA name) matches
-        | Just (PatSynBind _ _) <- cast value :: Maybe (HsBind GhcRn) =
-            ([pretty location ++ ": unsupported executable form: pattern synonym"], [])
+        | Just (PatSynBind _ PSB{psb_id = name}) <- cast value :: Maybe (HsBind GhcRn) =
+            ([pretty (getLocA name) ++ ": unsupported executable form: pattern synonym"], [])
         | Just expression <- cast value :: Maybe (LHsExpr GhcRn) =
             let here = getLocA expression
                 form = unLoc expression

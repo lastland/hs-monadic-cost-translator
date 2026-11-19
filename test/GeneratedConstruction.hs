@@ -1,11 +1,11 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
-import Control.Exception (IOException, displayException, try)
-import Control.Monad (forM, forM_, unless)
+import Control.Exception (IOException, try)
+import Control.Monad (forM, unless, when)
 import Cost.Translate (translateFile)
 import Data.Data (Data)
 import Data.Foldable (toList)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import ConstructionAst (collectAst)
 import ConstructionEvidence (checkEvidence, methodNames)
 import ConstructionRoles (supportCoreNames, homeDemandTypes)
@@ -33,6 +33,7 @@ import Paths_cost_translate (getDataFileName)
 import System.FilePath ((</>), takeDirectory)
 import System.Directory (copyFile, getTemporaryDirectory)
 import System.Exit (ExitCode(..))
+import System.IO.Error (ioeGetErrorString)
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 
@@ -107,19 +108,15 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     accepts "IntegerSummaryControl.hs"
     rejects "IntegerSummaryBypass.hs" [(7, "Memorist.Data.Interface.Data.abstract"), (10, "Memorist.Base.Thunk.tval")]
-    rejectsBecause "IntegerSummaryBypass.hs"
-        ["IntegerSummaryBypass.hs:13:", "protected thunk/annotation/accounting operand",
-         "IntegerSummaryBypass.hs:16:", "unknown concrete scalar instance",
-         "IntegerSummaryBypass.hs:19:", "unapproved selected method GHC.Internal.Base.pure", "audited Memorist instance"]
+    rejectsAt "IntegerSummaryBypass.hs"
+        [(13, protectedEq), (16, selected "GHC.Classes.==: unknown concrete scalar instance"), (19, carrier "pure")]
     accepts "OrdinarySummaryControl.hs"
     rejects "OrdinarySummaryBypass.hs"
         [(6, "Memorist.Base.Thunk.tval"), (9, "Memorist.Base.Core.value"), (12, "Memorist.Base.Thunk.tval")]
-    rejectsBecause "OrdinarySummaryBypass.hs" ["OrdinarySummaryBypass.hs:15:", "unapproved selected method GHC.Internal.Base.pure", "audited Memorist instance"]
-    rejectsBecause "GenericDictionary.hs"
-        ["unapproved selected method GHC.Internal.Base.>>=",
-         "unapproved selected method Memorist.Data.Interface.Data.reprM",
-         "unapproved selected method GHC.Internal.Num.+",
-         "unapproved selected method GenericDictionary.firstOrder"]
+    rejectsAt "OrdinarySummaryBypass.hs" [(15, carrier "pure")]
+    rejectsAt "GenericDictionary.hs"
+        [(7, selected "GHC.Internal.Base.>>="), (10, selected "Memorist.Data.Interface.Data.reprM"),
+         (13, selected "GHC.Internal.Num.+"), (19, selected "GenericDictionary.firstOrder")]
     rejects "ManualNaming.hs" [(6, "Memorist.Base.Thunk.nnext")]
     rejects "PayloadComputation.hs" [(6, "Memorist.Base.Thunk.tval")]
     rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
@@ -142,68 +139,71 @@ checkGeneratedConstructionSpecimens = do
         ,(24, "Memorist.Base.Core.usageAnnot")]
     rejects "RecordUpdate.hs" [(6, "Memorist.Base.Core.value")]
     rejects "AmbiguousRecordUpdate.hs" [(10, "Memorist.Base.Core.value")]
-    rejectsBecause "ExternalRecordUpdate.hs" ["ExternalRecordUpdate.hs:10:", "unapproved external operation Test.QuickCheck.Test.maxSuccess"]
+    rejectsAt "ExternalRecordUpdate.hs" [(10, external "Test.QuickCheck.Test.maxSuccess")]
     rejects "AnnotatedPattern.hs" [(6, "Memorist.Base.Core.Annotated"), (11, "Memorist.Base.Core.Annotated")]
     rejects "AnnotatedRecordPatterns.hs"
         [(7, "Memorist.Base.Core.Annotated"), (10, "Memorist.Base.Core.Annotated")
          ,(13, "Memorist.Base.Core.Annotated"), (16, "Memorist.Base.Core.Annotated")]
     rejects "InstancePayload.hs" [(10, "Memorist.Base.Thunk.tval")]
-    rejectsBecause "PureCarrier.hs" ["PureCarrier.hs:7:", "PureCarrier.hs:10:", "unapproved selected method", "GHC.Internal.Base.pure", "audited Memorist instance"]
-    rejectsBecause "BindCarrier.hs" ["unapproved selected method", "GHC.Internal.Base.>>=", "audited Memorist instance"]
-    rejectsBecause "ApplicativeCarrier.hs" ["unapproved selected method", "GHC.Internal.Base.<*>", "audited Memorist instance"]
-    rejectsBecause "ProtectedEq.hs" ["ProtectedEq.hs:6:", "ProtectedEq.hs:10:", "unapproved selected method", "protected thunk/annotation/accounting operand"]
-    rejectsBecause "PatternPayload.hs" ["unsupported executable form: pattern synonym"]
-    rejectsBecause "UnknownExternal.hs" ["unapproved external operation GHC.Internal.Data.Typeable.Internal.someTypeRep"]
-    rejectsBecause "UnknownRuntime.hs" ["unapproved runtime operation Memorist.Base.Extension.composeTM"]
-    rejectsBecause "ImportedWrapper.hs" ["HiddenConstruction.hs:6:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "DemandComputation.hs" ["DemandControl.hs:16:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "AlteredDemandView.hs" ["unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "ViewAlteredMetadata.hs" ["unapproved runtime operation Memorist.Base.Thunk.Th"]
-    rejectsBecause "ViewArbitraryConverter.hs" ["unchecked structural view use/escape"]
-    rejectsBecause "ViewDeadConverter.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
-    rejectsBecause "ViewEscape.hs" ["unchecked structural view use/escape"]
-    rejectsBecause "ViewCrossInput.hs" ["unchecked structural view use/escape"]
-    rejectsBecause "ViewRawPattern.hs" ["unapproved runtime operation Memorist.Base.Thunk.Th"]
-    mapM_ (\name -> rejectsBecause name ["unchecked structural view use/escape"])
-        ["SchemaIndependentFields.hs", "SchemaChangedConstructor.hs", "SchemaCallback.hs", "SchemaEscape.hs",
-         "SchemaTypeOnly.hs", "SchemaOpaque.hs"]
-    rejectsBecause "SchemaDeadHelper.hs" ["unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "DeferredCertificate.hs" ["unsupported construction compiler options"]
-    rejectsBecause "SplicedDeclaration.hs" ["unsupported executable form: Template Haskell"]
-    rejectsBecause "RebindableExpansion.hs" ["unsupported executable expansion"]
-    rejectsBecause "ReboundDemand.hs" ["unsupported executable expansion"]
-    rejectsBecause "SizedDemandOtherInput.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
-    rejectsBecause "SizedDemandEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
-    rejectsBecause "SizedDemandDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
-    rejectsBecause "DatatypeGeneratorWrongRole.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
-    rejectsBecause "DatatypeGeneratorEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
-    rejectsBecause "DatatypeGeneratorDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
-    rejectsBecause "DemandDerivingEscape.hs"
-        ["DemandDerivingEscape.hs:8:", "DemandDerivingEscape.hs:11:", "demand-data methods have no observation exemption"]
-    rejectsBecause "DemandManualInstance.hs" ["demand-data methods have no observation exemption"]
-    rejectsBecause "DemandProtectedDeriving.hs" ["unapproved selected method GHC.Classes.==", "protected thunk/annotation/accounting operand"]
-    rejectsBecause "SumGeneratorMissing.hs" ["unapproved external operation Test.QuickCheck.Gen.oneof"]
-    rejectsBecause "SumGeneratorEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.oneof"]
-    rejectsBecause "SumGeneratorDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
-    rejectsBecause "SumTagEscape.hs" ["unknown executable method/default dependency"]
-    rejectsBecause "ExplicitMethodWrongCarrier.hs" ["unapproved selected method", "audited Memorist instance"]
-    rejectsBecause "UnusedExplicitMethod.hs" ["UnusedExplicitMethod.hs:8:", "unapproved selected method", "audited Memorist instance"]
-    rejectsBecause "ForallClosureChanged.hs" ["unchecked structural view use/escape", "Indexed", "PairT"]
-    rejectsBecause "ConstraintWrapperEscape.hs"
-        ["unapproved runtime operation Memorist.Base.Thunk.tval", "DemandControl.hs:16:"]
-    rejectsBecause "ConstraintWrapperAltered.hs" ["ConstraintWrapperAltered.hs:16:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "ConstraintWrapperWrongProtocol.hs" ["ConstraintWrapperWrongProtocol.hs:17:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "ConstraintWrapperDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
+    rejectsAt "PureCarrier.hs" [(7, carrier "pure"), (10, carrier "pure")]
+    rejectsAt "BindCarrier.hs" [(6, carrier ">>=")]
+    rejectsAt "ApplicativeCarrier.hs" [(6, carrier "<*>")]
+    rejectsAt "ProtectedEq.hs" [(6, protectedEq), (10, protectedEq)]
+    rejectsAt "PatternPayload.hs" [(7, "unsupported executable form: pattern synonym")]
+    rejectsAt "UnknownExternal.hs" [(6, external "GHC.Internal.Data.Typeable.Internal.someTypeRep")]
+    rejects "UnknownRuntime.hs" [(7, "Memorist.Base.Extension.composeTM")]
+    rejectsIn "ImportedWrapper.hs" "HiddenConstruction.hs" [(6, forbidden tval)]
+    rejectsIn "DemandComputation.hs" "DemandControl.hs" [(16, forbidden tval)]
+    rejects "AlteredDemandView.hs" [(12, tval)]
+    rejects "ViewAlteredMetadata.hs" [(6, "Memorist.Base.Thunk.Th"), (9, "Memorist.Base.Thunk.Th")]
+    rejectsAt "ViewArbitraryConverter.hs" [(7, view "preserve"), (10, view "preserve")]
+    rejects "ViewDeadConverter.hs" [(7, eval1)]
+    rejectsAt "ViewEscape.hs" [(8, view "preserve"), (11, view "preserve"), (14, view "spineView")]
+    rejectsAt "ViewCrossInput.hs" [(7, view "preserve"), (11, view "preserve")]
+    rejects "ViewRawPattern.hs" [(7, "Memorist.Base.Thunk.Th")]
+    rejectsAt "SchemaIndependentFields.hs" [(15, view "preserve")]
+    rejectsAt "SchemaChangedConstructor.hs" [(17, view "preserve")]
+    rejectsAt "SchemaCallback.hs" [(8, view "preserve")]
+    rejectsAt "SchemaEscape.hs" [(6, view "branch")]
+    rejectsAt "SchemaTypeOnly.hs" [(12, view "preserve")]
+    rejectsAt "SchemaOpaque.hs" [(16, view "preserve")]
+    rejects "SchemaDeadHelper.hs" [(8, tval)]
+    deferred <- specimen "DeferredCertificate.hs"
+    typechecks deferred
+    expectRejection deferred [(deferred ++ ":", "unsupported construction compiler options: deferred errors")]
+    rejectsAt "SplicedDeclaration.hs" [(1, "unsupported executable form: Template Haskell")]
+    rejectsAt "RebindableExpansion.hs" [(13, "unsupported executable expansion")]
+    rejectsAt "ReboundDemand.hs" [(18, "unsupported executable expansion")]
+    rejectsAt "SizedDemandOtherInput.hs" [(16, sized)]
+    rejectsAt "SizedDemandEscape.hs" [(8, sized)]
+    rejects "SizedDemandDead.hs" [(17, eval1)]
+    rejectsAt "DatatypeGeneratorWrongRole.hs" [(11, sized)]
+    rejectsDespiteImport "DatatypeGeneratorEscape.hs" 7 "DatatypeGeneratorControl.hs" 20 sized
+    rejects "DatatypeGeneratorDead.hs" [(18, eval1)]
+    rejectsAt "DemandDerivingEscape.hs" [(8, demandEq), (11, demandEq)]
+    rejectsAt "DemandManualInstance.hs" [(15, demandEq)]
+    rejectsAt "DemandProtectedDeriving.hs" [(13, protectedEq)]
+    rejectsAt "SumGeneratorMissing.hs" [(15, oneof)]
+    rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 23 oneof
+    rejects "SumGeneratorDead.hs" [(16, eval1)]
+    rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
+    rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
+    rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
+    rejectsAt "ForallClosureChanged.hs" [(10, view "preserve"), (13, view "preserve")]
+    rejects "ConstraintWrapperEscape.hs" [(11, tval)]
+    rejectsIn "ConstraintWrapperEscape.hs" "DemandControl.hs" [(16, forbidden tval)]
+    rejects "ConstraintWrapperAltered.hs" [(16, tval)]
+    rejects "ConstraintWrapperWrongProtocol.hs" [(17, tval)]
+    rejects "ConstraintWrapperDead.hs" [(15, eval1)]
     rejects "Construction.hs" [(21, "Memorist.Data.Interface.Data.abstract"), (21, "Memorist.Base.Thunk.tval")]
-    rejectsBecause "MethodControl.hs" ["MethodControl.hs:19:", "unapproved selected method GHC.Internal.Base.>>=", "generic dictionaries confer no permission"]
+    rejectsAt "MethodControl.hs" [(19, carrier ">>=" ++ "; generic dictionaries confer no permission")]
     rejects "DemandControl.hs" [(16, "Memorist.Base.Thunk.tval"), (19, "Memorist.Base.Thunk.tval")]
-    rejectsBecause "SizedDemandControl.hs"
-        ["unapproved selected method Memorist.Data.Interface.Demand.$dmusage", "runtime observation/accounting methods have no construction permission"]
+    rejectsAt "SizedDemandControl.hs"
+        [(8, selected "Memorist.Data.Interface.Demand.$dmusage: runtime observation/accounting methods have no construction permission")]
     rejects "DatatypeGeneratorControl.hs"
         [(12, "Memorist.Data.Interface.Demand.fullDemand"), (13, "Memorist.Data.Interface.Demand.usage"),
          (13, "Memorist.Base.Thunk.union"), (13, "Memorist.Base.Thunk.empty")]
-    rejectsBecause "DemandDerivingControl.hs"
-        ["unapproved runtime operation Memorist.Data.Interface.Demand.usage", "demand-data methods have no observation exemption"]
+    rejectsAt "DemandDerivingControl.hs" [(12, forbidden "Memorist.Data.Interface.Demand.usage"), (14, demandEq)]
     rejects "SumGeneratorControl.hs"
         [(15, "Memorist.Base.Thunk.empty"), (16, "Memorist.Data.Interface.Demand.usage"), (16, "Memorist.Base.Thunk.union")]
     rejects "ConstraintWrapperControl.hs"
@@ -216,6 +216,31 @@ checkGeneratedConstructionSpecimens = do
     putStrLn "PASS: generated-construction / closed construction grammar, concrete selected methods, complete home dependencies and checked structural views / no observation or generic-dictionary exemption / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
+    tval = "Memorist.Base.Thunk.tval"
+    eval1 = "Memorist.Base.Core.eval1"
+    forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
+    external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
+    selected op = "unapproved selected method " ++ op
+    carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
+    protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
+    demandEq = selected "GHC.Classes.==: demand-data methods have no observation exemption"
+    view op = "unchecked structural view use/escape: " ++ op
+    sized = external "Test.QuickCheck.Gen.sized"
+    oneof = external "Test.QuickCheck.Gen.oneof"
+    -- Mask just the target's operation, keeping its path/line and the genuine
+    -- dependency diagnostic. The matcher must distinguish the two reports.
+    rejectsDespiteImport name line dependency importedLine reason = do
+        output <- specimen name
+        imported <- specimen dependency
+        typechecks output
+        diagnostics <- rejection output
+        let target = (site output line, reason)
+            mask report | matchesDiagnostic target report = fst target ++ " unexpected operation"
+                        | otherwise = report
+        requireDiagnostic diagnostics target
+        requireDiagnostic diagnostics (site imported importedLine, reason)
+        when (matchesDiagnostic target (unlines (map mask (lines diagnostics)))) $
+            fail (output ++ ": dependency masked missing target operation: " ++ reason)
     rejectsCompleteBox = do
         temporary <- getTemporaryDirectory
         directory <- createTempDirectory temporary "construction-box-artifact-"
@@ -227,33 +252,29 @@ checkGeneratedConstructionSpecimens = do
         translated <- translateFile input output
         either (fail . ("Box must translate before the construction verdict: " ++)) pure translated
         typechecks output
-        expectRejection output
-            ["unapproved runtime operation Memorist.Base.Thunk.tval",
-             "unapproved runtime operation Memorist.Data.Interface.Data.abstract",
-             "unapproved runtime operation Memorist.Data.Interface.Demand.usage",
-             "unapproved runtime operation Memorist.Base.Thunk.empty",
-             "unapproved runtime operation Memorist.Base.Thunk.union"]
+        expectAt output output [(308, forbidden tval), (308, forbidden "Memorist.Data.Interface.Data.abstract"),
+            (319, forbidden "Memorist.Data.Interface.Demand.usage"), (319, forbidden "Memorist.Base.Thunk.empty"),
+            (319, forbidden "Memorist.Base.Thunk.union")]
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
-    rejects name expected = do
+    rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
+    rejectsAt name = rejectsIn name name
+    rejectsIn name target expected = do
         output <- specimen name
+        path <- specimen target
         typechecks output
+        expectAt output path expected
+    expectAt output path expected = expectRejection output
+        [(site path line, reason) | (line, reason) <- expected]
+    site path line = path ++ ":" ++ show (line :: Int) ++ ":"
+    expectRejection output expected = rejection output >>= \diagnostics -> mapM_ (requireDiagnostic diagnostics) expected
+    rejection output = do
         result <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
         case result of
-            Left problem -> forM_ expected $ \(line, operation) ->
-                unless (any (\diagnostic -> all (`isInfixOf` diagnostic)
-                        [output ++ ":" ++ show (line :: Int) ++ ":", "unapproved runtime operation " ++ operation,
-                         "is forbidden in generated code"]) (lines (displayException problem))) $
-                    fail (output ++ ": expected forbidden " ++ operation ++ ", got " ++ displayException problem)
-            Right () -> fail (output ++ ": expected forbidden runtime operation, got Right ()")
-    rejectsBecause name expected = do
-        output <- specimen name
-        typechecks output
-        expectRejection output expected
-    expectRejection output expected = do
-        result <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
-        case result of
-            Left problem | all (`isInfixOf` displayException problem) expected -> pure ()
-            _ -> fail (output ++ ": expected " ++ show expected ++ ", got " ++ show result)
+            Left problem -> pure (ioeGetErrorString problem)
+            Right () -> fail (output ++ ": expected rejection, got Right ()")
+    requireDiagnostic diagnostics expected = unless (matchesDiagnostic expected diagnostics) $
+        fail ("missing diagnostic " ++ show expected ++ ", got " ++ diagnostics)
+    matchesDiagnostic (prefix, reason) = any (\line -> prefix `isPrefixOf` line && (": " ++ reason) `isInfixOf` line) . lines
     typechecks output = withSystemTempDirectory "construction-specimen-" $ \objects -> do
         (status, out, err) <- readProcessWithExitCode "ghc"
             ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
