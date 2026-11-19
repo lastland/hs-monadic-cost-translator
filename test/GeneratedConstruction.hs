@@ -9,6 +9,7 @@ import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings)
+import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
@@ -81,14 +82,15 @@ checkGeneratedConstruction output = do
             representations = homeReprs rt checkedPrograms
         qcResult <- quickCheckResult
         qc <- quickCheckRoles qcResult checkedModules
-        let uses = quickCheckUses qcResult programs
+        let uses = quickCheckUses qcResult
             locals = localBindings qc checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt qc locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
             let (syntaxProblems, sites) = checkSyntax rt qc locals uses homes methods viewNames views viewCalls checked
             evidence <- collectEvidence rt qc locals representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
-        pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
+        pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
+            checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 
 checkGeneratedConstructionSpecimens :: IO ()
@@ -99,6 +101,12 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
+    checksOperandPropertyCall
+    mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
+        [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
+         (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
+         (27, qcValue "OperandEquations.pairAlias")]
+    accepts "OperandIgnored.hs"
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]
     mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"
@@ -290,6 +298,15 @@ checkGeneratedConstructionSpecimens = do
         -- Isolate argument forcing from the strict fields normally implied by Strict.
         check "Strict" "Strict, NoStrictData"
         check "StrictData" "StrictData"
+    checksOperandPropertyCall = do
+        output <- specimen "OperandPropertyCall.hs"
+        typechecks output
+        diagnostics <- rejection output
+        reports <- siteReports output diagnostics
+        -- Only the ordinary callee is at fault; the same property observes a
+        -- thunk and constructs its generator on the very same source line.
+        unless (length reports == 1 && hasSite (12, qcValue "OperandPropertyCall.strict") reports) $
+            fail (output ++ ": expected only the ordinary callee's operand diagnostic, got " ++ diagnostics)
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"

@@ -3,23 +3,18 @@
 module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
-import ConstructionAst (allBindings, collectAst, typedVariable)
+import ConstructionAst (collectAst, typedVariable)
 import ConstructionRuntime (resolveType)
-import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
-import qualified GHC.Core as Core
-import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (getTyVar_maybe, isPredTy, splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
+import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Id.Make (seqId)
 import GHC.Types.SrcLoc (getBufSpan)
-import GHC.Types.Var (isId)
-import GHC.Types.Var.Set (elemVarSet)
 
 quickCheckPackage :: String
 quickCheckPackage = "QuickCheck"
@@ -39,10 +34,9 @@ data QuickCheckUses = QuickCheckUses
 
 -- The renamed walk queries these typed operations only in ordinary bodies.
 -- A plain binder is inert; an explicit bang is a force even on a wildcard.
-quickCheckUses :: (Type -> Bool) -> [Core.CoreProgram] -> TypecheckedModule -> QuickCheckUses
-quickCheckUses result programs = inModule
+quickCheckUses :: (Type -> Bool) -> TypecheckedModule -> QuickCheckUses
+quickCheckUses result = inModule
   where
-    slots = usedGenericArguments programs
     inModule checked = QuickCheckUses used forced
       where
         source = tm_typechecked_source checked
@@ -58,12 +52,10 @@ quickCheckUses result programs = inModule
         site expression = do
             key@(_, name) <- variableSite expression
             let ty = lhsExprType expression
-                positions | name == getName seqId = [0 | Set.notMember key applied]
-                          | otherwise = Map.findWithDefault [] name slots
-                args = map scaledThing (fst (splitFunTys (snd (splitForAllTyVars ty))))
-                specialized = or [i `elem` positions && firstOrder arg && result arg
-                    | (i, arg) <- zip [0..] (filter (not . isPredTy) args)]
-            if result ty || (not (null positions) && specialized) then Just key else Nothing
+                bareSeq = name == getName seqId && Set.notMember key applied && case fst (splitFunTys (snd (splitForAllTyVars ty))) of
+                    arg:_ -> let operand = scaledThing arg in null (fst (splitPiTys operand)) && result operand
+                    [] -> False
+            if result ty || bareSeq then Just key else Nothing
     variableSite expression = do
         (location, name) <- typedVariable expression
         (,name) <$> inputSpan location
@@ -72,19 +64,3 @@ quickCheckUses result programs = inModule
     inputSpan location = case getBufSpan location of
         Strict.Just bytes -> Just bytes
         Strict.Nothing -> Nothing
-
-firstOrder :: Type -> Bool
-firstOrder = null . fst . splitPiTys
-
--- At `ordinary = strictAny @(Gen Bool)` there is no source operand either.
--- Only summarize direct first-order home lambdas: which bare type-variable
--- arguments actually occur in the body? No call graph or callback is followed.
-usedGenericArguments :: [Core.CoreProgram] -> Map.Map Name [Int]
-usedGenericArguments programs = Map.fromList
-    [(getName identifier, positions) | (identifier, rhs) <- concatMap allBindings programs,
-        let (binders, body) = Core.collectBinders rhs
-            terms = [v | v <- binders, isId v, not (isPredTy (idType v))]
-            free = exprFreeVars body
-            positions = [i | (i, v) <- zip [0..] terms, Just tv <- [getTyVar_maybe (idType v)],
-                tv `elem` binders, v `elemVarSet` free],
-        all (firstOrder . idType) terms, not (null positions)]
