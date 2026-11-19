@@ -20,6 +20,7 @@ import Cost.Translate.Frontend.Syntax (argumentKey)
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing (nativeSharing, sharingType)
+import Cost.Translate.Sharing.Schema (planNativeSchemas)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
@@ -284,7 +285,11 @@ allocatePayload ::
 allocatePayload emit env name allocation@(_, payload) continuation
     | let used = usedNames continuation
     , localName env name `Set.notMember` used = case payload of
-        Payload OriginalPayload _ _ _ -> pure continuation
+        Payload OriginalPayload _ _ _
+            | Just ty <- Map.lookup name (inferredBindings env)
+            , Right Nothing <-
+                nativeSharing (planNativeSchemas Set.empty []) Map.empty ty ->
+                pure continuation
         _ -> emitPayload emit env payload >> pure continuation
     | otherwise = allocateUsedPayload emit env name allocation continuation
 
