@@ -22,3 +22,6 @@ relay pair = let pass = forcePair in pass pair
 grow :: Bool -> (a, Bool) -> Bool
 grow True pair = grow False (Just pair, True)
 grow False pair = ignoreField pair
+
+pairAlias :: (a, Bool) -> M.MemoristM Bool
+(pairAlias) = forcePair
