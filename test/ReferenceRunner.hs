@@ -116,8 +116,8 @@ checkGeneratedFunctionLifecycle environment = do
 checkGeneratedConstructionLifecycle :: ReferenceEnvironment -> IO ()
 checkGeneratedConstructionLifecycle environment = do
     checkPublicationGuard environment "construction" ("generated-construction" </> "ReasoningPublication.hs")
-        ["Generated.hs:8:", "reasoning-only operation Memorist.Base.Core.value",
-         "reasoning-only operation Memorist.Base.Core.eval1", "is forbidden in generated code"]
+        ["Generated.hs:8:", "unapproved runtime operation Memorist.Base.Core.value",
+         "unapproved runtime operation Memorist.Base.Core.eval1", "is forbidden in generated code"]
     putStrLn "PASS: generated-construction / ordinary fixture lifecycle rejects behavior-preserving reasoning operations before caller compilation"
 
 checkPublicationGuard :: ReferenceEnvironment -> String -> FilePath -> [String] -> IO ()

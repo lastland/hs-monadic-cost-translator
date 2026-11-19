@@ -5,7 +5,7 @@ import Control.Monad (forM, forM_, unless)
 import Data.Data (Data, cast, gmapQ)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
-import Data.Maybe (fromMaybe, isJust, maybeToList)
+import Data.Maybe (isJust, maybeToList)
 import GHC
     ( AmbiguousFieldOcc(..), FieldOcc(..), GhcRn, GhcTc, HsExpr(..), HsFieldBind(..)
     , HsMatchContext(..), Id, LIdP, LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan, Type
@@ -16,7 +16,7 @@ import GHC
     , runGhc, setSessionDynFlags, setTargets, tm_renamed_source, tm_typechecked_source, typecheckModule
     , unLoc, ghcLink
     )
-import GHC.Core.ConLike (ConLike(..), conLikeName)
+import GHC.Core.ConLike (ConLike, conLikeName)
 import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
 import GHC.Paths (libdir)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
@@ -41,26 +41,21 @@ checkGeneratedConstruction output = do
         unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
         _ <- setSessionDynFlags configured
             { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
-        forbidden <- concat <$> forM reasoningOperations (\(definingModule, occurrences) -> do
+        forbidden <- concat <$> forM runtimeModuleOperations (\(definingModule, permitted) -> do
             actualModule <- findModule (mkModuleName definingModule) Nothing
             info <- getModuleInfo actualModule >>= maybe
-                (fail ("cannot inspect reasoning operations in " ++ definingModule)) pure
-            let definedHere = [name | name <- modInfoExports info, nameModule_maybe name == Just actualModule]
-                required = fromMaybe (map getOccString definedHere) occurrences
-            forM required $ \occurrence -> case
-                    [name | name <- definedHere, getOccString name == occurrence] of
-                [name] -> pure (name, definingModule ++ "." ++ occurrence)
-                _ -> fail ("cannot resolve reasoning operation " ++ definingModule ++ "." ++ occurrence))
-        coreModule <- findModule (mkModuleName "Memorist.Base.Core") Nothing
-        coreInfo <- getModuleInfo coreModule >>= maybe (fail "cannot inspect Annotated constructor") pure
-        annotatedNames <- mapM lookupName
-            [ name | name <- modInfoExports coreInfo, nameModule_maybe name == Just coreModule
-            , getOccString name == "Annotated" ]
-        -- The type and data constructor share an occurrence string, not a Name.
-        annotatedConstructor <- case
-                [getName constructor | Just (AConLike (RealDataCon constructor)) <- annotatedNames] of
-            [name] -> pure name
-            _ -> fail "cannot resolve Annotated data constructor"
+                (fail ("cannot inspect runtime operations in " ++ definingModule)) pure
+            definitions <- mapM lookupName
+                [name | name <- modInfoExports info, nameModule_maybe name == Just actualModule]
+            -- Inspect value identities, not the same-spelled type constructor.
+            let values = [getName value | Just value@AnId{} <- definitions] ++
+                    [getName value | Just value@AConLike{} <- definitions]
+            forM_ permitted $ \occurrence -> case
+                    [name | name <- values, getOccString name == occurrence] of
+                [_] -> pure ()
+                _ -> fail ("cannot resolve permitted runtime operation " ++ definingModule ++ "." ++ occurrence)
+            pure [(name, definingModule ++ "." ++ getOccString name)
+                 | name <- values, getOccString name `notElem` permitted])
         target <- guessTarget output Nothing Nothing
         setTargets [target]
         graph <- depanal [] False
@@ -79,15 +74,13 @@ checkGeneratedConstruction output = do
                 let references =
                         [(getLocA reference, unLoc reference) | reference <- collectAst group :: [LIdP GhcRn]] ++
                         [(getLocA label, name) | FieldOcc name label <- collectAst group :: [FieldOcc GhcRn]] ++
-                        [(getLocA label, name) | Unambiguous name label <- collectAst group :: [AmbiguousFieldOcc GhcRn]] ++
-                        ambiguousUpdateReferences (tm_typechecked_source checked)
+                         [(getLocA label, name) | Unambiguous name label <- collectAst group :: [AmbiguousFieldOcc GhcRn]] ++
+                         [(getLocA constructor, unLoc constructor) | ConPat _ constructor _ <- collectAst group :: [Pat GhcRn]] ++
+                         ambiguousUpdateReferences (tm_typechecked_source checked)
                     violations =
-                        [(location, operation) | (location, name) <- references, Just operation <- [lookup name forbidden]] ++
-                        [(getLocA constructor, "Memorist.Base.Core.Annotated")
-                        | ConPat _ constructor _ <- collectAst group :: [Pat GhcRn]
-                        , unLoc constructor == annotatedConstructor]
+                        [(location, operation) | (location, name) <- references, Just operation <- [lookup name forbidden]]
                 pure
-                    [ showSDocUnsafe (ppr location) ++ ": reasoning-only operation " ++
+                    [ showSDocUnsafe (ppr location) ++ ": unapproved runtime operation " ++
                       operation ++ " is forbidden in generated code (" ++ output ++ ")"
                     | (location, operation) <- violations
                     ]
@@ -117,14 +110,13 @@ updateConstructors (HsCase RecUpd _ matches) =
     ]
 updateConstructors _ = []
 
--- Nothing selects the whole cost-reasoning module, including its property APIs.
--- Thunk operations and legitimate demand-conversion APIs remain legal.
-reasoningOperations :: [(String, Maybe [String])]
-reasoningOperations =
-    [("Memorist.Base.Core", Just
-        ["eval", "eval1", "value", "annot", "costAnnot", "usageAnnot", "runM", "runMMBT", "runMBT", "runAnnotT"])
-    ,("Memorist.Base.ANT", Just ["runMT"])
-    ,("Memorist.Infer.Infer", Nothing)]
+-- The construction interface is closed: a newly exported value is not permitted
+-- merely because the old evaluator blacklist did not anticipate it.
+runtimeModuleOperations :: [(String, [String])]
+runtimeModuleOperations =
+    [("Memorist.Base.Core", ["lazy", "force", "tick"])
+    ,("Memorist.Base.ANT", [])
+    ,("Memorist.Infer.Infer", [])]
 
 collectAst :: (Data a, Data b) => b -> [a]
 collectAst value
@@ -139,6 +131,7 @@ collectAst value
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
+    rejects "AnnotatedConstruction.hs" [(6, "Memorist.Base.Core.Annotated")]
     rejects "QualifiedAlias.hs" [(4, "Memorist.Base.Core.value")]
     rejects "Unqualified.hs" [(7, "Memorist.Base.Core.eval1")]
     rejects "LetWrapper.hs" [(6, "Memorist.Base.Core.value")]
@@ -163,7 +156,7 @@ checkGeneratedConstructionSpecimens = do
         ,(13, "Memorist.Base.Core.Annotated"), (16, "Memorist.Base.Core.Annotated")]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs"]
-    putStrLn "PASS: generated-construction / resolved reasoning references, record updates and Annotated patterns rejected, including unused helpers / user identities, type mentions, construction and thunk conversions accepted"
+    putStrLn "PASS: generated-construction / closed Core construction operations, reasoning references, record updates and Annotated patterns rejected, including unused helpers / user identities, type mentions, permitted construction and thunk conversions accepted"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
     accepts name = specimen name >>= checkGeneratedConstruction
@@ -173,7 +166,7 @@ checkGeneratedConstructionSpecimens = do
         case result of
             Left problem -> forM_ expected $ \(line, operation) ->
                 unless (any (\diagnostic -> all (`isInfixOf` diagnostic)
-                        [output ++ ":" ++ show (line :: Int) ++ ":", "reasoning-only operation " ++ operation,
+                        [output ++ ":" ++ show (line :: Int) ++ ":", "unapproved runtime operation " ++ operation,
                          "is forbidden in generated code"]) (lines (displayException problem))) $
                     fail (output ++ ": expected forbidden " ++ operation ++ ", got " ++ displayException problem)
-            Right () -> fail (output ++ ": expected forbidden reasoning operation, got Right ()")
+            Right () -> fail (output ++ ": expected forbidden runtime operation, got Right ()")

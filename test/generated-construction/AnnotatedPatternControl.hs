@@ -19,6 +19,3 @@ wildcardPattern (Annotated {..}) = value
 
 runtimeType :: M.Annotated Int -> M.Annotated Int
 runtimeType = id
-
-construct :: a -> M.Annot -> M.Annotated a
-construct = M.Annotated
