@@ -94,13 +94,13 @@ viewSupport runtime' qc locals homes checkedPrograms = do
             let owner = ms_mod (pm_mod_summary (tm_parsed_module m))
                 support = [(getLocA n, unLoc n) | FunBind _ n _ <- collectAst group :: [HsBind GhcRn], unLoc n `elem` helpers]
                 callsites = [e | e <- collectAst group :: [LHsExpr GhcRn], sourceRoot policy homes e]
-                typed = collectAst (tm_typechecked_source m) :: [LHsExpr GhcTc]
+                typed = atSourceSpan [(getLocA e, e) | e <- collectAst (tm_typechecked_source m) :: [LHsExpr GhcTc]]
             session <- getSession
             (_, result) <- liftIO $ initDs session (fst (tm_internals_ m)) $
-                mapM (\candidate -> mapM dsLExpr [e | e <- typed, getLocA e == getLocA candidate]) callsites
+                mapM (mapM dsLExpr . typed . getLocA) callsites
             let calls = Set.fromList [bytes | (candidate, expressions) <- zip callsites (fromMaybe [] result),
-                    Strict.Just bytes <- [getBufSpan (getLocA candidate)],
-                    any (validRoot policy . typeLambdaBody . administrative) expressions]
+                    any (validRoot policy . typeLambdaBody . administrative) expressions,
+                    Strict.Just bytes <- [getBufSpan (getLocA candidate)]]
             pure (owner, (support, calls))
     let problems = concat [walkBinding qc policy (C.NonRec v rhs) | program <- programs,
             (v, rhs) <- ordinaryCoreBindings locals qc (C.flattenBinds program)]

@@ -1,12 +1,14 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, maybeToList)
 import GHC
 import qualified GHC.Core as C
 import GHC.Core.ConLike (ConLike)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
+import GHC.Types.SrcLoc (getBufSpan, srcSpanToRealSrcSpan)
 import GHC.Utils.Outputable (Outputable, ppr, showSDocUnsafe)
 
 collectAst :: (Data a, Data b) => b -> [a]
@@ -20,6 +22,14 @@ children walk value
     | isJust (cast value :: Maybe HsWrapper) = []
     | isJust (cast value :: Maybe TcEvBinds) = []
     | otherwise = gmapQ walk value
+
+-- Index one module once. Keep every candidate in source order: GHC can
+-- retain several typed expressions at one token, with different wrappers.
+atSourceSpan :: [(SrcSpan, a)] -> SrcSpan -> [a]
+atSourceSpan entries = \at -> [value | (location, value) <- Map.findWithDefault [] (key at) index, location == at]
+  where
+    key at = (srcSpanToRealSrcSpan at, getBufSpan at)
+    index = Map.fromListWith (++) [(key at, [entry]) | entry@(at, _) <- reverse entries]
 
 -- Visit each binding immediately before the let bindings in its RHS.
 allBindings :: C.CoreProgram -> [(Id, C.CoreExpr)]

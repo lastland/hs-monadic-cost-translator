@@ -86,18 +86,20 @@ collectEvidence rt qc locals homes program support checked sourceSites = do
     session <- getSession
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
-        typed = collectAst (tm_typechecked_source checked) :: [LHsExpr GhcTc]
+        typed = atSourceSpan [(at, (name, e)) | e <- collectAst (tm_typechecked_source checked),
+            Just (at, name) <- [typedVariable e]]
         sites = [(at, name) | MethodAt at name <- sourceSites]
         patterns = [at | PatternAt at <- sourceSites]
-        typedPatterns = [(getLocA pat, b) | b@(L _ PatBind{pat_lhs = pat}) <- collectAst (tm_typechecked_source checked) :: [LHsBind GhcTc]]
+        typedPatterns = atSourceSpan [(getLocA pat, b) | b@(L _ PatBind{pat_lhs = pat}) <-
+            collectAst (tm_typechecked_source checked) :: [LHsBind GhcTc]]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
-        expressions <- mapM (\site -> mapM dsLExpr
-            [expression | expression <- typed, typedVariable expression == Just site]) sites
+        expressions <- mapM (\(at, name) -> mapM dsLExpr
+            [e | (actual, e) <- typed at, actual == name]) sites
         -- A pattern's named projections may only refer to an anonymous shared
         -- RHS. Desugar the actual local declaration, including guards and where.
-        groups <- forM patterns $ \at -> case [b | (location, b) <- typedPatterns, location == at] of
+        groups <- forM patterns $ \at -> case typedPatterns at of
             [b] -> Just . snd <$> dsLHsBinds (unitBag b)
             _ -> pure Nothing
         fams <- dsGetFamInstEnvs
