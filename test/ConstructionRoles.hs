@@ -1,19 +1,22 @@
 -- | Identify declaration roles in the typechecked home graph.
 module ConstructionRoles
-    ( QuickCheck, quickCheckRoles, isQuickCheckBinding
+    ( QuickCheck, quickCheckRoles, isQuickCheckBinding, quickCheckBody
     , supportCoreNames, homeDemandTypes
     ) where
 
 import ConstructionAst
 import ConstructionRuntime
 import Data.List (nub)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.FamInstEnv (FamInst(..))
 import GHC.Core.Type (splitPiTys, splitTyConApp_maybe)
 import GHC.Data.FastString (fsLit)
+import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
+import GHC.Types.SrcLoc (getBufSpan)
 
 -- Only the result after the binders counts: Gen in an argument, or inside
 -- MemoristM, does not turn a translated computation into a generator.
@@ -38,6 +41,22 @@ quickCheckRoles modules = do
     let ids = [v | Just (AnId v) <- things] ++ concatMap locals modules
     pure (QuickCheck (Set.fromList [getName v | v <- ids,
         Just (tc, _) <- [splitTyConApp_maybe (snd (splitPiTys (idType v)))], tc `elem` constructors]))
+
+-- One selector can have both a Gen-valued implementation and an ordinary one.
+-- Match the implementation at its binder token in this module's input buffer;
+-- never grant uses of the general selector the role of a particular instance.
+quickCheckBody :: QuickCheck -> TypecheckedModule -> HsBind GhcRn -> Bool
+quickCheckBody qc checked = exempt
+  where
+    typed = Map.fromListWith (&&)
+        [((offset, getOccName v), isQuickCheckBinding qc v)
+        | FunBind _ n _ <- collectAst (tm_typechecked_source checked) :: [HsBind GhcTc],
+          Strict.Just offset <- [getBufSpan (getLocA n)], let v = unLoc n]
+    exempt binding
+        | Just n <- bindingName binding, isQuickCheckBinding qc n = True
+        | FunBind _ n _ <- binding, Strict.Just offset <- getBufSpan (getLocA n) =
+            Map.findWithDefault False (offset, getOccName (unLoc n)) typed
+        | otherwise = False
 
 -- These facts only reject executable Eq/Show/etc. uses on demand data. An
 -- actual associated type equation is not authority to observe a thunk.

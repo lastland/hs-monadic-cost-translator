@@ -21,7 +21,7 @@ import GHC
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
-    , runGhc, setSessionDynFlags, setTargets, tm_renamed_source, tm_typechecked_source, typecheckModule
+    , runGhc, setSessionDynFlags, setTargets, tm_typechecked_source, typecheckModule
     , unLoc, ghcLink
     )
 import GHC.Core.ConLike (conLikeName)
@@ -85,13 +85,10 @@ checkGeneratedConstruction output = do
         qc <- quickCheckRoles checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-          case tm_renamed_source checked of
-            Just (group, _, _, _, _) -> do
-                let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
-                    (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls updates group
-                evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
-                pure (syntaxProblems, evidence)
-            Nothing -> fail (output ++ ": GHC did not retain renamed source")
+            let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
+                (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls updates checked
+            evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
+            pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 

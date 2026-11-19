@@ -3,7 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
-import ConstructionRoles (QuickCheck, isQuickCheckBinding)
+import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
 import Data.Data (Data, cast)
 import Data.List (nub)
@@ -52,9 +52,12 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc homes methods restricted views viewCalls updates = walk noSrcSpan
+checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc homes methods restricted views viewCalls updates checked = case tm_renamed_source checked of
+    Just (group, _, _, _, _) -> walk noSrcSpan group
+    Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
+    exempt = quickCheckBody qc checked
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
     expansionProblems value = ([unsupported expression
@@ -68,7 +71,7 @@ checkSyntax rt qc homes methods restricted views viewCalls updates = walk noSrcS
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, Just name <- bindingName binding, isQuickCheckBinding qc name = ([], [])
+        | Just binding <- cast value, exempt binding = ([], [])
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
              else walk (getLocA name) matches
