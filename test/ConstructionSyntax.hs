@@ -11,6 +11,7 @@ import Data.Maybe (fromMaybe)
 import GHC
 import GHC.Types.Id.Make (rightSectionName)
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
+import GHC.Types.Name.Set (NameSet)
 
 -- Source and selected-evidence certificates require ordinary, successful GHC
 -- checking of the same source. Run this for the entire graph before loading it.
@@ -61,6 +62,9 @@ checkSyntax rt qc homes methods restricted views viewCalls updates = walk noSrcS
     unsupported expression = pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
     walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
     walk location value
+        -- GHC caches a declaration's free variables on its renamed node. The
+        -- actual uses are inside the method bodies, where their roles are known.
+        | Just (_ :: NameSet) <- cast value = ([], [])
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
