@@ -239,6 +239,11 @@ checkGeneratedConstructionSpecimens = do
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
     rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
+    accepts "DefaultLabels.hs"
+    mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs"
+        [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels"),
+         (23, unknown "DefaultLabels.$dmlabels")]
+    rejectsAt "ErasedDataDefault.hs" [(9, forbidden tval), (11, unknown "ErasedDataDefault.$dmmarks")]
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
     rejectsAt "ErasedHomeMethod.hs" [(10, selected "QuickCheckRoles.make: unknown executable method/default dependency")]
@@ -284,6 +289,7 @@ checkGeneratedConstructionSpecimens = do
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
     qcValue name = "QuickCheck value used outside a generator or property: " ++ name
     selected op = "unapproved selected method " ++ op
+    unknown op = selected (op ++ ": unknown executable method/default dependency")
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")

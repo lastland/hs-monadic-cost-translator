@@ -165,6 +165,7 @@ test-suite cost-translate-test
                      ConstructionHomeRepr
                      ConstructionLocals
                      ConstructionDictionary
+                     ConstructionDefaults
                      ConstructionEvidence
                      ConstructionRoles
                      ConstructionQuickCheckUses

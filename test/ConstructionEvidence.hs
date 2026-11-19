@@ -4,6 +4,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 
 import ConstructionDictionary
 import ConstructionAst
+import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -26,7 +27,7 @@ import GHC.Data.Bag (unitBag)
 import GHC.Data.OrdList (fromOL)
 import GHC.HsToCore.Binds (dsLHsBinds, dsTcEvBinds, dsTopLHsBinds)
 import GHC.HsToCore.Expr (dsLExpr)
-import GHC.HsToCore.Monad (initDs)
+import GHC.HsToCore.Monad (dsGetFamInstEnvs, initDs)
 import GHC.Tc.Types (tcg_ev_binds, tcg_tcs)
 import GHC.Tc.Types.Evidence (TcEvBinds(..))
 import GHC.Types.Basic (Boxity(Boxed))
@@ -70,7 +71,7 @@ methodNames rt modules = do
     pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
-data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String
+data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
 
 collectEvidence :: Runtime -> QuickCheck -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
 collectEvidence rt qc locals homes program support checked sourceSites = do
@@ -99,15 +100,17 @@ collectEvidence rt qc locals homes program support checked sourceSites = do
         groups <- forM patterns $ \at -> case [b | (location, b) <- typedPatterns, location == at] of
             [b] -> Just . snd <$> dsLHsBinds (unitBag b)
             _ -> pure Nothing
-        pure (dictionaries, raw, expressions, groups)
+        fams <- dsGetFamInstEnvs
+        pure (dictionaries, (fams, raw), expressions, groups)
     let retainedSites = case result of
-            Just (dictionaries, raw, expressions, groups) ->
+            Just (dictionaries, (fams, raw), expressions, groups) ->
                 let rawBindings = allBindings (C.Rec raw : dictionaries)
-                    env = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]) environment
+                    rawEnv = Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]
+                    env = Map.union rawEnv environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawSites = bindingSites env allGivens raw
+                    rawSites = DefaultFacts (homeDefaults checked program fams rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
@@ -130,23 +133,26 @@ collectEvidence rt qc locals homes program support checked sourceSites = do
 checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [Site] -> [String]
 checkEvidence rt homes demands sites = concatMap check sites
   where
+    inert = selectsDataDefault [facts | DefaultFacts facts <- sites]
     bodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
     observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
+    check (DefaultFacts _) = []
     check (MissingCertificate why) = [why]
-    check (Site location field u) = map ((location ++ ": ") ++) (checkUse rt homes demands bodies [] field u)
+    check (Site location field u) = map ((location ++ ": ") ++) (checkUse rt homes demands bodies inert [] field u)
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: Runtime -> HomeReprs -> [TyCon] -> Map.Map Name [Use] -> [Active] -> Maybe Name -> Use -> [String]
-checkUse rt homes demands bodies stack field (Use name expectedClass family types dictionaries) =
+checkUse :: Runtime -> HomeReprs -> [TyCon] -> Map.Map Name [Use] -> (Use -> Bool) -> [Active] -> Maybe Name -> Use -> [String]
+checkUse rt homes demands bodies inert stack field use@(Use name expectedClass family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
     verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
+            | inert use = Nothing
             | family == UnknownMethod = Just "unknown executable method/default dependency"
             | otherwise = case (types, dictionaries) of
         (ty : _, evidence : _) -> case family of
@@ -225,7 +231,7 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
                 Just obligations <- Map.lookup (getName (carrierBinder method)) bodies ->
             let active = Active (implementation method) ev carrier
             in any (identical active) stack || (all (progress active) stack &&
-                all (null . checkUse rt homes demands bodies (active : stack) field . apply) obligations)
+                all (null . checkUse rt homes demands bodies inert (active : stack) field . apply) obligations)
         _ -> False
     identical (Active method ev carrier) (Active other previous oldCarrier) =
         method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
