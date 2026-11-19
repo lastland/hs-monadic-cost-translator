@@ -16,7 +16,8 @@ import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing
-    ( Specialization
+    ( AllocationScope (..)
+    , Specialization
     , constrainedVariables
     , planSpecializations
     )
@@ -27,6 +28,7 @@ import Data.Set qualified as Set
 import GHC
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Basic (RecFlag (..))
+import GHC.Types.Name (getOccString)
 
 moduleEnvironment ::
     Set.Set Name ->
@@ -34,7 +36,7 @@ moduleEnvironment ::
     Map.Map Typed.SourceKey String ->
     Map.Map Name Type ->
     Map.Map Typed.SourceKey Type ->
-    Map.Map Name ([TyVar], [Type]) ->
+    Map.Map Name AllocationScope ->
     HsGroup GhcRn ->
     (Env, Map.Map Name [Specialization])
 moduleEnvironment strict datatypes literals types hints checkedScopes group =
@@ -111,7 +113,7 @@ specializedLocals ::
     [TyCon] ->
     Map.Map Name Type ->
     Map.Map Typed.SourceKey Type ->
-    Map.Map Name ([TyVar], [Type]) ->
+    Map.Map Name AllocationScope ->
     Set.Set Name ->
     HsGroup GhcRn ->
     Map.Map Name [Specialization]
@@ -139,22 +141,35 @@ specializedLocals datatypes types hints checkedScopes topNames group =
                 [ (unLoc name, [useType expression])
                 | expression@(L _ (HsVar _ name)) <- sourceExpressions
                 ]
-        allocationEvidence =
-            Map.fromList $
-                allocationScopes checkedScopes (Just ([], [])) group
+        allocationEvidence = Map.fromList (allocationScopes owners root group)
+        root = Just (AllocationScope [] [] (Just []))
+        owners = Map.mapWithKey named checkedScopes
+        signatures = Set.union topNames (Set.fromList signed)
+        signed =
+            [unLoc n | TypeSig _ ns _ <- collect group :: [Sig GhcRn], n <- ns]
+        named owner scope
+            | null (ownerVariables scope) = scope {namedContext = Just []}
+            | owner `Set.member` signatures = scope
+            | otherwise = scope {namedContext = Nothing}
 
 allocationScopes ::
     (Data a) =>
-    Map.Map Name ([TyVar], [Type]) ->
-    Maybe ([TyVar], [Type]) ->
+    Map.Map Name AllocationScope ->
+    Maybe AllocationScope ->
     a ->
-    [(Name, Maybe ([TyVar], [Type]))]
+    [(Name, Maybe AllocationScope)]
 allocationScopes known scope value = case source of
     Just (L _ (FunBind _ name matches)) ->
         let nested = do
-                (vars, givens) <- scope
-                (scopedVariables, scopedGivens) <- Map.lookup (unLoc name) known
-                pure (vars ++ scopedVariables, givens ++ scopedGivens)
+                AllocationScope vars givens outer <- scope
+                AllocationScope vs ps inner <- Map.lookup (unLoc name) known
+                let variables = vars ++ vs
+                    names = Set.fromList (map getOccString variables)
+                    visible
+                        | Set.size names == length variables =
+                            (++) <$> outer <*> inner
+                        | otherwise = Nothing
+                pure (AllocationScope variables (givens ++ ps) visible)
          in (unLoc name, scope)
                 : allocationScopes known nested matches
     _ -> concat (gmapQ (allocationScopes known scope) value)

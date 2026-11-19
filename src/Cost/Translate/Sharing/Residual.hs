@@ -1,5 +1,6 @@
 module Cost.Translate.Sharing.Residual
-    ( Specialization (..)
+    ( AllocationScope (..)
+    , Specialization (..)
     , planSpecializations
     ) where
 
@@ -9,16 +10,16 @@ import Cost.Translate.Sharing.Schema (planNativeSchemas)
 import Cost.Translate.Sharing.Specialization
     ( closedScalar
     , constrainedVariables
+    , scalarClasses
     , specializedSharing
-    , targetDictionary
     )
 import Data.Either (fromRight)
 import Data.List (nubBy)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Set qualified as Set
-import GHC (TyCon, TyVar, Type, getName)
-import GHC.Builtin.Names (numClassName)
+import GHC (Name, TyCon, TyVar, Type, getName)
+import GHC.Builtin.Names (eqClassName, numClassName, ordClassName)
 import GHC.Builtin.Types (intTy, integerTy, liftedTypeKind)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
@@ -46,9 +47,15 @@ data Specialization = Specialization
     , useTypes :: [Type]
     }
 
+data AllocationScope = AllocationScope
+    { ownerVariables :: [TyVar]
+    , checkedPredicates :: [Type]
+    , namedContext :: Maybe [Type]
+    }
+
 planSpecializations ::
     [TyCon] ->
-    Maybe ([TyVar], [Type]) ->
+    Maybe AllocationScope ->
     Type ->
     [Maybe Type] ->
     Maybe [Specialization]
@@ -56,19 +63,19 @@ planSpecializations datatypes evidence ty uses =
     case specializedSharing datatypes variables givens ty uses of
         Just types -> Just [Specialization value [value] | value <- types]
         Nothing -> do
-            (scope, predicates) <- evidence
-            residualSharing datatypes scope predicates ty uses
+            scope <- evidence
+            residualSharing datatypes scope ty uses
     where
-        (variables, givens) = fromMaybe ([], []) evidence
+        AllocationScope variables givens _ =
+            fromMaybe (AllocationScope [] [] Nothing) evidence
 
 residualSharing ::
     [TyCon] ->
-    [TyVar] ->
-    [Type] ->
+    AllocationScope ->
     Type ->
     [Maybe Type] ->
     Maybe [Specialization]
-residualSharing datatypes variables givens ty uses = do
+residualSharing datatypes evidence ty uses = do
     guard (not (null uses) && not (null constrained) && not (null residual))
     guard (all ((`eqType` liftedTypeKind) . tyVarKind) constrained)
     guard (all (isPredTy . scaledThing) arguments && available ty)
@@ -84,7 +91,7 @@ residualSharing datatypes variables givens ty uses = do
         constrained = constrainedVariables ty
         residual = filter ((`notElem` constrained) . binderVar) binders
         (arguments, result) = splitFunTys body
-        scope = tyCoVarsOfTypes (map mkTyVarTy variables)
+        scope = tyCoVarsOfTypes (map mkTyVarTy (ownerVariables evidence))
         schemas = planNativeSchemas Set.empty datatypes
         available =
             all (`elemVarSet` scope) . nonDetEltsUniqSet . tyCoVarsOfType
@@ -92,7 +99,7 @@ residualSharing datatypes variables givens ty uses = do
             let instantiate = substTyWith constrained key
                 partial = instantiate (mkForAllTys residual result)
                 predicates = map (instantiate . scaledThing) arguments
-            guard (all (predicateAvailable variables givens) predicates)
+            guard (all (predicateAvailable evidence) predicates)
             guard (not (any (`elemVarSet` tyCoVarsOfType partial) constrained))
             _ <-
                 fromRight Nothing $
@@ -131,22 +138,36 @@ matchUse sigma use = do
                 && substTy substitution (mkTyVarTy v) `eqType` mkTyVarTy v
                 && substTy substitution (tyVarKind v) `eqType` tyVarKind v
 
-predicateAvailable :: [TyVar] -> [Type] -> Type -> Bool
-predicateAvailable variables givens predicate = case parts of
+predicateAvailable :: AllocationScope -> Type -> Bool
+predicateAvailable evidence predicate = case splitTyConApp_maybe predicate of
     Just (constructor, [actual])
-        | closedScalar actual
-        , targetDictionary predicate
-        , any (eqType predicate) givens ->
+        | getName constructor == numClassName
+        , actual `eqType` intTy || actual `eqType` integerTy ->
             True
-        | getName constructor == numClassName ->
-            actual `eqType` intTy
-                || actual `eqType` integerTy
-                || ( maybe False (`elem` variables) (getTyVar_maybe actual)
-                        && any (eqType predicate) givens
-                   )
+        | getName constructor `elem` scalarClasses
+        , closedScalar actual ->
+            given
+        | getName constructor `elem` scalarClasses
+        , Just variable <- getTyVar_maybe actual
+        , variable `elem` ownerVariables evidence
+        , given ->
+            getName constructor == numClassName
+                || maybe
+                    False
+                    (targetContext (getName constructor) actual)
+                    (namedContext evidence)
     _ -> False
     where
-        parts = splitTyConApp_maybe predicate
+        given = any (eqType predicate) (checkedPredicates evidence)
+
+targetContext :: Name -> Type -> [Type] -> Bool
+targetContext cls actual predicates =
+    cls `notElem` comparisons || any suppliesScalar predicates
+    where
+        comparisons = [eqClassName, ordClassName]
+        suppliesScalar p = case splitTyConApp_maybe p of
+            Just (c, [ty]) -> getName c `elem` comparisons && eqType actual ty
+            _ -> False
 
 sameKey :: [Type] -> [Type] -> Bool
 sameKey left right =

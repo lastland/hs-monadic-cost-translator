@@ -23,7 +23,7 @@ import GHC.Core.FVs (exprFreeIds)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.Subst (substTy)
-import GHC.Core.Type (isPredTy, mkVisFunTy)
+import GHC.Core.Type (getTyVar_maybe, isPredTy, mkTyVarTy, mkVisFunTy)
 import GHC.Core.Unify (tcMatchTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
@@ -39,6 +39,7 @@ import GHC.Tc.Types.Evidence
     )
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.Id (isDFunId)
+import GHC.Types.Name (getOccString)
 import GHC.Types.SrcLoc (BufSpan)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import GHC.Types.Var (Var, isId)
@@ -202,14 +203,22 @@ functionTypes checked =
                 (mg_res_ty matches)
                 (mg_arg_tys matches)
 
-functionGivens :: FunctionType -> [Type]
+functionGivens :: FunctionType -> ([Type], Maybe [Type])
 functionGivens info = case tcMatchTy body (functionBodyType info) of
     Just substitution ->
-        let givens = map (substTy substitution) predicates
-         in givens ++ checkedPredicates (functionEvidence info)
-    Nothing -> []
+        let instantiate = substTy substitution
+            givens = map instantiate predicates
+            owned = functionVariables info
+            actual = map (getTyVar_maybe . instantiate . mkTyVarTy) formal
+            named =
+                actual == map Just owned
+                    && map getOccString owned == map getOccString formal
+         in ( givens ++ checkedPredicates (functionEvidence info)
+            , if named then Just givens else Nothing
+            )
+    Nothing -> ([], Nothing)
     where
-        (_, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
+        (formal, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
 
 wrapperEvidence :: HsWrapper -> ([Id], [EvBind])
 wrapperEvidence (WpCompose left right) =

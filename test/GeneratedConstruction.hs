@@ -104,7 +104,8 @@ configureArtifact output = do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     checksImplicitForcing
-    checkClosedIntegral
+    checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
+    checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
     accepts "NestedPatternConsumption.hs"
     rejectsAt "NestedPatternOrdinary.hs"
         [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance"),
@@ -432,8 +433,8 @@ checkGeneratedConstructionSpecimens = do
         translated <- translateFile input output
         either (fail . ((label ++ " must translate before artifact inspection: ") ++)) pure translated
         pure (directory, input, output)
-    checkClosedIntegral = do
-        (_, _, output) <- completeArtifact "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
+    checkIntegralContext label fixture = do
+        (_, _, output) <- completeArtifact label fixture
         signature <- runGhc (Just libdir) $ do
             configureArtifact output
             target <- guessTarget output Nothing Nothing
@@ -446,7 +447,7 @@ checkGeneratedConstructionSpecimens = do
         case tcSplitSigmaTy signature of
             ([a], [predicate], _) | Just (cls, [argument]) <- getClassPredTys_maybe predicate,
                 getName cls == integralClassName, getTyVar_maybe argument == Just a ->
-                    putStrLn "PASS: ClosedIntegral / exported viewsM requires only Integral a"
+                    putStrLn ("PASS: " ++ label ++ " / exported viewsM requires only Integral a")
             _ -> fail (output ++ ": exported viewsM must require only Integral a; found " ++ pretty signature)
     rejectsCompleteBox = do
         (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")
