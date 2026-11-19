@@ -252,8 +252,8 @@ checkGeneratedConstructionSpecimens = do
     accepts "NestedQuickCheckControl.hs"
     mixed "NestedOrdinaryLet.hs" [LocalBinding "claim" "draw", LocalBinding "claim" "check"] "NestedOrdinaryLet.hs"
         [(11, carrier "pure"), (12, carrier "pure"), (14, forbidden tval), (15, forbidden tval), (20, forbidden tval)]
-    mixed "LocalImplicitParameter.hs" [TopBinding "law"] "LocalImplicitParameter.hs"
-        [(9, "unsupported executable form: implicit parameter binding"), (16, forbidden tval)]
+    mixed "LocalImplicitParameter.hs" [TopBinding "law", TopBinding "constant"] "LocalImplicitParameter.hs"
+        [(9, forbidden tval), (16, forbidden tval), (19, forbidden tval), (23, carrier "pure"), (26, forbidden tval)]
     mixed "NestedOrdinaryView.hs" [TopBinding "control"] "NestedOrdinaryView.hs" [(11, view "preserve")]
     mixed "NestedOrdinaryPattern.hs" [TopBinding "law"] "NestedOrdinaryPattern.hs"
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]
