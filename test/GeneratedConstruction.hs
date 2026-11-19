@@ -98,8 +98,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
-    mixed "OperandPropertyCall.hs" [TopBinding "strict"] "OperandPropertyCall.hs"
-        [(12, qcValue "OperandPropertyCall.strict")]
+    checksOperandPropertyCall
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
@@ -271,6 +270,15 @@ checkGeneratedConstructionSpecimens = do
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
     charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
+    checksOperandPropertyCall = do
+        output <- specimen "OperandPropertyCall.hs"
+        typechecks output
+        diagnostics <- rejection output
+        reports <- siteReports output diagnostics
+        -- Only the ordinary callee is at fault; the same property observes a
+        -- thunk and constructs its generator on the very same source line.
+        unless (length reports == 1 && hasSite (12, qcValue "OperandPropertyCall.strict") reports) $
+            fail (output ++ ": expected only the ordinary callee's operand diagnostic, got " ++ diagnostics)
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"
