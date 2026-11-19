@@ -20,7 +20,7 @@ import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Reduction (reductionReducedType)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.TyCon (isAlgTyCon, tyConSingleDataCon)
+import GHC.Core.TyCon (isDataTyCon, tyConSingleDataCon)
 import GHC.Core.Type (isPredTy, splitFunTys, splitTyConApp_maybe)
 import GHC.Tc.Types (tcg_tcs)
 import GHC.Types.Basic (DefMethSpec(VanillaDM))
@@ -87,14 +87,16 @@ dataTree e = case C.collectArgs e of
 
 -- Require first-order data at the selected field, not just at the class
 -- signature. One family reduction per path suffices for scalar demand types.
+-- A newtype has no runtime constructor and can represent a function outright.
 firstOrderMethod :: FamInstEnvs -> Type -> Bool
 firstOrderMethod families signature = all (dataTy True) (result : map scaledThing args)
   where
     (args, result) = splitFunTys signature
-    dataTy step ty = case splitTyConApp_maybe ty of
-        Just (tc, ts) | isFamilyTyCon tc -> step && maybe False (dataTy False . reductionReducedType)
-                            (reduceTyFamApp_maybe families Nominal tc ts)
-                      | isAlgTyCon tc && not (isPredTy ty) -> all (dataTy step) ts
+    dataTy canReduceFamily ty = case splitTyConApp_maybe ty of
+        Just (tc, ts)
+            | isFamilyTyCon tc -> canReduceFamily && maybe False (dataTy False . reductionReducedType)
+                    (reduceTyFamApp_maybe families Nominal tc ts)
+            | isDataTyCon tc && not (isPredTy ty) -> all (dataTy canReduceFamily) ts
         _ -> False
 
 selectsDataDefault :: [Defaults] -> Use -> Bool

@@ -126,7 +126,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "ContextReprBad.hs"
         [(8, reprFailure), (11, reprFailure), (14, reprFailure), (19, functorWrapper), (20, forbidden tval),
          (25, reprFailure), (31, selected "GHC.Classes.==: unknown concrete scalar instance"),
-         (40, selected "ContextReprBad.inspect: unknown executable method/default dependency")]
+         (40, unknown "ContextReprBad.inspect")]
     accepts "ParamReprUse.hs"
     rejectsAt "ParamReprBad.hs"
         [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval),
@@ -219,7 +219,7 @@ checkGeneratedConstructionSpecimens = do
         "SumGeneratorMissing.hs" [(9, defaultUsage)]
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
-    rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
+    rejectsAt "SumTagEscape.hs" [(8, unknown "GHC.Magic.dataToTag#")]
     accepts "DefaultLabels.hs"
     mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs"
         [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels"),
@@ -227,7 +227,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "ErasedDataDefault.hs" [(9, forbidden tval), (11, unknown "ErasedDataDefault.$dmmarks")]
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
-    rejectsAt "ErasedHomeMethod.hs" [(10, selected "QuickCheckRoles.make: unknown executable method/default dependency")]
+    rejectsAt "ErasedHomeMethod.hs" [(10, unknown "QuickCheckRoles.make")]
     rejectsAt "ForallClosureChanged.hs" [(10, view "preserve"), (13, view "preserve")]
     rejects "ConstraintWrapperEscape.hs" [(11, tval)]
     rejectsIn "ConstraintWrapperEscape.hs" "DemandControl.hs" [(19, forbidden tval)]
@@ -297,7 +297,7 @@ checkGeneratedConstructionSpecimens = do
              (34, external "Test.QuickCheck.Gen.unGen"), (37, external "GHC.Prim.coerce"),
              (40, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"),
              (44, external "Test.QuickCheck.Arbitrary.arbitrary"), (48, external "Test.QuickCheck.Arbitrary.arbitrary"),
-             (51, selected "QuickCheckRoles.make: unknown executable method/default dependency"),
+             (51, unknown "QuickCheckRoles.make"),
              (54, escape "QuickCheckRoles.choices")]
     checksMixedMakeInstances = do
         local <- specimen "MixedMakeInstances.hs"
