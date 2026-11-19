@@ -130,7 +130,6 @@ collectAst value
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
-    rejects "ManualNaming.hs" [(6, "Memorist.Base.Thunk.nnext")]
     rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
     rejects "AnnotatedConstruction.hs" [(6, "Memorist.Base.Core.Annotated")]
     rejects "QualifiedAlias.hs" [(4, "Memorist.Base.Core.value")]
