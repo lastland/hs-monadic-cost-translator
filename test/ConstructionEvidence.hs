@@ -5,7 +5,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 import ConstructionDictionary
 import ConstructionAst
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, ordinaryCoreBindings)
+import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -22,8 +22,9 @@ import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Utils (exprType)
+import GHC.Data.Bag (unitBag)
 import GHC.Data.OrdList (fromOL)
-import GHC.HsToCore.Binds (dsTcEvBinds, dsTopLHsBinds)
+import GHC.HsToCore.Binds (dsLHsBinds, dsTcEvBinds, dsTopLHsBinds)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types (tcg_ev_binds, tcg_tcs)
@@ -71,8 +72,8 @@ methodNames rt modules = do
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String
 
-collectEvidence :: Runtime -> QuickCheck -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [Site]
-collectEvidence rt qc locals homes program support checked sites = do
+collectEvidence :: Runtime -> QuickCheck -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
+collectEvidence rt qc locals homes program support checked sourceSites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
@@ -85,21 +86,35 @@ collectEvidence rt qc locals homes program support checked sites = do
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
         typed = collectAst (tm_typechecked_source checked) :: [LHsExpr GhcTc]
+        sites = [(at, name) | MethodAt at name <- sourceSites]
+        patterns = [at | PatternAt at <- sourceSites]
+        typedPatterns = [(getLocA pat, b) | b@(L _ PatBind{pat_lhs = pat}) <- collectAst (tm_typechecked_source checked) :: [LHsBind GhcTc]]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
         expressions <- mapM (\site -> mapM dsLExpr
             [expression | expression <- typed, typedVariable expression == Just site]) sites
-        pure (dictionaries, raw, expressions)
+        -- A pattern's named projections may only refer to an anonymous shared
+        -- RHS. Desugar the actual local declaration, including guards and where.
+        groups <- forM patterns $ \at -> case [b | (location, b) <- typedPatterns, location == at] of
+            [b] -> Just . snd <$> dsLHsBinds (unitBag b)
+            _ -> pure Nothing
+        pure (dictionaries, raw, expressions, groups)
     let retainedSites = case result of
-            Just (dictionaries, raw, expressions) ->
+            Just (dictionaries, raw, expressions, groups) ->
                 let rawBindings = allBindings (C.Rec raw : dictionaries)
                     env = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]) environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
                     rawSites = bindingSites env allGivens raw
-                 in rawSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
+                    patternSites = concat [case group of
+                        Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
+                        Just bs ->
+                            let localEnv = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- allBindings [C.Rec bs]]) env
+                            in record at (Right at) (concat [uses qc selected localEnv allGivens rhs | (_, rhs) <- bs])
+                        | (at, group) <- zip patterns groups]
+                in rawSites ++ patternSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates

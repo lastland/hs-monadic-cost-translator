@@ -1,6 +1,6 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
-module ConstructionLocals (Locals, localBindings, nestedSource, ordinaryCoreBindings) where
+module ConstructionLocals (Locals, SourceSite(..), localBindings, nestedSource, ordinaryCoreBindings) where
 
 import ConstructionAst (bindingName, children, collectAst, nestedBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -14,6 +14,8 @@ import GHC.Tc.Utils.TcType (tcSplitNestedSigmaTys)
 import GHC.Types.Name.Set (NameSet)
 
 data Locals = Locals { expressionValues :: Set.Set Name, independentIds :: Set.Set Name }
+
+data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan
 
 -- Stop at each declaration. A mention in a nested shrinker is a use by that
 -- shrinker, not a use by the generator that encloses both of them.
