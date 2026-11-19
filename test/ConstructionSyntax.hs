@@ -3,7 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
-import ConstructionLocals (Locals, SourceSite(..), nestedSource, quickCheckBindings)
+import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -143,8 +143,10 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
       where
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
-    nested location binding = walk location binding `plus`
+    nested location (Declaration binding) = walk location binding `plus`
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
+    nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
+        ([], [ComponentAt (getLocA pat) (getLocA rhs)])
     plus (a, b) (c, d) = (a ++ c, b ++ d)
     -- Matching or assigning a labelled field is not applying its selector.
     -- The constructor, field ownership, and nested pattern/expression still count.

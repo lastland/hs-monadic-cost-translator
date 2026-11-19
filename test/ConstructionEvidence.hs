@@ -6,7 +6,7 @@ import ConstructionDictionary
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings, quickCheckBindings)
+import ConstructionLocals (Locals, SourceSite(..), components, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -25,6 +25,7 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (unitBag)
 import GHC.Data.OrdList (fromOL)
+import qualified GHC.Data.Strict as Strict
 import GHC.HsToCore.Binds (dsLHsBinds, dsTcEvBinds, dsTopLHsBinds)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (dsGetFamInstEnvs, initDs)
@@ -33,6 +34,7 @@ import GHC.Tc.Types.Evidence (TcEvBinds(..))
 import GHC.Types.Basic (Boxity(Boxed))
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
+import GHC.Types.SrcLoc (getBufSpan)
 import GHC.Types.Var (isId)
 
 families :: Runtime -> Map.Map Name Family
@@ -90,8 +92,12 @@ collectEvidence rt locals homes program support checked sourceSites = do
             Just (at, name) <- [typedVariable e]]
         sites = [(at, name) | MethodAt at name <- sourceSites]
         patterns = [at | PatternAt at <- sourceSites]
-        typedPatterns = atSourceSpan [(getLocA pat, b) | b@(L _ PatBind{pat_lhs = pat}) <-
+        fields = [(pat, rhs) | ComponentAt pat rhs <- sourceSites]
+        bindingsByPattern = [(getLocA pat, b) | b@(L _ PatBind{pat_lhs = pat}) <-
             collectAst (tm_typechecked_source checked) :: [LHsBind GhcTc]]
+        typedPatterns = atSourceSpan bindingsByPattern
+        typedFields = Map.fromListWith (++) [(key, [e]) | (_, L _ b) <- bindingsByPattern,
+            Just pairs <- [components b], (p, e) <- pairs, Just key <- [componentKey (getLocA p) (getLocA e)]]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
@@ -102,10 +108,15 @@ collectEvidence rt locals homes program support checked sourceSites = do
         groups <- forM patterns $ \at -> case typedPatterns at of
             [b] -> Just . snd <$> dsLHsBinds (unitBag b)
             _ -> pure Nothing
+        -- An unselected sibling may vanish before even raw Core is built.
+        -- Desugar just the corresponding field, including implicit methods.
+        fieldBodies <- forM fields $ \(pat, rhs) -> case componentKey pat rhs >>= (`Map.lookup` typedFields) of
+            Just [e] -> Just <$> dsLExpr e
+            _ -> pure Nothing
         fams <- dsGetFamInstEnvs
-        pure (dictionaries, (fams, raw), expressions, groups)
+        pure (dictionaries, (fams, raw), expressions, groups, fieldBodies)
     let retainedSites = case result of
-            Just (dictionaries, (fams, raw), expressions, groups) ->
+            Just (dictionaries, (fams, raw), expressions, groups, fieldBodies) ->
                 let rawBindings = allBindings (C.Rec raw : dictionaries)
                     rawEnv = Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]
                     env = Map.union rawEnv environment
@@ -119,7 +130,11 @@ collectEvidence rt locals homes program support checked sourceSites = do
                             let localEnv = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- allBindings [C.Rec bs]]) env
                             in record at (Right at) (concat [uses qc selected localEnv allGivens rhs | (_, rhs) <- bs])
                         | (at, group) <- zip patterns groups]
-                in rawSites ++ patternSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
+                    fieldSites = concat [case field of
+                        Nothing -> [MissingCertificate (pretty rhs ++ ": no retained local pattern component")]
+                        Just e -> record rhs (Right rhs) (uses qc selected env allGivens e)
+                        | ((_, rhs), field) <- zip fields fieldBodies]
+                in rawSites ++ patternSites ++ fieldSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates
@@ -128,6 +143,9 @@ collectEvidence rt locals homes program support checked sourceSites = do
     pure (rootSites ++ retainedSites)
   where
     qc = quickCheckBindings locals
+    componentKey a b = case (getBufSpan a, getBufSpan b) of
+        (Strict.Just p, Strict.Just e) -> Just (p, e)
+        _ -> Nothing
     record location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner) us
       where owner = contextSite homes site
 
