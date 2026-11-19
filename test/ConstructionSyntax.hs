@@ -6,12 +6,17 @@ import ConstructionAst
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
 import Data.Data (Data, cast)
+import Data.Foldable (toList)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import GHC
+import GHC.Core.ConLike (conLikeName)
+import GHC.Types.GREInfo (conLikeName_Name)
 import GHC.Types.Id.Make (rightSectionName)
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
 import GHC.Types.Name.Set (NameSet)
+import GHC.Types.Name.Reader (greName)
+import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 
 -- Source and selected-evidence certificates require ordinary, successful GHC
 -- checking of the same source. Run this for the entire graph before loading it.
@@ -52,12 +57,13 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc homes methods restricted views viewCalls updates checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc homes methods restricted views viewCalls checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     exempt = quickCheckBody qc checked
+    updates = ambiguousUpdateReferences (tm_typechecked_source checked)
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
     expansionProblems value = ([unsupported expression
@@ -138,6 +144,30 @@ checkSyntax rt qc homes methods restricted views viewCalls updates checked = cas
             Just DemandData -> True
             Just ReprMethod -> True
             _ -> False
+
+-- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
+-- Its selected constructor identifies the right parent, not merely a candidate
+-- with the same field spelling. Parent labels are ordered like update fields.
+ambiguousUpdateReferences :: Data a => a -> [(SrcSpan, Name)]
+ambiguousUpdateReferences checked =
+    [ (getLocA label, greName field)
+    | ExpandedThingTc (OrigExpr RecordUpd { rupd_flds = RegularRecUpdFields parents fields }) expanded <- collectAst checked
+    , parent <- toList parents
+    , length fields == length (rnRecUpdLabels parent)
+    , any ((`elem` updateConstructors expanded) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
+    , (binding, field) <- zip fields (toList (rnRecUpdLabels parent))
+    , Ambiguous _ label <- [unLoc (hfbLHS (unLoc binding))]
+    ]
+
+updateConstructors :: HsExpr GhcTc -> [Name]
+updateConstructors (HsLet _ _ body) = updateConstructors (unLoc body)
+updateConstructors (XExpr (WrapExpr (HsWrap _ expression))) = updateConstructors expression
+updateConstructors (HsCase RecUpd _ matches) =
+    [ conLikeName (unLoc constructor)
+    | match <- unLoc (mg_alts matches)
+    , ConPat _ constructor _ <- map unLoc (m_pats (unLoc match))
+    ]
+updateConstructors _ = []
 
 -- These are the pinned compiler's finite section templates, not general
 -- permission to discard an expansion. The operator is the same resolved Name;

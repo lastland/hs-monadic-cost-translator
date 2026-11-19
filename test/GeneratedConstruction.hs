@@ -3,10 +3,9 @@ module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstruc
 import Control.Exception (IOException, try)
 import Control.Monad (forM, unless)
 import Cost.Translate (translateFile)
-import Data.Data (Data)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
-import ConstructionAst (collectAst, pretty)
+import ConstructionAst (pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
@@ -15,30 +14,26 @@ import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GeneratedFunctions (parseHaskellModule)
 import GHC
-    ( AmbiguousFieldOcc(..), ClsInstDecl(..), GhcPs, GhcTc, HsBindLR(FunBind), HsDecl(..), HsExpr(..), HsFieldBind(..)
-    , HsMatchContext(..), HsModule(..), HsType(..), InstDecl(ClsInstD), LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..)
+    ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
+    , HsModule(..), HsType(..), InstDecl(ClsInstD)
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
-    , runGhc, setSessionDynFlags, setTargets, tm_typechecked_source, typecheckModule
+    , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , unLoc, ghcLink
     )
-import GHC.Core.ConLike (conLikeName)
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
-import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
 import GHC.Hs.Type (getLHsInstDeclHead, ignoreParens)
 import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Paths (libdir)
-import GHC.Types.GREInfo (conLikeName_Name)
 import GHC.Types.Name.Occurrence (occNameString)
-import GHC.Types.Name.Reader (greName, rdrNameOcc)
+import GHC.Types.Name.Reader (rdrNameOcc)
 import GHC.Types.SrcLoc
     ( BufPos(..), BufSpan(..), GenLocated(..), RealSrcSpan, SrcSpan(RealSrcSpan)
     , isRealSubspanOf, mkRealSrcLoc, mkRealSrcSpan, noLoc, srcSpanEndCol, srcSpanStartLine
     )
-import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Paths_cost_translate (getDataFileName)
 import System.FilePath ((</>), takeDirectory)
 import System.Directory (copyFile, getTemporaryDirectory)
@@ -85,37 +80,11 @@ checkGeneratedConstruction output = do
         qc <- quickCheckRoles checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
-                (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls updates checked
+            let (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls checked
             evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
-
-    checksMixedMakeInstances
--- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
--- Its selected constructor identifies the right parent, not merely a candidate
--- with the same field spelling. Parent labels are ordered like update fields.
-ambiguousUpdateReferences :: Data a => a -> [(SrcSpan, Name)]
-ambiguousUpdateReferences checked =
-    [ (getLocA label, greName field)
-    | ExpandedThingTc (OrigExpr RecordUpd { rupd_flds = RegularRecUpdFields parents fields }) expanded <- collectAst checked
-    , parent <- toList parents
-    , length fields == length (rnRecUpdLabels parent)
-    , any ((`elem` updateConstructors expanded) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
-    , (binding, field) <- zip fields (toList (rnRecUpdLabels parent))
-    , Ambiguous _ label <- [unLoc (hfbLHS (unLoc binding))]
-    ]
-
-updateConstructors :: HsExpr GhcTc -> [Name]
-updateConstructors (HsLet _ _ body) = updateConstructors (unLoc body)
-updateConstructors (XExpr (WrapExpr (HsWrap _ expression))) = updateConstructors expression
-updateConstructors (HsCase RecUpd _ matches) =
-    [ conLikeName (unLoc constructor)
-    | match <- unLoc (mg_alts matches)
-    , ConPat _ constructor _ <- map unLoc (m_pats (unLoc match))
-    ]
-updateConstructors _ = []
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
@@ -123,6 +92,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
+    checksMixedMakeInstances
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]
@@ -278,15 +248,6 @@ checkGeneratedConstructionSpecimens = do
     defaultUsage = selected "Memorist.Data.Interface.Demand.$dmusage: runtime observation/accounting methods have no construction permission"
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
-    checksMixedMakeInstances = do
-        local <- specimen "MixedMakeInstances.hs"
-        imported <- specimen "QuickCheckRoles.hs"
-        typechecks local
-        diagnostics <- rejection local
-        let make tys = InstanceMethod "Make" tys "make"
-        checkDefinitions diagnostics local
-            [(make ["Draw", "Bool"], []), (make ["Char"], [external "Test.QuickCheck.Arbitrary.arbitrary"])]
-        cleanDefinitions diagnostics imported [make ["Gen", "Int"], make ["Property"]]
     oneof = external "Test.QuickCheck.Gen.oneof"
     charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
     checksDiagnosticSites = do
@@ -317,6 +278,15 @@ checkGeneratedConstructionSpecimens = do
              (44, external "Test.QuickCheck.Arbitrary.arbitrary"), (48, external "Test.QuickCheck.Arbitrary.arbitrary"),
              (51, selected "QuickCheckRoles.make: unknown executable method/default dependency"),
              (54, escape "QuickCheckRoles.choices")]
+    checksMixedMakeInstances = do
+        local <- specimen "MixedMakeInstances.hs"
+        imported <- specimen "QuickCheckRoles.hs"
+        typechecks local
+        diagnostics <- rejection local
+        let make tys = InstanceMethod "Make" tys "make"
+        checkDefinitions diagnostics local
+            [(make ["Draw", "Bool"], []), (make ["Char"], [external "Test.QuickCheck.Arbitrary.arbitrary"])]
+        cleanDefinitions diagnostics imported [make ["Gen", "Int"], make ["Property"]]
     -- Select reports to mask by exact path/line, independently of the matcher
     -- under test. Keep the location and the import's same-operation report.
     rejectsDespiteImport name line dependency importedLine reason = do
