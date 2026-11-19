@@ -94,6 +94,10 @@ checkGeneratedConstruction output = do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "NestedPatternConsumption.hs"
+    rejectsAt "NestedPatternOrdinary.hs"
+        [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance"),
+         (15, forbidden tval), (21, forbidden tval), (28, forbidden tval),
+         (34, forbidden tval), (39, forbidden tval), (44, forbidden tval)]
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
