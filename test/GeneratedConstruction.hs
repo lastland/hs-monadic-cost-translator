@@ -80,9 +80,10 @@ checkGeneratedConstruction output = do
             representations = homeReprs rt checkedPrograms
         qcResult <- quickCheckResult
         qc <- quickCheckRoles qcResult checkedModules
+        let uses = quickCheckUses qcResult programs
         (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt qc (quickCheckUses qcResult checked) homes methods viewNames views viewCalls checked
+            let (syntaxProblems, sites) = checkSyntax rt qc (uses checked) homes methods viewNames views viewCalls checked
             evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))

@@ -3,6 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
+import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
 import Data.Data (Data, cast)
@@ -57,8 +58,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> (SrcSpan -> Name -> Bool) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc qcUse homes methods restricted views viewCalls checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> QuickCheckUses -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc qcUses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
@@ -92,7 +93,7 @@ checkSyntax rt qc qcUse homes methods restricted views viewCalls checked = case 
                     ([pretty here ++ ": unsupported executable expression: " ++ pretty form], [])
                 site = case form of HsVar _ name | unLoc name `elem` methods -> ([], [(here, unLoc name)]); _ -> ([], [])
                 body = case form of
-                    HsVar _ (L _ name) | qcUse here name, permitted name, not (isQuickCheckBinding qc name) ->
+                    HsVar _ (L _ name) | permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
                         ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
                     XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
                         L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
@@ -112,8 +113,11 @@ checkSyntax rt qc qcUse homes methods restricted views viewCalls checked = case 
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LPat GhcRn)) = recordField location field
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LHsExpr GhcRn)) = recordField location field
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
-            (if patternForm (unLoc pattern') then ([], []) else
-                ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'
+            let here = getLocA pattern'
+                problems = case unLoc pattern' of
+                    BangPat{} | strictPatternAt qcUses here -> [pretty here ++ ": strict pattern forces a QuickCheck value outside a generator or property"]
+                    form -> [pretty here ++ ": unsupported executable pattern: " ++ pretty pattern' | not (patternForm form)]
+            in (problems, []) `plus` descend here pattern'
         | Just (_ :: ForeignDecl GhcRn) <- cast value = bad "foreign declaration"
         | Just (_ :: RuleDecl GhcRn) <- cast value = bad "rewrite rule"
         | Just (_ :: AnnDecl GhcRn) <- cast value = bad "annotation splice"
