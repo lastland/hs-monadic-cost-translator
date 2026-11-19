@@ -16,6 +16,7 @@ import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)
 import Cost.Translate.Frontend.Syntax (argumentKey)
+import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing (nativeSharing, sharingType)
 import Data.Map.Strict qualified as Map
@@ -29,6 +30,7 @@ import GHC.Core.Type
     ( getTyVar_maybe
     , isLiftedTypeKind
     , isManyTy
+    , splitForAllTyVars
     , splitFunTy_maybe
     , splitTyConApp_maybe
     , tyVarKind
@@ -50,20 +52,32 @@ constructorPayload ::
     Name ->
     Type ->
     Match GhcRn (LHsExpr GhcRn) ->
-    Maybe ([Name], Payload)
+    Maybe ([TyVar], Payload)
 constructorPayload env name ty match = do
     case nativeSharing (sourceDatatypes env) Map.empty ty of
         Right Nothing -> pure ()
         _ -> Nothing
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
-        scoped = Map.findWithDefault [] name (scopedTypeVariables env)
+        scopedNames = Map.findWithDefault [] name (scopedTypeVariables env)
+        original = fst (splitForAllTyVars ty)
+        scoped = if null scopedNames then [] else original
         rhs = m_grhss match
-    guard (not (null variables) && all (isLiftedTypeKind . tyVarKind) variables)
+    guard (not (null variables) && all (payloadKind . tyVarKind) variables)
+    guard (null scopedNames || map getName original == scopedNames)
     case (grhssLocalBinds rhs, grhssGRHSs rhs) of
         (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
             (scoped,) <$> planPayload env variables body expression
         _ -> Nothing
+
+payloadKind :: Type -> Bool
+payloadKind kind
+    | isLiftedTypeKind kind = True
+    | Just (FTF_T_T, multiplicity, input, result) <- splitFunTy_maybe kind =
+        isManyTy multiplicity
+            && isLiftedTypeKind input
+            && isLiftedTypeKind result
+    | otherwise = False
 
 planPayload :: Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
 planPayload env variables ty expression = do
@@ -125,8 +139,17 @@ payloadFunction env name = do
 
 payloadType :: Env -> Payload -> Either String O.Ty
 payloadType env (Payload variables ty _) =
-    O.forallT (map (O.b . getOccString) variables)
-        <$> renderType (sourceDatatypes env) ty
+    O.forallT
+        <$> payloadBinders env variables
+        <*> renderType (sourceDatatypes env) ty
+
+payloadBinders :: Env -> [TyVar] -> Either String [O.Binder]
+payloadBinders env = mapM binder
+    where
+        binder variable
+            | isLiftedTypeKind (tyVarKind variable) =
+                pure (O.b (getOccString variable))
+            | otherwise = renderBinder (sourceDatatypes env) variable
 
 typedOperation :: String -> O.Ty -> O.Expr
 typedOperation name = O.typeApp (O.typeApp (O.v name) (O.t "M.MemoristM"))
@@ -186,7 +209,7 @@ allocatePayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->
     Env ->
     Name ->
-    ([Name], Payload) ->
+    ([TyVar], Payload) ->
     O.Expr ->
     Either String O.Expr
 allocatePayload _ env name _ continuation
@@ -196,6 +219,7 @@ allocatePayload _ env name _ continuation
 allocatePayload emit env name (scoped, payload) continuation = do
     ty <- payloadType env payload
     action <- emitPayload emit env payload
+    sourceBinders <- mapM (renderBinder (sourceDatatypes env)) scoped
     let local = localName env name
         root =
             Map.findWithDefault
@@ -209,7 +233,7 @@ allocatePayload emit env name (scoped, payload) continuation = do
                 (plannedBodies (namePlan env))
         bodyType =
             O.forallT
-                [O.bk (getOccString variable) (O.t "Type") | variable <- scoped]
+                sourceBinders
                 (O.tc "M.MemoristM" [O.tc "M.Th" [ty]])
         allocation = suspendPayload ty action
         declarations =
@@ -219,10 +243,11 @@ allocatePayload emit env name (scoped, payload) continuation = do
         producer = if null scoped then allocation else O.v body
         signature = case payload of
             Payload variables source _ ->
-                O.forallT (map (O.b . getOccString) variables)
-                    . O.tc "M.Th"
-                    . (: [])
-                    <$> renderType (sourceDatatypes env) source
+                O.forallT
+                    <$> payloadBinders env variables
+                    <*> ( O.tc "M.Th" . (: [])
+                            <$> renderType (sourceDatatypes env) source
+                        )
     sharedType <- signature
     pure
         ( O.letE declarations $

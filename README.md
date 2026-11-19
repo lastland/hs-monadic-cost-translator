@@ -180,14 +180,17 @@ function invocation still allocates fresh local thunks.
 An unconstrained local value with a translated source-datatype result can also
 share one polymorphic thunk when its right-hand side is an unguarded,
 nonrecursive constructor application or an `if` selecting such expressions.
-Its generalized variables must have kind `Type`, and fields depending on those
-variables must themselves meet these same conditions. Independent fields remain
+Its generalized variables must have kind `Type` or the closed kind
+`Type -> Type`, and fields depending on those variables must themselves meet
+these same conditions. Explicit local type variables retain their checked kinds
+within the right-hand side. Independent fields remain
 suspended normally. Conditions run only when their enclosing payload is demanded;
 the selected branch's fields remain lazy. The translator constructs polymorphic
 payloads before suspending them
 and uses pure typed views that preserve thunk identities and annotations.
 This path needs no extra caller constraints or runtime operations. It does not
-cover arbitrary polymorphic applications or recursive bindings.
+cover arbitrary polymorphic applications, recursive bindings, dependent kinds,
+or other higher arrow kinds.
 
 Within these payload expressions, saturated calls to module-level source
 functions of type `forall a. a -> a` are also supported. The function must have
