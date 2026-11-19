@@ -10,18 +10,23 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType)
 import qualified GHC.Core as C
-import GHC.Core.Class (classSCSelIds, classOpItems)
+import GHC.Core.Class (classSCSelIds, classOpItems, classTyCon)
+import GHC.Core.DataCon (dataConFullSig, dataConOrigArgTys, dataConInstOrigArgTys)
+import GHC.Core.FamInstEnv (FamInst(..))
+import GHC.Core.InstEnv (ClsInst(..))
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.Type (isPredTy)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Core.TyCon (isAlgTyCon)
+import GHC.Core.Type (isPredTy, splitTyConApp_maybe, mkTyConTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.OrdList (fromOL)
 import GHC.HsToCore.Binds (dsTcEvBinds, dsTopLHsBinds)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
-import GHC.Tc.Types (tcg_ev_binds)
+import GHC.Tc.Types (tcg_ev_binds, tcg_fam_insts, tcg_insts, tcg_tcs)
 import GHC.Tc.Types.Evidence (TcEvBinds(..))
-import GHC.Types.Id (isDFunId)
+import GHC.Types.Id (isDFunId, isDataConId_maybe)
 import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.Var (isId)
@@ -57,8 +62,8 @@ methodFamilies rt = do
 methodNames :: Runtime -> Ghc [Name]
 methodNames rt = Map.keys <$> methodFamilies rt
 
-checkEvidence :: Runtime -> [Module] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [String]
-checkEvidence rt homes support checked sites = do
+checkEvidence :: Runtime -> [Module] -> [TyCon] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [String]
+checkEvidence rt homes demands support checked sites = do
     selected <- methodFamilies rt
     desugared <- desugarModule checked
     let program = mg_binds (coreModule desugared)
@@ -66,7 +71,8 @@ checkEvidence rt homes support checked sites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        rootProblems = concat [problems (uses selected environment givens rhs) |
+    derived <- derivedDemandMethods rt checked environment
+    let rootProblems = concat [concatMap (checkUse rt homes demands (getName binder `elem` derived)) (uses selected environment givens rhs) |
             (binder, rhs) <- concatMap pairs program, getName binder `notElem` support]
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -91,10 +97,69 @@ checkEvidence rt homes support checked sites = do
             Nothing -> ["cannot desugar the retained source method certificates"]
     pure (rootProblems ++ siteProblems)
   where
-    problems = concatMap (checkUse rt homes)
+    problems = concatMap (checkUse rt homes demands False)
 
-checkUse :: Runtime -> [Module] -> Use -> [String]
-checkUse rt homes (Use name family types dictionaries) =
+-- Stock deriving on a concrete, checked demand datatype is a declaration role.
+-- Bind that role through the actual instance head, dictionary constructor and
+-- typed method fields, never logical source spans or $c names. Selected field
+-- evidence is still checked below rather than skipping the derived body.
+derivedDemandMethods :: Runtime -> TypecheckedModule -> Environment -> Ghc [Name]
+derivedDemandMethods rt checked environment = do
+    classes <- fmap concat $ forM ["Prelude.==", "Prelude.showsPrec"] $ \label -> case lookup label (standardNames rt) of
+        Just name -> do
+            thing <- lookupName name
+            pure [getName cls | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier]]
+        Nothing -> pure []
+    declarations <- case tm_renamed_source checked of
+        Nothing -> pure []
+        Just (group, _, _, _, _) -> fmap concat $ forM (collectAst group :: [LDerivDecl GhcRn]) $ \declaration ->
+            case unLoc declaration of
+                DerivDecl { deriv_type = signature, deriv_strategy = strategy, deriv_overlap_mode = Nothing }
+                    | stock strategy,
+                      ([], context, headType) <- splitLHsInstDeclTy (dropWildCards signature),
+                      maybe True (null . unLoc) context,
+                      HsAppTy _ (L _ (HsTyVar _ NotPromoted cls)) (L _ (HsTyVar _ NotPromoted target)) <- unLoc headType,
+                      unLoc cls `elem` classes -> do
+                        thing <- lookupName (unLoc target)
+                        pure [(unLoc cls, tc) | Just (ATyCon tc) <- [thing], concreteDemand tc]
+                _ -> pure []
+    pure (concat [dictionaryMethods instance' target | (cls, target) <- declarations,
+        instance' <- tcg_insts global, getName (is_cls instance') == cls, null (is_tvs instance'),
+        [ty] <- [is_tys instance'], eqType ty (mkTyConTy target)])
+  where
+    global = fst (tm_internals_ checked)
+    stock Nothing = True
+    stock (Just (L _ StockStrategy{})) = True
+    stock _ = False
+    concreteDemand tc = tc `elem` tcg_tcs global && isAlgTyCon tc && not (isNewTyCon tc) && tyConArity tc == 0 &&
+        any (\equation -> fi_fam equation == runtimeName rt "Memorist.Data.Interface.Demand" "Dem" &&
+            case splitTyConApp_maybe (fi_rhs equation) of Just (actual, _) -> actual == tc; _ -> False) (tcg_fam_insts global) &&
+        all fields (tyConDataCons tc)
+    fields constructor = case dataConFullSig constructor of
+        (_, [], [], [], _, _) -> all (thunkDemand . scaledThing) (dataConOrigArgTys constructor)
+        _ -> False
+    thunkDemand ty = case splitTyConApp_maybe ty of
+        Just (tc, [payload]) -> getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD" && scalarType payload
+        _ -> False
+    dictionaryMethods instance' target = case Map.lookup (is_dfun_name instance') environment of
+        Just rhs | (C.Var constructor, C.Type argument : fields') <- C.collectArgs (dictionaryBody Set.empty rhs),
+                [actual] <- tyConDataCons (classTyCon (is_cls instance')),
+                isDataConId_maybe constructor == Just actual, eqType argument (mkTyConTy target),
+                let methods = [method | C.Var method <- fields'],
+                length methods == length fields',
+                let expected = map scaledThing (dataConInstOrigArgTys actual [argument]),
+                length expected == length methods,
+                and (zipWith (eqType . idType) methods expected) -> map getName methods
+        _ -> []
+    dictionaryBody seen expression = case expression of
+        C.Var v | getName v `Set.notMember` seen, Just rhs <- Map.lookup (getName v) environment ->
+            dictionaryBody (Set.insert (getName v) seen) rhs
+        C.Let _ body -> dictionaryBody seen body
+        C.Tick _ body -> dictionaryBody seen body
+        _ -> expression
+
+checkUse :: Runtime -> [Module] -> [TyCon] -> Bool -> Use -> [String]
+checkUse rt homes demands observation (Use name family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
@@ -109,6 +174,8 @@ checkUse rt homes (Use name family types dictionaries) =
             RepresentationMethod | safeRepr evidence && representationCarrier -> Nothing
                 | otherwise -> Just "reprM requires a checked local, audited runtime, or lexical Repr method contract"
             ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
+                | not observation && demandOperand ty -> Just "demand-data methods require a checked observation declaration"
+                | observation && demandScalar ty evidence -> Nothing
                 | scalarType ty && ordinary evidence -> Nothing
                 | lexical evidence || safeHome evidence -> Nothing
                 | otherwise -> Just "unknown concrete scalar instance"
@@ -141,6 +208,26 @@ checkUse rt homes (Use name family types dictionaries) =
             maybe False (\actual -> moduleUnit actual `elem`
                 [moduleUnit m | (_, n) <- standardNames rt, Just m <- [nameModule_maybe n]]) (nameModule_maybe owner) &&
                 all ordinary children'
+        _ -> False
+    demandScalar ty evidence
+        | name `notElem` [actual | (label, actual) <- standardNames rt,
+            label `elem` map ("Prelude." ++) ["==", "/=", "show", "showsPrec", "showList"]] = False
+        | Just (tc, [payload]) <- splitTyConApp_maybe ty,
+          getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD", scalarType payload = case root evidence of
+            Instance owner predicate [child] | Just (cls, _) <- boundInstance rt owner,
+                    Just (selected, [argument]) <- getClassPredTys_maybe predicate,
+                    cls == getName selected, eqType argument ty,
+                    Just (childClass, [childArgument]) <- evidencePredicate child ->
+                getName childClass == cls && eqType childArgument payload && ordinary child
+            _ -> False
+        | otherwise = False
+    evidencePredicate evidence = case root evidence of
+        Instance _ predicate _ -> getClassPredTys_maybe predicate
+        _ -> Nothing
+    demandOperand ty = case splitTyConApp_maybe ty of
+        Just (tc, arguments) -> tc `elem` demands || getName tc `elem`
+            ([runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["Dem", "ThD", "MaybeD", "PairD"]] ++
+             [runtimeName rt "Memorist.Data.List" "ListD"]) || any demandOperand arguments
         _ -> False
     memorist ty evidence
         | isMemoristType rt ty = case root evidence of

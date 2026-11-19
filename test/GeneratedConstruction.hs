@@ -8,7 +8,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (isJust, maybeToList)
 import ConstructionAst (pretty)
 import ConstructionEvidence (checkEvidence, methodNames)
-import ConstructionDemand (demandSupport)
+import ConstructionDemand (demandSupport, homeDemandTypes)
 import ConstructionRoles (supportBindings, supportCoreNames)
 import ConstructionRuntime (runtime, runtimeOwns, roleOf, roleNames, Role(..), describeName, standardNames)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
@@ -86,7 +86,7 @@ checkGeneratedConstruction output = do
                     updates = [pretty location ++ ": unapproved runtime operation " ++ describeName name ++
                         " is forbidden in generated code" | (location, name) <- ambiguousUpdateReferences (tm_typechecked_source checked),
                         runtimeOwns rt name, roleOf rt name `notElem` [Just Primitive, Just Representation, Just DemandData]]
-                evidenceProblems <- checkEvidence rt homes (supportCoreNames support checked) checked sites
+                evidenceProblems <- checkEvidence rt homes (homeDemandTypes rt checkedModules) (supportCoreNames support checked) checked sites
                 pure (syntaxProblems ++ updates ++ evidenceProblems)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
     unless (null problems) (fail (unlines problems))
@@ -185,10 +185,14 @@ checkGeneratedConstructionSpecimens = do
     rejectsBecause "DatatypeGeneratorWrongRole.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
     rejectsBecause "DatatypeGeneratorEscape.hs" ["unapproved external operation Test.QuickCheck.Gen.sized"]
     rejectsBecause "DatatypeGeneratorDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
+    rejectsBecause "DemandDerivingEscape.hs"
+        ["DemandDerivingEscape.hs:8:", "DemandDerivingEscape.hs:11:", "demand-data methods require a checked observation declaration"]
+    rejectsBecause "DemandManualInstance.hs" ["demand-data methods require a checked observation declaration"]
+    rejectsBecause "DemandProtectedDeriving.hs" ["unapproved selected method GHC.Classes.==", "protected thunk/annotation/accounting operand"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
          "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs",
-         "SizedDemandControl.hs", "DatatypeGeneratorControl.hs"]
+         "SizedDemandControl.hs", "DatatypeGeneratorControl.hs", "DemandDerivingControl.hs"]
     putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)

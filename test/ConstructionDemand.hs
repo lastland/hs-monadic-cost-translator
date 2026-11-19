@@ -1,6 +1,6 @@
 -- | Closed schemas for the preexisting demand generators/observers. A certified
 -- helper may be referenced only by another certified observation declaration.
-module ConstructionDemand (demandSupport) where
+module ConstructionDemand (demandSupport, homeDemandTypes) where
 
 import ConstructionAst
 import ConstructionRuntime
@@ -39,9 +39,7 @@ demandSupport runtime' dataNames checked = do
     let homeTypes = [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
         classes = mapMaybe tyConClass_maybe homeTypes
         protocol = mapMaybe (demandInterface runtime' (getName gen)) classes
-        demands = nub [tc | m <- checked, equation <- tcg_fam_insts (fst (tm_internals_ m)),
-            fi_fam equation == runtimeName runtime' "Memorist.Data.Interface.Demand" "Dem",
-            Just (tc, _) <- [splitTyConApp_maybe (fi_rhs equation)], tc `elem` homeTypes]
+        demands = homeDemandTypes runtime' checked
         schema = Schema runtime' dataNames (observationNames runtime') (getName gen) demands protocol [] [] []
         sourceBindings = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
@@ -68,6 +66,13 @@ demandSupport runtime' dataNames checked = do
         restricted = nub (map snd (generate ++ shrink ++ arbitrary ++ aliases) ++
             concat [[generator, shrinker] | Interface _ generator shrinker <- protocol])
     pure (generate ++ shrink ++ arbitrary ++ methods ++ aliases, restricted)
+
+homeDemandTypes :: Runtime -> [TypecheckedModule] -> [TyCon]
+homeDemandTypes runtime' checked = nub
+    [tc | m <- checked, equation <- tcg_fam_insts (fst (tm_internals_ m)),
+        fi_fam equation == runtimeName runtime' "Memorist.Data.Interface.Demand" "Dem",
+        Just (tc, _) <- [splitTyConApp_maybe (fi_rhs equation)], tc `elem` homeTypes]
+  where homeTypes = [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
 
 -- A generator role belongs to an actual home Dem equation, not to an arbitrary
 -- pure result type or a helper spelling. Its selected method's checked monotype
