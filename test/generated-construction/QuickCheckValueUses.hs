@@ -13,7 +13,8 @@ prop_force x = Q.property (M.value (M.eval1 (forceDraw (M.tval x `seq` Q.arbitra
 
 fromCase :: Maybe Q.Property -> M.MemoristM Bool
 fromCase candidate = case candidate of
-    Just claim -> claim `seq` pure True
+    Just claim ->
+        claim `seq` pure True
     Nothing -> pure False
 
 first :: (a, b) -> a

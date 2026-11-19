@@ -98,8 +98,11 @@ checkGeneratedConstructionSpecimens = do
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]
     mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"
-        [(9, qcValue "<local>.draw"), (16, qcValue "<local>.claim"), (23, qcValue "QuickCheckValueUses.first")]
+        [(9, qcValue "<local>.draw"), (17, qcValue "<local>.claim"), (24, qcValue "QuickCheckValueUses.first")]
     accepts "QuickCheckUnusedArgument.hs"
+    mixed "QuickCheckStrictArgument.hs" [TopBinding "strict", TopBinding "prop_specialized"] "QuickCheckStrictArgument.hs"
+        [(11, qcValue "QuickCheckStrictArgument.strict"), (14, qcValue "GHC.Prim.seq"),
+         (17, "strict pattern forces a QuickCheck value outside a generator or property")]
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]

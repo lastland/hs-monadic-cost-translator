@@ -11,3 +11,18 @@ gen x = M.tval x `seq` Q.arbitrary
 
 prop_unused :: M.Th Bool -> Q.Property
 prop_unused x = Q.property (M.value (M.eval1 (ignore (gen x) Q.property)))
+
+ignoreAny :: a -> M.MemoristM Bool
+ignoreAny _unused = pure True
+
+ignoreDraw :: Q.Gen Bool -> M.MemoristM Bool
+ignoreDraw = ignoreAny
+
+ignoreField :: Maybe Q.Property -> M.MemoristM Bool
+ignoreField (Just _claim) = pure True
+ignoreField Nothing = pure False
+
+data Property = Property Bool
+
+forceHome :: Property -> M.MemoristM Bool
+forceHome value = value `seq` pure True
