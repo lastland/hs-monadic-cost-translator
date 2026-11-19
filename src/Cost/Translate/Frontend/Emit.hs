@@ -235,8 +235,11 @@ emitLocalValue signatures scope binding name match done = do
         bindingType = Map.lookup source (inferredBindings scope)
         payload =
             bindingType >>= (\ty -> constructorPayload scope source ty match)
-    case payload of
-        Just plan
+    case (nativeAlias scope bindingType match, payload) of
+        (Just thunk, _) -> do
+            rest <- done (insertEnv source (Thunk (O.v n)) scope)
+            pure $ allocateAlias signatures scope source thunk strict rest
+        (_, Just plan)
             | let instances = plannedSpecializations (namePlan scope)
             , Map.notMember (unLoc name) instances -> do
                 remaining <- done (insertEnv (unLoc name) (Thunk (O.v n)) scope)

@@ -74,6 +74,7 @@ moduleEnvironment strict datatypes literals types hints checkedScopes group =
                     )
                 )
                 ( planNames
+                    datatypes
                     (reservedModuleNames datatypes group)
                     (constructorLayouts datatypes)
                     specialized

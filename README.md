@@ -170,19 +170,35 @@ actions use the dictionaries selected at each use but do not retain a shared
 result across uses.
 
 For unconstrained local values, one native allocation supports generalized
-`Type` variables under lists, builtin `Maybe`, and boxed pairs in any nesting.
-A bare type-variable result is also supported. Pair parameters can vary
-independently, as in `(a, b)`, while fixed or captured fields retain their types
-and aliases. Pure representation conversions preserve root and field thunk
-identities across type instantiations without forcing unused payloads. Each
-function invocation still allocates fresh local thunks.
+`Type` variables under lists, builtin `Maybe`, boxed pairs, and structurally
+covariant source datatypes in any nesting. A bare type-variable result is also
+supported. Parameters can vary independently, while fixed or captured fields
+retain their types and original thunks. The translator allocates the complete
+ordinary producer action once at an empty type instantiation. Pure structural
+views preserve root and field thunk identities and annotations without forcing
+unused payloads. Each function invocation still allocates fresh local thunks.
+
+This result-directed path does not restrict the producer's expression form:
+ordinary calls, local helpers, guards, cases, and recursive producers use the same
+allocation. Datatype maps have explicit polymorphic signatures and a finite
+parameter-dependency graph, including nonregular recursion such as
+`data Nest a = End (Maybe a) | More (Nest [a])`. Only used maps and their
+dependencies are emitted. A field such as `f a`, with an abstract captured `f`,
+does not establish a structural map for `a`; no `Functor f` constraint is added.
+Generalized higher-kinded and non-`Type` parameters remain outside this path.
+
+These views refine the existing metadata-preserving structural conversion
+mechanism. Its construction-interface policy remains tracked in
+[issue #7](https://github.com/lastland/hs-monadic-cost-translator/issues/7);
+arbitrary pure converters are not part of this interface.
 
 If none of an unconstrained binding's quantified variables occurs in its result
 type, the binding reuses one ordinary thunk without a representation view.
 The variables may have higher or dependent kinds; their checked scopes remain
 available to type annotations in the right-hand side.
 
-An unconstrained local value with a translated source-datatype result can also
+When result-directed mapping does not apply, an unconstrained local value with a
+translated source-datatype result can also
 share one polymorphic thunk when its right-hand side is an unguarded,
 nonrecursive constructor application or an `if` selecting such expressions.
 Its generalized variables must have kind `Type` or the closed kind

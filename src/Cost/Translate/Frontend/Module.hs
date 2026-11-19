@@ -112,6 +112,6 @@ moduleResult target source hash helpers env specialized group = do
         layouts = constructorLayouts datatypes
         emitBinding binding = do
             (name, ty) <- bindingSignature env binding
-            let plan = planNames reserved layouts specialized binding
+            let plan = planNames datatypes reserved layouts specialized binding
             code <- emitBind (env {namePlan = plan}) binding
             pure [O.sig name ty, code]

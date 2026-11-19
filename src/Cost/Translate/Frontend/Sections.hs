@@ -6,6 +6,7 @@ module Cost.Translate.Frontend.Sections
 
 import Cost.Translate.Foldable (foldableSupport)
 import Cost.Translate.Frontend.Environment
+import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Syntax (collect)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Pretty
@@ -16,6 +17,7 @@ import Cost.Translate.Pretty
     , requiredExtensions
     )
 import Cost.Translate.Sharing (nativeSharingSupport, sharingSupport)
+import Cost.Translate.Sharing.Schema (nativeSchemaSupport)
 import Cost.Translate.Validation (scalarSupport)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -32,6 +34,7 @@ moduleSections source env datatypeSupport kindSupport datatypes declarations =
         "sharing and scalar support"
         ( concat [sharingSupport reflected | needsSharing]
             ++ concat [nativeSharingSupport listMapping | native]
+            ++ schemaSupport
             ++ scalarSupport
         )
     , Section True "foldable support" foldableSupport
@@ -43,7 +46,11 @@ moduleSections source env datatypeSupport kindSupport datatypes declarations =
     , Section False ("translated bindings from " ++ source) declarations
     ]
     where
-        references = supportReferences declarations
+        schemaSupport =
+            nativeSchemaSupport
+                (plannedNativeSchemas (namePlan env))
+                (supportReferences declarations)
+        references = supportReferences (schemaSupport ++ declarations)
         reflected = not (Set.null (reflectiveBindings env))
         listMapping = "mapListT" `Set.member` references
         needsSharing = any (`Set.member` references) ["sharedAt", "sharedAtBy"]

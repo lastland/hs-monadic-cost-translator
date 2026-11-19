@@ -5,6 +5,8 @@ module Cost.Translate.Frontend.LocalValues
     , forceWhnf
     , allocateSpecialized
     , allocateShared
+    , nativeAlias
+    , allocateAlias
     , usedNames
     , typedDeclarations
     , localFunctions
@@ -17,6 +19,7 @@ import Control.Monad (unless)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Allocation (freshPrimed)
 import Cost.Translate.Frontend.Environment
+import Cost.Translate.Frontend.Expressions (reuseThunk)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (remainingArity)
@@ -184,6 +187,27 @@ plannedBody scope name =
         name
         (plannedBodies (namePlan scope))
 
+nativeAlias :: Env -> Maybe Type -> Match GhcRn (LHsExpr GhcRn) -> Maybe O.Expr
+nativeAlias scope bindingType match = do
+    ty <- bindingType
+    let schemas = plannedNativeSchemas (namePlan scope)
+    Right (Just _) <- pure (nativeSharing schemas Map.empty ty)
+    case (grhssLocalBinds rhs, grhssGRHSs rhs) of
+        (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
+            reuseThunk scope expression
+        _ -> Nothing
+    where
+        rhs = m_grhss match
+
+allocateAlias ::
+    Map.Map Name O.Ty -> Env -> Name -> O.Expr -> Bool -> O.Expr -> O.Expr
+allocateAlias signatures scope name thunk strict continuation =
+    O.letE
+        (typedDeclarations signatures scope name (O.val target [] thunk))
+        (if strict then forceWhnf (O.v target) continuation else continuation)
+    where
+        target = localName scope name
+
 allocateShared ::
     Map.Map Name O.Ty ->
     Env ->
@@ -200,7 +224,7 @@ allocateShared sigs scope name action bindingType paths continuation
             Nothing -> Right Nothing
             Just ty ->
                 nativeSharing
-                    (sourceDatatypes scope)
+                    (plannedNativeSchemas (namePlan scope))
                     (bodyTypeRenamings sigs scope (unLoc name) action ty)
                     ty
         let signature = maybeToList (O.sig n <$> Map.lookup (unLoc name) sigs)

@@ -54,7 +54,7 @@ constructorPayload ::
     Match GhcRn (LHsExpr GhcRn) ->
     Maybe ([TyVar], Payload)
 constructorPayload env name ty match = do
-    case nativeSharing (sourceDatatypes env) Map.empty ty of
+    case nativeSharing (plannedNativeSchemas (namePlan env)) Map.empty ty of
         Right Nothing -> pure ()
         _ -> Nothing
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty

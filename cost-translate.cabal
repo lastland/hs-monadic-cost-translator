@@ -111,7 +111,9 @@ library
         Cost.Translate.Sharing.Projection
         Cost.Translate.Sharing.Reflected
         Cost.Translate.Sharing.ReflectionTypes
+        Cost.Translate.Sharing.Schema
         Cost.Translate.Sharing.Specialization
+        Cost.Translate.Sharing.Structural
         Cost.Translate.Sharing.Support
         Cost.Translate.Callable
         Cost.Translate.Diagnostic

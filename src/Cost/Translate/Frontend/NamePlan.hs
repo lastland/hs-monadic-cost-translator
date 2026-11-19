@@ -8,6 +8,7 @@ import Cost.Translate.Callable (expressions, spine)
 import Cost.Translate.Frontend.Allocation
 import Cost.Translate.Frontend.PatternPaths
 import Cost.Translate.Frontend.Syntax
+import Cost.Translate.Sharing.Schema
 import Data.Data (Data)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
@@ -24,11 +25,13 @@ data NamePlan = NamePlan
     , plannedAnchors :: Map.Map Name String
     , plannedBodies :: Map.Map Name String
     , plannedSpecializations :: Map.Map Name [(Type, String)]
+    , plannedNativeSchemas :: NativeSchemas
     }
 
 plannedTemporaryNames :: NamePlan -> [String]
 plannedTemporaryNames plan =
-    concat (Map.elems (plannedArguments plan))
+    Set.toList (nativeSchemaNames (plannedNativeSchemas plan))
+        ++ concat (Map.elems (plannedArguments plan))
         ++ Map.elems (plannedActions plan)
         ++ Map.elems (plannedFields plan)
         ++ Map.elems (plannedMatches plan)
@@ -38,14 +41,18 @@ plannedTemporaryNames plan =
 
 planNames ::
     (Data a) =>
+    [TyCon] ->
     Set.Set String ->
     Map.Map Name [Name] ->
     Map.Map Name [Type] ->
     a ->
     NamePlan
-planNames globalNames layouts specialized syntax =
+planNames datatypes globalNames layouts specialized syntax =
     let binds = collect syntax :: [LHsBind GhcRn]
-        reserved = globalNames `Set.union` fixedReservedNames
+        schemas = planNativeSchemas globalNames datatypes
+        schemaNames = nativeSchemaNames schemas
+        reserved =
+            Set.unions [globalNames, fixedReservedNames, schemaNames]
         binders = sourceBinders syntax binds
         (locals, afterLocals) = assignBinders reserved binders
         (parameters, afterParameters) =
@@ -83,6 +90,7 @@ planNames globalNames layouts specialized syntax =
             anchors
             bodies
             specializations
+            schemas
 
 sourceBinders :: (Data a) => a -> [LHsBind GhcRn] -> [Name]
 sourceBinders syntax binds =

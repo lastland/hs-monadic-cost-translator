@@ -3,32 +3,24 @@ module Cost.Translate.Sharing.Native where
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Sharing.Schema
 import Data.Map.Strict qualified as Map (Map, lookup)
 import GHC
     ( Name
     , NamedThing (getName)
-    , TyCon
     , TyVar
     , Type
     , nameSrcSpan
     )
-import GHC.Builtin.Types
-    ( liftedTypeKind
-    , listTyCon
-    , maybeTyCon
-    , tupleTyCon
-    )
+import GHC.Builtin.Types (liftedTypeKind)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.Type
-    ( getTyVar_maybe
-    , mkTyVarTy
+    ( mkTyVarTy
     , splitForAllTyVars
     , splitFunTys
-    , splitTyConApp_maybe
     , substTyWith
     )
-import GHC.Types.Basic (Boxity (..))
 import GHC.Types.Name (mkInternalName)
 import GHC.Types.Name.Occurrence (mkTyVarOcc)
 import GHC.Types.Unique (getUnique)
@@ -53,11 +45,11 @@ sharingType renamings ty = (renamed, renamedBody)
                     )
 
 nativeSharing ::
-    [TyCon] ->
+    NativeSchemas ->
     Map.Map Name String ->
     Type ->
     Either String (Maybe (O.Ty, O.Expr))
-nativeSharing datatypes renamings ty
+nativeSharing schemas renamings ty
     | null vars
         || not
             ( vacuousSharing ty
@@ -65,7 +57,7 @@ nativeSharing datatypes renamings ty
             )
         || not (null arguments) =
         Right Nothing
-    | otherwise = case mapper vars result of
+    | otherwise = case schemaMapper schemas vars result of
         Nothing -> Right Nothing
         Just convert -> do
             let (renamed, renamedBody) = sharingType renamings ty
@@ -74,6 +66,7 @@ nativeSharing datatypes renamings ty
             let action = O.tc "M.MemoristM" [rendered]
             pure (Just (O.forallT quantified action, convert))
     where
+        datatypes = schemaDatatypes schemas
         (vars, body) = splitForAllTyVars ty
         (arguments, result) = splitFunTys body
 
@@ -83,57 +76,3 @@ vacuousSharing ty =
         && not (any (`elemVarSet` tyCoVarsOfType body) variables)
     where
         (variables, body) = splitForAllTyVars ty
-
-mapper :: [TyVar] -> Type -> Maybe O.Expr
-mapper vars value
-    | not (any (`elemVarSet` tyCoVarsOfType value) vars) = Just (O.v "id")
-    | Just variable <- getTyVar_maybe value
-    , variable `elem` vars =
-        Just (O.v "Void.absurd")
-    | Just (constructor, [element]) <- splitTyConApp_maybe value
-    , constructor == listTyCon =
-        O.call "mapListT" . (: []) <$> mapper vars element
-    | Just (constructor, [element]) <- splitTyConApp_maybe value
-    , constructor == maybeTyCon = do
-        convert <- mapper vars element
-        pure (maybeMapper convert)
-    | Just (constructor, [left, right]) <- splitTyConApp_maybe value
-    , constructor == tupleTyCon Boxed 2 = do
-        convertLeft <- mapper vars left
-        convertRight <- mapper vars right
-        pure (pairMapper convertLeft convertRight)
-    | otherwise = Nothing
-
-maybeMapper :: O.Expr -> O.Expr
-maybeMapper convert =
-    O.lam
-        [O.p "maybeValue"]
-        ( O.caseE
-            (O.v "maybeValue")
-            [ (O.conP "M.NothingT" [], O.v "M.NothingT")
-            ,
-                ( O.conP "M.JustT" [O.p "payload"]
-                , O.call "M.JustT" [mapThunk convert (O.v "payload")]
-                )
-            ]
-        )
-
-pairMapper :: O.Expr -> O.Expr -> O.Expr
-pairMapper convertLeft convertRight =
-    O.lam
-        [O.p "pairValue"]
-        ( O.caseE
-            (O.v "pairValue")
-            [
-                ( O.conP "M.PairT" [O.p "leftPayload", O.p "rightPayload"]
-                , O.call
-                    "M.PairT"
-                    [ mapThunk convertLeft (O.v "leftPayload")
-                    , mapThunk convertRight (O.v "rightPayload")
-                    ]
-                )
-            ]
-        )
-
-mapThunk :: O.Expr -> O.Expr -> O.Expr
-mapThunk convert payload = O.call "mapThunk" [convert, payload]
