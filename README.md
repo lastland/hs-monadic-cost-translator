@@ -187,31 +187,30 @@ dependencies are emitted. A field such as `f a`, with an abstract captured `f`,
 does not establish a structural map for `a`; no `Functor f` constraint is added.
 Generalized higher-kinded and non-`Type` parameters remain outside this path.
 
-These views refine the existing metadata-preserving structural conversion
-mechanism. Its construction-interface policy remains tracked in
-[issue #7](https://github.com/lastland/hs-monadic-cost-translator/issues/7);
-arbitrary pure converters are not part of this interface.
+Structural views perform only type instantiation and structural field mapping.
+They preserve each input thunk's name and complete annotation; arbitrary pure
+converters are not supported.
 
 If none of an unconstrained binding's quantified variables occurs in its result
 type, the binding reuses one ordinary thunk without a representation view.
 The variables may have higher or dependent kinds; their checked scopes remain
 available to type annotations in the right-hand side.
 
-When result-directed mapping does not apply, an unconstrained local value with a
-translated source-datatype result can also
+An unconstrained local value with a translated source-datatype result can also
 share one polymorphic thunk when its right-hand side is an unguarded,
 nonrecursive constructor application or an `if` selecting such expressions.
-Its generalized variables must have kind `Type` or the closed kind
-`Type -> Type`, and fields depending on those variables must themselves meet
-these same conditions. Explicit local type variables retain their checked kinds
-within the right-hand side. Independent fields remain
-suspended normally. Conditions run only when their enclosing payload is demanded;
+Supported quantified kinds include `Type`, higher arrows, indexed and promoted
+kinds, and checked dependent kinds. Implicit kind binders and captured kinds
+retain their checked scopes in right-hand-side annotations. Fields depending on
+quantified variables must themselves meet the payload-expression conditions.
+Independent fields remain suspended normally. Conditions run only when their
+enclosing payload is demanded;
 the selected branch's fields remain lazy. The translator constructs polymorphic
 payloads before suspending them
 and uses pure typed views that preserve thunk identities and annotations.
 This path needs no extra caller constraints or runtime operations. It does not
-cover arbitrary polymorphic applications, recursive bindings, dependent kinds,
-or other higher arrow kinds.
+cover arbitrary polymorphic applications or recursive value bindings. Existing
+constructor-payload plans take precedence over the result-directed fallback.
 
 Within these payload expressions, saturated calls to module-level source
 functions of type `forall a. a -> a` are also supported. The function must have
@@ -220,6 +219,13 @@ context. Its argument must itself meet the payload-expression conditions above.
 The translator suspends that argument at the polymorphic payload type and calls
 the ordinary translated function, retaining its entry tick and lazy argument.
 Local functions and other application types do not qualify for this path.
+
+Fully closed dictionary instantiations can also use nonscalar parameters and
+higher-kinded applications when their complete substitutions and kinds render
+and the translated dictionaries are available. `Foldable` supports `[]`,
+`Maybe`, and partially applied boxed pairs; scalar classes retain their existing
+closed scalar dictionaries. Each distinct substitution receives its own ordinary
+thunk, even when the right-hand side does not use its dictionary.
 
 Dictionary-sensitive locals also use native allocation when they have one
 generalized type parameter determining their dictionaries and every reference
@@ -273,7 +279,20 @@ support. Unconstrained parameters do not qualify for this multiple-parameter
 path. A type or dictionary available only inside a nested helper cannot justify
 an allocation outside that helper.
 
-The translator validates the full source before omitting unused local bindings.
+A residual-polymorphic plan supports `Type`-kinded `Num` parameters with checked
+`Int`/`Integer` instances or an enclosing `Num t` given. It partitions only by
+dictionary-determining substitutions and retains other quantified parameters.
+For example, uses of `forall a b. Num a => (a, [b])` at `(Int, [Bool])` and
+`(Int, [Char])` share one root; an `Integer` use receives another root. The
+residual result needs a supported native structural view. Missing lexical
+evidence, potentially overlapping keys, and opaque dependent applications do
+not justify this plan.
+
+Unused constructor payloads under the `Type`/`Type -> Type` scope rule can omit
+their field bodies without translating them. Other kind-dependent payload plans
+validate those bodies before pruning. This omission does not provide lambda
+support when the body is used. Other local bindings undergo source validation
+before they are omitted.
 References inside an unreachable local helper do not trigger thunk allocation or
 reflection obligations in its enclosing function. Reachable local bindings retain
 their source scope. Module-level functions and values remain in the output, even
@@ -328,7 +347,8 @@ See [`src/Cost/Translate.hs`](src/Cost/Translate.hs) for the translation entry p
 
 ### Unsupported Language Constructs
 
-Unsupported constructs cause translation to fail rather than being silently omitted. They include:
+The following constructs are unsupported in translated bodies. Unused payload
+omission follows the rules described above.
 
 - Anonymous lambdas (`\x -> ...`) and operator sections.
 - `newtype` declarations, type synonyms, type families, GADTs, and existential or constrained data constructors.
@@ -343,6 +363,7 @@ Unsupported constructs cause translation to fail rather than being silently omit
 - **Scalar-only comparisons**: Runtime `Eq` and `Ord` instances on thunked structures compare thunk metadata rather than structural values. The translator rejects `Eq` and `Ord` uses unless their operands are strict scalars (`Int`, `Integer`, `Float`, `Double`, `Bool`, `Char`, `()`) or `Scalar`-constrained type variables.
 - **Explicit datatype and constructor exports**: Because the generated module is a separate Haskell module that imports the source module to define `reprM` and `abstract`, any source module with an explicit export list must export all of its datatypes and all of their constructors (e.g., `Box(..)`).
 - **Restricted class constraints**: Typeclass constraints on translated bindings are limited to `Foldable` (translated to `FoldableT`) and standard scalar/numeric classes (`Num`, `Eq`, `Ord`, `Fractional`, `Floating`, `Integral`, `Real`, `RealFrac`, `RealFloat`, `Enum`, `Bounded`).
+- **Incomplete construction-only interface**: Some local shapes still use legacy evaluator helpers. Generated conversion and demand helpers also use pure payload and usage observations. The complete six-combinator contract is not implemented or enforced for all output. [Issue #7](https://github.com/lastland/hs-monadic-cost-translator/issues/7#issuecomment-7000190468) permits checked metadata-preserving structural views, but gives observation/accounting helpers no exception.
 
 ### Potentially Overlapping Generic Locals
 
