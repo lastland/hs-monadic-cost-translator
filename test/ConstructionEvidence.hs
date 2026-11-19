@@ -5,7 +5,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 import ConstructionDictionary
 import ConstructionAst
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings)
+import ConstructionLocals (Locals, SourceSite(..), coreLocation, ordinaryCoreBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -79,7 +79,7 @@ collectEvidence rt qc locals homes program support checked sourceSites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses qc selected env given rhs) |
+        bindingSites env given bs = concat [record (coreLocation locals binder) (Left (getName binder)) (uses qc selected env given rhs) |
             (binder, rhs) <- ordinaryCoreBindings locals qc bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession

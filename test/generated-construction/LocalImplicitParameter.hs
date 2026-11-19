@@ -20,7 +20,9 @@ called t = let ?observe = (M.tval :: M.Th Int -> Int)
            in Q.property (?observe t == 3)
 
 wrongCarrier :: Q.Gen ()
-wrongCarrier = let ?discard = pure () :: [()] in Q.elements [()]
+wrongCarrier = let ?discard =
+                       pure () :: [()]
+               in Q.elements [()]
 
 shared :: M.Th Int -> Q.Property
 shared t = let observed = M.tval t

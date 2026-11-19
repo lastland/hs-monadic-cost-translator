@@ -1,6 +1,6 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
-module ConstructionLocals (Locals, SourceSite(..), localBindings, nestedSource, ordinaryCoreBindings) where
+module ConstructionLocals (Locals, SourceSite(..), localBindings, implicitBodies, nestedSource, ordinaryCoreBindings, coreLocation) where
 
 import ConstructionAst (bindingName, children, collectAst, nestedBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -16,7 +16,7 @@ import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Tc.Utils.TcType (tcSplitNestedSigmaTys)
 import GHC.Types.Name.Set (NameSet)
 
-data Locals = Locals { expressionValues :: Set.Set Name, independentIds :: Set.Set Name }
+data Locals = Locals { expressionValues :: Set.Set Name, independentIds :: Set.Set Name, ipSites :: Map.Map Name SrcSpan }
 
 data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan
 
@@ -25,6 +25,7 @@ data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan
 parts :: Data a => a -> ([HsBind GhcRn], [Name])
 parts node
     | Just binding <- cast node = ([binding], [])
+    | Just (_ :: IPBind GhcRn) <- cast node = mempty
     | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [unLoc n])
     | Just (_ :: NameSet) <- cast node = mempty
     | Just (_ :: Name) <- cast node = mempty
@@ -36,12 +37,19 @@ bodyParts = mconcat . children parts
 names :: HsBind GhcRn -> [Name]
 names = collectHsBindBinders CollNoDictBinders
 
+-- An explicit ?binding defines a dynamically scoped dictionary. Its RHS has
+-- ordinary obligations even if the surrounding property never selects it.
+implicitBodies :: HsGroup GhcRn -> [LHsExpr GhcRn]
+implicitBodies group = [rhs | IPBind _ _ rhs <- collectAst group]
+
 localBindings :: QuickCheck -> [TypecheckedModule] -> Locals
-localBindings qc modules = Locals values (reachable aliases independent)
+localBindings qc modules = Locals values (Set.union (Map.keysSet dictionaries) (reachable aliases independent)) dictionaries
   where
-    roots = [bodyParts b | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m], b <- fst (parts group)]
+    groups = [group | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
+    roots = [bodyParts b | group <- groups, b <- fst (parts group)]
+    ips = [parts rhs | group <- groups, rhs <- implicitBodies group]
     local b = (b, refs) : concatMap local nested where (nested, refs) = bodyParts b
-    locals = concatMap (concatMap local . fst) roots
+    locals = concatMap (concatMap local . fst) (roots ++ ips)
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
@@ -66,10 +74,11 @@ localBindings qc modules = Locals values (reachable aliases independent)
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
     live = reachable deps (Set.fromList (concatMap snd roots ++ concat [refs | (b, refs) <- locals, generator b]))
     usedBy set b = any (`Set.member` set) (names b)
-    ordinary = reachable deps (Set.fromList [ref | (b, refs) <- locals, not (generator b),
-        not (value b && usedBy live b), ref <- refs])
+    ordinary = reachable deps (Set.fromList (concatMap snd ips ++ [ref | (b, refs) <- locals, not (generator b),
+        not (value b && usedBy live b), ref <- refs]))
     values = Set.fromList [n | (b, _) <- locals, value b, usedBy live b, not (usedBy ordinary b), n <- names b]
     independent = Set.fromList [n | (b, _) <- locals, n <- names b, Set.notMember n values]
+    dictionaries = Map.fromList [(getName v, getLocA label) | m <- typed, IPBind v label _ <- collectAst m :: [IPBind GhcTc]]
 
 reachable :: Map.Map Name [Name] -> Set.Set Name -> Set.Set Name
 reachable edges initial = go initial (Set.toList initial)
@@ -97,3 +106,7 @@ ordinaryCoreBindings locals qc bs = filter (not . isQuickCheckBinding qc . fst) 
         let exempt = isQuickCheckBinding qc v
             resume = testing && not exempt && Set.member (getName v) (independentIds locals)
         in [pair | resume] ++ concatMap (inside (exempt || (testing && not resume))) (nestedBindings rhs)
+
+-- GHC's IP dictionary Id can have no source span; its declaration has one.
+coreLocation :: Locals -> Id -> SrcSpan
+coreLocation locals v = Map.findWithDefault (nameSrcSpan n) n (ipSites locals) where n = getName v
