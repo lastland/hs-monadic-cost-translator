@@ -8,7 +8,7 @@ import ConstructionHomeRepr
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
-import Data.List (nubBy)
+import Data.List (deleteFirstsBy, nubBy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType)
@@ -219,10 +219,15 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
         _ -> False
     identical (Active method ev carrier) (Active other previous oldCarrier) =
         method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
-    progress (Active _ ev@(Instance owner _ _ _) carrier) (Active _ ancestor@(Instance previous _ _ _) oldCarrier) =
+    progress (Active _ ev@(Instance owner _ args ds) carrier) (Active _ ancestor@(Instance previous _ oldArgs oldDs) oldCarrier) =
         owner /= previous || descendant ev ancestor ||
+            (sameEvidence carrier oldCarrier && permutation eqType args oldArgs && permutation sameEvidence ds oldDs) ||
             (sameEvidence ev ancestor && specializes (root oldCarrier) (root carrier))
     progress _ _ = False
+    -- Reordering existing arguments and context dictionaries gives a finite
+    -- set of obligations for this DFun and carrier. It permits another replay;
+    -- only identical (ordered) evidence above can actually close the edge.
+    permutation eq xs ys = length xs == length ys && null (deleteFirstsBy eq xs ys)
     -- The DFun is unchanged, but switching from the method parameter to the
     -- audited concrete carrier opens a new obligation; it is not a back-edge.
     specializes Given{} Instance{} = True
