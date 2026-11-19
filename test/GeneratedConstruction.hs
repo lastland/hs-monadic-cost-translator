@@ -1,7 +1,7 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, unless, void)
 import Cost.Translate (translateFile)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
@@ -12,25 +12,29 @@ import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
-import ConstructionRuntime (runtime)
+import ConstructionRuntime (resolveExport, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GeneratedFunctions (parseHaskellModule)
 import GHC
     ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind
-    , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
-    , backend, getLocA, getLogger
+    , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..), TyThing(AnId)
+    , backend, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , unLoc, ghcLink
     )
+import GHC.Builtin.Names (integralClassName)
+import GHC.Core.Predicate (getClassPredTys_maybe)
+import GHC.Core.Type (getTyVar_maybe)
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Type (getLHsInstDeclHead, ignoreParens)
 import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Paths (libdir)
+import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (rdrNameOcc)
 import GHC.Types.SrcLoc
@@ -50,14 +54,7 @@ import System.Process (readProcessWithExitCode)
 checkGeneratedConstruction :: FilePath -> IO ()
 checkGeneratedConstruction output = do
     problems <- runGhc (Just libdir) $ do
-        flags <- getSessionDynFlags
-        logger <- getLogger
-        -- Inspect the imported DFun fields selected by superclass projections.
-        (configured, leftovers, _) <- parseDynamicFlags logger flags
-            (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", quickCheckPackage])
-        unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
-        _ <- setSessionDynFlags configured
-            { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
+        configureArtifact output
         rt <- runtime
         target <- guessTarget output Nothing Nothing
         setTargets [target]
@@ -93,9 +90,21 @@ checkGeneratedConstruction output = do
             checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 
+configureArtifact :: FilePath -> Ghc ()
+configureArtifact output = do
+    flags <- getSessionDynFlags
+    logger <- getLogger
+    -- Inspect the imported DFun fields selected by superclass projections.
+    (configured, leftovers, _) <- parseDynamicFlags logger flags
+        (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", quickCheckPackage])
+    unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
+    void $ setSessionDynFlags configured
+        { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
+
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     checksImplicitForcing
+    checkClosedIntegral
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
@@ -366,16 +375,35 @@ checkGeneratedConstructionSpecimens = do
         case result of
             Left problem | message `isInfixOf` ioeGetErrorString problem -> pure ()
             _ -> fail ("expected assertion failure: " ++ message ++ "\nGot " ++ show result)
-    rejectsCompleteBox = do
+    completeArtifact label fixture = do
         temporary <- getTemporaryDirectory
-        directory <- createTempDirectory temporary "construction-box-artifact-"
-        putStrLn ("Complete Box construction artifact: " ++ directory)
-        source <- getDataFileName ("test" </> "cases" </> "datatype-only-conversion" </> "Example.hs")
+        directory <- createTempDirectory temporary "construction-artifact-"
+        putStrLn ("Complete " ++ label ++ " construction artifact: " ++ directory)
+        source <- getDataFileName ("test" </> "cases" </> fixture)
         let input = directory </> "Example.hs"
             output = directory </> "Generated.hs"
         copyFile source input
         translated <- translateFile input output
-        either (fail . ("Box must translate before the construction verdict: " ++)) pure translated
+        either (fail . ((label ++ " must translate before artifact inspection: ") ++)) pure translated
+        pure (directory, input, output)
+    checkClosedIntegral = do
+        (_, _, output) <- completeArtifact "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
+        signature <- runGhc (Just libdir) $ do
+            configureArtifact output
+            target <- guessTarget output Nothing Nothing
+            setTargets [target]
+            Succeeded <- load LoadAllTargets
+            home <- ms_mod <$> getModSummary (mkModuleName "Generated")
+            name <- resolveExport home "viewsM"
+            Just (AnId binder) <- lookupName name
+            pure (idType binder)
+        case tcSplitSigmaTy signature of
+            ([a], [predicate], _) | Just (cls, [argument]) <- getClassPredTys_maybe predicate,
+                getName cls == integralClassName, getTyVar_maybe argument == Just a ->
+                    putStrLn "PASS: ClosedIntegral / exported viewsM requires only Integral a"
+            _ -> fail (output ++ ": exported viewsM must require only Integral a; found " ++ pretty signature)
+    rejectsCompleteBox = do
+        (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")
         definitions <- definitionSpans <$> parseHaskellModule output
         checkBox output definitions
         -- Split the abstract equation after its binder, preserving the columns
