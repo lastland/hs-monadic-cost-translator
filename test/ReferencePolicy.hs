@@ -84,6 +84,7 @@ sourceAliases =
     ,("scoped-factory-guard-shadow-int", ["scoped-factory-guard-shadow/Example.hs"])
     ,("scoped-factory-guard-shadow-integer", ["scoped-factory-guard-shadow/Example.hs"])
     ,("constrained-sharing-same-dictionary", ["constrained-sharing-different-dictionaries/Example.hs"])
+    ,("constrained-local-disjoint-scoped", ["constrained-local-disjoint-scoped/Example.hs", "constrained-local-disjoint-scoped/ClosedIntegral.hs"])
     ,("anf-scoped-renaming", ["anf-scoped-renaming/Shadowed.hs", "anf-scoped-renaming/Renamed.hs"])
     ,("top-level-function-interface", ["top-level-function-interface/Control.hs", "top-level-function-interface/WithValue.hs"])
     ,("generated-warnings-minimal", ["generated-warnings/Minimal.hs"])]

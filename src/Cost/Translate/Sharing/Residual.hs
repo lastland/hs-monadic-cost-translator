@@ -7,8 +7,10 @@ import Control.Monad (guard)
 import Cost.Translate.Sharing.Native (nativeSharing)
 import Cost.Translate.Sharing.Schema (planNativeSchemas)
 import Cost.Translate.Sharing.Specialization
-    ( constrainedVariables
+    ( closedScalar
+    , constrainedVariables
     , specializedSharing
+    , targetDictionary
     )
 import Data.Either (fromRight)
 import Data.List (nubBy)
@@ -132,6 +134,10 @@ matchUse sigma use = do
 predicateAvailable :: [TyVar] -> [Type] -> Type -> Bool
 predicateAvailable variables givens predicate = case parts of
     Just (constructor, [actual])
+        | closedScalar actual
+        , targetDictionary predicate
+        , any (eqType predicate) givens ->
+            True
         | getName constructor == numClassName ->
             actual `eqType` intTy
                 || actual `eqType` integerTy
