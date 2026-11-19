@@ -113,6 +113,8 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
+    mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs"]
+    rejectsAt "FieldBadUse.hs" [(7, reprFailure), (10, reprFailure)]
     accepts "ContextReprUse.hs"
     rejectsAt "ContextReprCycle.hs" [(12, reprFailure)]
     rejectsAt "ContextReprBad.hs"
