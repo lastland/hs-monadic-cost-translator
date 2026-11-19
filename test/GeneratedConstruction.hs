@@ -8,6 +8,7 @@ import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf)
 import ConstructionAst (collectAst)
 import ConstructionEvidence (checkEvidence, methodNames)
+import ConstructionHomeRepr (homeReprs)
 import ConstructionRoles (supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
@@ -18,12 +19,13 @@ import GHC
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
-    , load, noBackend, parseDynamicFlags, parseModule, depanal
+    , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, tm_renamed_source, tm_typechecked_source, typecheckModule
     , unLoc, ghcLink
     )
 import GHC.Core.ConLike (conLikeName)
 import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
+import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Paths (libdir)
 import GHC.Types.GREInfo (conLikeName_Name)
 import GHC.Types.Name.Reader (greName)
@@ -69,12 +71,15 @@ checkGeneratedConstruction output = do
             Succeeded -> pure ()
         checkedModules <- mapM typecheckModule parsedModules
         (views, viewNames, viewCalls) <- viewSupport rt homes checkedModules
-        fmap concat $ forM checkedModules $ \checked -> do
+        programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
+        let checkedPrograms = zip checkedModules programs
+            representations = homeReprs rt checkedPrograms
+        fmap concat $ forM checkedPrograms $ \(checked, program) -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
                 let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
                     (syntaxProblems, sites) = checkSyntax rt homes methods viewNames views viewCalls updates group
-                evidenceProblems <- checkEvidence rt (homeDemandTypes rt checkedModules) (supportCoreNames views checked) checked sites
+                evidenceProblems <- checkEvidence rt representations program (homeDemandTypes rt checkedModules) (supportCoreNames views checked) checked sites
                 pure (syntaxProblems ++ evidenceProblems)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
     unless (null problems) (fail (unlines problems))
@@ -106,10 +111,11 @@ updateConstructors _ = []
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
-    rejectsBecause "WrapperCarrier.hs" ["WrapperCarrier.hs:4:", "WrapperCarrier.hs:7:", "WrapperCarrier.hs:10:", "audited Memorist instance"]
+    rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
-    rejectsBecause "HomeReprUnsafe.hs" ["HomeReprUnsafe.hs:10:", "audited Memorist instance", "HomeReprUnsafe.hs:11:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
-    rejectsBecause "HomeReprGiven.hs" ["HomeReprGiven.hs:8:", "reprM requires a concrete method-specific construction closure and audited carrier"]
+    rejectsAt "HomeReprUnsafe.hs" [(10, functorWrapper), (11, forbidden tval)]
+    rejectsAt "HomeReprGiven.hs" [(8, selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier")]
+    rejectsAt "HomeReprDelegation.hs" [(9, carrier "pure")]
     accepts "IntegerSummaryControl.hs"
     rejects "IntegerSummaryBypass.hs" [(7, "Memorist.Data.Interface.Data.abstract"), (10, "Memorist.Base.Thunk.tval")]
     rejectsAt "IntegerSummaryBypass.hs"
@@ -225,6 +231,7 @@ checkGeneratedConstructionSpecimens = do
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
     selected op = "unapproved selected method " ++ op
+    functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
     protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
     demandEq = selected "GHC.Classes.==: demand-data methods have no observation exemption"

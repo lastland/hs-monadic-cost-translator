@@ -11,5 +11,4 @@ instance M.Repr Box where
     abstract (Box thunk) = let unused = M.tval thunk in Box thunk
 
 selected :: M.MemoristM Box
-selected = M.reprM
-    (let unavailable = undefined in Box unavailable)
+selected = M.reprM (Box undefined)

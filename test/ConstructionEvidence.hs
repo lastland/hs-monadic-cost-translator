@@ -3,6 +3,7 @@
 module ConstructionEvidence (checkEvidence, methodNames) where
 
 import ConstructionAst
+import ConstructionHomeRepr
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -28,9 +29,8 @@ import GHC.Types.Id (isDFunId)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.Var (isId)
-import GHC.Unit.Module.ModGuts (mg_binds)
 
-data Evidence = Given Type | Instance Name Type [Evidence] | Super Type Evidence | Unknown String
+data Evidence = Given Name Type | Instance Name Type [Evidence] | Super Type Evidence | Unknown String
 data Use = Use Name Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
@@ -65,12 +65,10 @@ methodFamilies rt = do
 methodNames :: Runtime -> Ghc [Name]
 methodNames rt = Map.keys <$> methodFamilies rt
 
-checkEvidence :: Runtime -> [TyCon] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [String]
-checkEvidence rt demands support checked sites = do
+checkEvidence :: Runtime -> HomeReprs -> [C.CoreBind] -> [TyCon] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [String]
+checkEvidence rt homes program demands support checked sites = do
     selected <- methodFamilies rt
-    desugared <- desugarModule checked
-    let program = mg_binds (coreModule desugared)
-        bindings = allBindings program
+    let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
@@ -104,7 +102,7 @@ checkEvidence rt demands support checked sites = do
     pure (rootProblems ++ siteProblems)
   where
     atBinder binder = map ((pretty (nameSrcSpan (getName binder)) ++ ": ") ++)
-    problems = concatMap (checkUse rt demands)
+    problems = concatMap (checkUse rt homes demands)
 
 -- Explicit type application retains its dictionary on a typed prefix, not on
 -- the bare HsVar. Follow only that prefix and compiler wrappers back to the same
@@ -119,8 +117,8 @@ typedMethodHead expression = at (getLocA expression) (unLoc expression)
     at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
     at _ _ = Nothing
 
-checkUse :: Runtime -> [TyCon] -> Use -> [String]
-checkUse rt demands (Use name expectedClass family types dictionaries) =
+checkUse :: Runtime -> HomeReprs -> [TyCon] -> Use -> [String]
+checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
@@ -142,7 +140,7 @@ checkUse rt demands (Use name expectedClass family types dictionaries) =
     root (Super _ parent) = root parent
     root evidence = evidence
     predicateOf (Super predicate _) = Just predicate
-    predicateOf (Given predicate) = Just predicate
+    predicateOf (Given _ predicate) = Just predicate
     predicateOf (Instance _ predicate _) = Just predicate
     predicateOf Unknown{} = Nothing
     selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
@@ -161,7 +159,13 @@ checkUse rt demands (Use name expectedClass family types dictionaries) =
             ([runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["Dem", "ThD", "MaybeD", "PairD"]] ++
              [runtimeName rt "Memorist.Data.List" "ListD"]) || any demandOperand arguments
         _ -> False
+    -- Only the actual reprM field’s lambda-bound carrier (or its superclass
+    -- projection) is instantiated by the concrete carrier checked at calls.
+    conditional ty evidence = case root evidence of
+        Given binder predicate | methodCarrier homes binder, Just (_, [_, carrier]) <- getClassPredTys_maybe predicate -> eqType ty carrier
+        _ -> False
     memorist ty evidence
+        | selectedPredicate ty evidence && conditional ty evidence = True
         | isMemoristType rt ty, selectedPredicate ty evidence = case root evidence of
             Instance owner predicate children' | runtimeOwns rt owner -> case (boundInstance rt owner, getClassPredTys_maybe predicate) of
                 (Just (cls, _), Just (selected, arguments)) -> cls == getName selected &&
@@ -169,9 +173,11 @@ checkUse rt demands (Use name expectedClass family types dictionaries) =
                 _ -> False
             _ -> False
         | otherwise = False
-    -- These pinned runtime reprM bodies use return/lazy/recursive reprM only.
-    -- Their abstract fields are neither selected nor granted by this closure.
-    concreteRepr ty evidence = case root evidence of
+    -- Neither a home nor an audited runtime reprM grants its abstract field.
+    concreteRepr ty evidence = case evidence of
+        Instance owner predicate [] | selectedHome homes owner ty,
+                Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
+            getName cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr" && eqType argument ty
         Instance owner predicate dependencies | runtimeOwns rt owner,
                 Just (cls, _) <- boundInstance rt owner,
                 cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr",
@@ -186,7 +192,7 @@ checkUse rt demands (Use name expectedClass family types dictionaries) =
         ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->
                 -- The second dictionary belongs to reprM's carrier, not Repr.
-                isMemoristType rt carrier && case root evidence of
+                conditional carrier evidence || isMemoristType rt carrier && case root evidence of
                     Instance owner predicate children' | runtimeOwns rt owner,
                             Just (boundClass, _) <- boundInstance rt owner,
                             Just (actual, arguments) <- getClassPredTys_maybe predicate ->
@@ -230,7 +236,7 @@ uses selected = walk
             (C.Var identifier, arguments)
                 | isDFunId identifier -> Instance (getName identifier) (exprType expression)
                     [trace env given seen arg | arg <- arguments, not (C.isTyCoArg arg), isPredTy (exprType arg)]
-                | null arguments, getName identifier `Set.member` given -> Given (idType identifier)
+                | null arguments, getName identifier `Set.member` given -> Given (getName identifier) (idType identifier)
                 | null arguments, getName identifier `Set.notMember` seen, Just rhs <- Map.lookup (getName identifier) env ->
                     trace env given (Set.insert (getName identifier) seen) rhs
                 | Just cls <- isClassOpId_maybe identifier, identifier `elem` classSCSelIds cls,
@@ -238,7 +244,7 @@ uses selected = walk
             _ -> Unknown (pretty expression)
 
 renderEvidence :: Evidence -> String
-renderEvidence (Given ty) = "given " ++ pretty ty
+renderEvidence (Given _ ty) = "given " ++ pretty ty
 renderEvidence (Instance name ty dependencies) = describeName name ++ " :: " ++ pretty ty ++
     concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
