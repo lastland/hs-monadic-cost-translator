@@ -8,6 +8,7 @@ import Cost.Translate.Callable (expressions, spine)
 import Cost.Translate.Frontend.Allocation
 import Cost.Translate.Frontend.PatternPaths
 import Cost.Translate.Frontend.Syntax
+import Cost.Translate.Sharing (Specialization)
 import Cost.Translate.Sharing.Schema
 import Data.Data (Data)
 import Data.List (nub)
@@ -24,7 +25,7 @@ data NamePlan = NamePlan
     , plannedMatches :: Map.Map String String
     , plannedAnchors :: Map.Map Name String
     , plannedBodies :: Map.Map Name String
-    , plannedSpecializations :: Map.Map Name [(Type, String)]
+    , plannedSpecializations :: Map.Map Name [(Specialization, String)]
     , plannedNativeSchemas :: NativeSchemas
     }
 
@@ -44,7 +45,7 @@ planNames ::
     [TyCon] ->
     Set.Set String ->
     Map.Map Name [Name] ->
-    Map.Map Name [Type] ->
+    Map.Map Name [Specialization] ->
     a ->
     NamePlan
 planNames datatypes globalNames layouts specialized syntax =

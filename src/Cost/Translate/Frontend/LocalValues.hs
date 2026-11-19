@@ -21,15 +21,17 @@ import Cost.Translate.Frontend.Allocation (freshPrimed)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Expressions (reuseThunk)
 import Cost.Translate.Frontend.Gates
-import Cost.Translate.Frontend.NamePlan (NamePlan (..))
+import Cost.Translate.Frontend.NamePlan (NamePlan (..), plannedTemporaryNames)
 import Cost.Translate.Frontend.Resolve (remainingArity)
 import Cost.Translate.Frontend.Signatures
 import Cost.Translate.Frontend.Strict (strictBindNames)
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing
-    ( constrainedVariables
+    ( Specialization (..)
+    , constrainedVariables
     , nativeSharing
+    , renameAllocation
     , vacuousSharing
     )
 import Cost.Translate.Typed (hasFreeVariables)
@@ -40,7 +42,11 @@ import Data.Set qualified as Set
 import GHC
 import GHC.Core.TyCo.FVs (tyCoVarsOfTypes)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (isPredTy, splitForAllTyVars, splitFunTys)
+import GHC.Core.Type
+    ( isPredTy
+    , splitForAllTyVars
+    , splitFunTys
+    )
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Name (getOccString)
 import GHC.Types.Name.Occurrence (isTvOcc, occNameString)
@@ -137,7 +143,7 @@ allocateSpecialized ::
     LocatedN Name ->
     O.Expr ->
     Maybe Type ->
-    [(Type, String)] ->
+    [(Specialization, String)] ->
     O.Expr ->
     Either String O.Expr
 allocateSpecialized sigs scope name action bindingType instances continuation =
@@ -166,9 +172,75 @@ allocateSpecialized sigs scope name action bindingType instances continuation =
                         )
                 let bodyName = plannedBody scope (unLoc name)
                     body = [O.sig bodyName bodyType, O.val bodyName [] action]
-                    allocate = specializedAllocation scope bodyName
-                allocations <- mapM allocate needed
-                pure (O.letE body (O.doE allocations continuation))
+                allocated <-
+                    specializedAllocations
+                        scope
+                        source
+                        bodyName
+                        needed
+                        continuation
+                pure (O.letE body allocated)
+
+specializedAllocations ::
+    Env ->
+    Name ->
+    String ->
+    [(Specialization, String)] ->
+    O.Expr ->
+    Either String O.Expr
+specializedAllocations scope source bodyName instances continuation = do
+    allocations <- mapM allocate named
+    pure
+        ( O.doE
+            (map fst allocations)
+            (O.letE (concatMap snd allocations) continuation)
+        )
+    where
+        plan = namePlan scope
+        occupied =
+            usedNames continuation
+                `Set.union` Set.fromList reserved
+        reserved = Map.elems (plannedLocals plan) ++ plannedTemporaryNames plan
+        named = snd (mapAccumL fresh occupied instances)
+        fresh used (specialization, target) =
+            let root = freshPrimed used (target ++ "anchor")
+             in (Set.insert root used, (specialization, target, root))
+        allocate = allocateSpecialization scope source bodyName
+
+allocateSpecialization ::
+    Env ->
+    Name ->
+    String ->
+    (Specialization, String, String) ->
+    Either String (O.Stmt, [O.Decl])
+allocateSpecialization scope source bodyName (specialization, target, root) = do
+    let ty = allocationType specialization
+        names = bodyTypeRenamings Map.empty scope source (O.v bodyName) ty
+        renamed = renameAllocation names ty
+        datatypes = sourceDatatypes scope
+        schemas = plannedNativeSchemas (namePlan scope)
+    native <- nativeSharing schemas Map.empty renamed
+    case native of
+        Nothing -> do
+            statement <- specializedAllocation scope bodyName (ty, target)
+            pure (statement, [])
+        Just (producerType, convert) -> do
+            signature <-
+                translatedSignatureAs
+                    False
+                    (O.tc "M.Th" . (: []))
+                    datatypes
+                    0
+                    renamed
+            let producer = O.ann (O.v bodyName) producerType
+                alias =
+                    if vacuousSharing ty
+                        then O.v root
+                        else O.call "mapThunk" [convert, O.v root]
+            pure
+                ( O.bind root (lazyAction producer)
+                , [O.sig target signature, O.val target [] alias]
+                )
 
 specializedAllocation :: Env -> String -> (Type, String) -> Either String O.Stmt
 specializedAllocation scope bodyName (instanceType, target) = do

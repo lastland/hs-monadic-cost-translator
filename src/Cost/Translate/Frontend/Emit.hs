@@ -12,7 +12,7 @@ import Cost.Translate.Frontend.Polymorphic
 import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
-import Cost.Translate.Sharing (sharingPaths)
+import Cost.Translate.Sharing (sharingPaths, useTypes)
 import Cost.Translate.Typed (hasFreshAnnotationVariables)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
@@ -276,7 +276,11 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
         bindingType = Map.lookup (unLoc name) (inferredBindings scope)
     case Map.lookup (unLoc name) (plannedSpecializations (namePlan scope)) of
         Just instantiations -> do
-            let thunks = [(ty, O.v target) | (ty, target) <- instantiations]
+            let thunks =
+                    [ (ty, O.v target)
+                    | (specialization, target) <- instantiations
+                    , ty <- useTypes specialization
+                    ]
             continuation <-
                 done
                     ( insertEnv

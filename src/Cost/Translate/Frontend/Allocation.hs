@@ -16,7 +16,7 @@ import Data.Char (isAlpha, isAlphaNum)
 import Data.List (isPrefixOf, mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import GHC (Name, Type)
+import GHC (Name)
 import GHC.Types.Name (getOccString)
 
 assignBinders ::
@@ -135,8 +135,8 @@ assignBindingNames suffix locals = go Map.empty
 assignSpecializations ::
     Map.Map Name String ->
     Set.Set String ->
-    [(Name, [Type])] ->
-    (Map.Map Name [(Type, String)], Set.Set String)
+    [(Name, [a])] ->
+    (Map.Map Name [(a, String)], Set.Set String)
 assignSpecializations locals = go Map.empty
     where
         go assigned used [] = (assigned, used)

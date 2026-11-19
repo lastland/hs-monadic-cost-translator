@@ -1,7 +1,10 @@
 module Cost.Translate.Sharing
     ( constrainedVariables
     , specializedSharing
+    , Specialization (..)
+    , planSpecializations
     , sharingType
+    , renameAllocation
     , nativeSharing
     , vacuousSharing
     , nativeSharingSupport
@@ -12,5 +15,6 @@ module Cost.Translate.Sharing
 import Cost.Translate.Sharing.Native
 import Cost.Translate.Sharing.NativeSupport (nativeSharingSupport)
 import Cost.Translate.Sharing.Paths
+import Cost.Translate.Sharing.Residual
 import Cost.Translate.Sharing.Specialization
 import Cost.Translate.Sharing.Support

@@ -4,6 +4,7 @@ import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing.Schema
+import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map (Map, lookup)
 import GHC
     ( Name
@@ -16,7 +17,9 @@ import GHC.Builtin.Types (liftedTypeKind)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.Type
-    ( mkTyVarTy
+    ( mkForAllTys
+    , mkTyVarTy
+    , splitForAllForAllTyBinders
     , splitForAllTyVars
     , splitFunTys
     , substTyWith
@@ -24,7 +27,14 @@ import GHC.Core.Type
 import GHC.Types.Name (mkInternalName)
 import GHC.Types.Name.Occurrence (mkTyVarOcc)
 import GHC.Types.Unique (getUnique)
-import GHC.Types.Var (setVarName, tyVarKind)
+import GHC.Types.Var
+    ( VarBndr (..)
+    , binderFlag
+    , binderVar
+    , setTyVarKind
+    , setVarName
+    , tyVarKind
+    )
 import GHC.Types.Var.Set (elemVarSet)
 
 sharingType :: Map.Map Name String -> Type -> ([TyVar], Type)
@@ -76,3 +86,23 @@ vacuousSharing ty =
         && not (any (`elemVarSet` tyCoVarsOfType body) variables)
     where
         (variables, body) = splitForAllTyVars ty
+
+renameAllocation :: Map.Map Name String -> Type -> Type
+renameAllocation names ty =
+    mkForAllTys binders (substTyWith original (map mkTyVarTy variables) body)
+    where
+        (quantified, body) = splitForAllForAllTyBinders ty
+        original = map binderVar quantified
+        (renamed, _) = sharingType names ty
+        (_, binders) = mapAccumL rename [] (zip quantified renamed)
+        variables = map binderVar binders
+        rename previous (binder, variable) =
+            let kind =
+                    substTyWith
+                        (map fst previous)
+                        (map (mkTyVarTy . snd) previous)
+                        (tyVarKind variable)
+                coherent = setTyVarKind variable kind
+             in ( previous ++ [(binderVar binder, coherent)]
+                , Bndr coherent (binderFlag binder)
+                )

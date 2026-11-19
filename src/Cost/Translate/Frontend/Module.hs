@@ -12,6 +12,7 @@ import Cost.Translate.Frontend.Syntax (arity)
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Pretty (Section)
+import Cost.Translate.Sharing (Specialization)
 import Cost.Translate.Specialize (specializeHelpers)
 import Cost.Translate.Typed qualified as Typed
 import Data.Map.Strict qualified as Map
@@ -80,7 +81,7 @@ moduleResult ::
     Bool ->
     Bool ->
     Env ->
-    Map.Map Name [Type] ->
+    Map.Map Name [Specialization] ->
     HsGroup GhcRn ->
     Either String (HsModule GhcPs, [Section], [Extension.Extension])
 moduleResult target source hash helpers env specialized group = do
