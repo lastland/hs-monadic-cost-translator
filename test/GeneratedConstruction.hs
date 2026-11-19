@@ -70,10 +70,10 @@ checkGeneratedConstruction output = do
             Failed -> fail (output ++ ": cannot load generated module for name resolution")
             Succeeded -> pure ()
         checkedModules <- mapM typecheckModule parsedModules
-        (views, viewNames, viewCalls) <- viewSupport rt homes checkedModules
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
+        (views, viewNames, viewCalls) <- viewSupport rt homes checkedPrograms
         fmap concat $ forM checkedPrograms $ \(checked, program) -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do

@@ -31,7 +31,6 @@ import GHC.Types.Name (nameModule_maybe)
 import GHC.Types.Var (isId, isTyVar)
 import GHC.Types.Var.Env (mkInScopeSet)
 import GHC.Types.Var.Set (isEmptyVarSet)
-import GHC.Unit.Module.ModGuts (mg_binds)
 
 data ViewRuntime = ViewRuntime
     { thunkCon :: DataCon, nilCon :: DataCon, consCon :: DataCon
@@ -44,11 +43,11 @@ data Slot = Slot
     }
 data Policy = Policy { views :: ViewRuntime, maps :: [Id], lists :: [Id], slots :: [Slot] }
 
-viewSupport :: Runtime -> [Module] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
-viewSupport runtime' homes checked = do
+viewSupport :: Runtime -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
+viewSupport runtime' homes checkedPrograms = do
     rt <- resolveViews runtime'
-    programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checked
-    let definitions = concatMap allBindings programs
+    let (checked, programs) = unzip checkedPrograms
+        definitions = concatMap allBindings programs
         source = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
         exactSource valid name = any (\binding -> binderName binding == Just name && valid binding) source
