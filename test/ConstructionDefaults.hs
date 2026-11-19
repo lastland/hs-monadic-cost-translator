@@ -27,7 +27,8 @@ import GHC.Types.Basic (DefMethSpec(VanillaDM))
 import GHC.Types.Id (isDFunId, isDataConId_maybe, isDataConWorkId_maybe)
 import GHC.Types.Name (isDataConName)
 
-data Defaults = Defaults [Name] [(Name, Name, Name)] -- DFun, selector, default
+data DefaultField = DefaultField { fieldDFun :: Name, fieldSelector :: Name, fieldDefault :: Name }
+data Defaults = Defaults [Name] [DefaultField]
 
 homeDefaults :: TypecheckedModule -> C.CoreProgram -> FamInstEnvs -> Environment -> [(Id, C.CoreExpr)] -> Defaults
 homeDefaults checked program families env raw = Defaults bodies (concatMap selected raw)
@@ -55,7 +56,7 @@ homeDefaults checked program families env raw = Defaults bodies (concatMap selec
         guard (getName actual == dm && eqType t ty)
         Instance owner predicate [] [] <- pure (trace env Set.empty Set.empty d)
         guard (owner == df && eqType predicate (idType df) && firstOrderMethod families (idType method))
-        pure (getName df, getName sel, dm)
+        pure DefaultField { fieldDFun = getName df, fieldSelector = getName sel, fieldDefault = dm }
     evidenceBody (C.Let (C.NonRec v _) body) | isPredTy (idType v) = evidenceBody body
     evidenceBody body = body
 
@@ -100,8 +101,8 @@ selectsDataDefault :: [Defaults] -> Use -> Bool
 selectsDataDefault modules = selected
   where
     bodies = Set.fromList [dm | Defaults ds _ <- modules, dm <- ds]
-    methods = Set.fromList [(df, n) | Defaults _ fields <- modules, (df, sel, dm) <- fields,
-        dm `Set.member` bodies, n <- [sel, dm]]
+    methods = Set.fromList [(fieldDFun field, n) | Defaults _ fields <- modules, field <- fields,
+        fieldDefault field `Set.member` bodies, n <- [fieldSelector field, fieldDefault field]]
     selected (Use n _ UnknownMethod [ty] [Instance df predicate [] []])
         | (getName df, n) `Set.member` methods, eqType predicate (idType df),
           Just (_, [t]) <- getClassPredTys_maybe predicate = eqType t ty

@@ -117,26 +117,34 @@ collectEvidence rt qc homes program support checked sites = do
 checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [Site] -> [String]
 checkEvidence rt homes demands sites = concatMap check sites
   where
-    inert = selectsDataDefault [facts | DefaultFacts facts <- sites]
-    bodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
+    rules = MethodRules
+        { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
+        , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
+        , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites] }
     observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
     check (DefaultFacts _) = []
     check (MissingCertificate why) = [why]
-    check (Site location field u) = map ((location ++ ": ") ++) (checkUse rt homes demands bodies inert [] field u)
+    check (Site location field u) = map ((location ++ ": ") ++) (checkUse rules [] field u)
+
+data MethodRules = MethodRules
+    { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
+    , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool }
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: Runtime -> HomeReprs -> [TyCon] -> Map.Map Name [Use] -> (Use -> Bool) -> [Active] -> Maybe Name -> Use -> [String]
-checkUse rt homes demands bodies inert stack field use@(Use name expectedClass family types dictionaries) =
+checkUse :: MethodRules -> [Active] -> Maybe Name -> Use -> [String]
+checkUse rules stack field use@(Use name expectedClass family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
+    rt = auditedRuntime rules
+    homes = homeRepresentations rules
     verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
-            | inert use = Nothing
+            | isDataDefault rules use = Nothing
             | family == UnknownMethod = Just "unknown executable method/default dependency"
             | otherwise = case (types, dictionaries) of
         (ty : _, evidence : _) -> case family of
@@ -167,7 +175,7 @@ checkUse rt homes demands bodies inert stack field use@(Use name expectedClass f
             cls == getName actual && length arguments == length selected && and (zipWith eqType arguments selected)
         _ -> False
     demandOperand ty = case splitTyConApp_maybe ty of
-        Just (tc, arguments) -> tc `elem` demands || getName tc `elem`
+        Just (tc, arguments) -> tc `elem` demandTypes rules || getName tc `elem`
             ([runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["Dem", "ThD", "MaybeD", "PairD"]] ++
              [runtimeName rt "Memorist.Data.List" "ListD"]) || any demandOperand arguments
         _ -> False
@@ -212,10 +220,10 @@ checkUse rt homes demands bodies inert stack field use@(Use name expectedClass f
     -- keeping only the enclosing definition's own slots conditional.
     replay method args ds ev = case dictionaries of
         [_, carrier] | Just apply <- instantiateUse method args ds carrier,
-                Just obligations <- Map.lookup (getName (carrierBinder method)) bodies ->
+                Just obligations <- Map.lookup (getName (carrierBinder method)) (fieldBodies rules) ->
             let active = Active (implementation method) ev carrier
             in any (identical active) stack || (all (progress active) stack &&
-                all (null . checkUse rt homes demands bodies inert (active : stack) field . apply) obligations)
+                all (null . checkUse rules (active : stack) field . apply) obligations)
         _ -> False
     identical (Active method ev carrier) (Active other previous oldCarrier) =
         method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
