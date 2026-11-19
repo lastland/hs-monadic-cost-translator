@@ -1,7 +1,7 @@
 -- | Link a home Repr dictionary to its actual reprM implementation.
 -- These are conditional certificates: every module body and retained source
 -- site is checked, and every caller must supply the audited carrier.
-module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite) where
+module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, homeDictionary, Field(..)) where
 
 import ConstructionAst (collectAst)
 import ConstructionRuntime
@@ -12,7 +12,6 @@ import GHC
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classTyCon)
 import GHC.Core.DataCon (dataConWorkId)
-import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
@@ -22,39 +21,37 @@ import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Types.Id (isDFunId)
 import GHC.Types.Var (isId, isTyVar)
-import GHC.Types.Var.Set (VarSet, emptyVarSet, elemVarSet, mkVarSet, subVarSet)
+import GHC.Types.Var.Set (emptyVarSet, mkVarSet, subVarSet)
 
 data Scheme = Scheme [TyVar] [Type] Type
 -- Only this field, not its sibling abstract, may use the DFun's context.
-data Scope = Scope Name SrcSpan VarSet [Name]
-data HomeReprs = HomeReprs (Map.Map Name (Scheme, [Bool])) (Map.Map Name Scope)
+data Field = Field { implementation :: Name, parameters :: [TyVar], slots :: [[Name]], carrierBinder :: Id }
+data Scope = Scope Field SrcSpan
+data HomeReprs = HomeReprs (Map.Map Name (Scheme, Field)) (Map.Map Name Scope) (Map.Map Name C.CoreExpr)
 
 homeReprs :: Runtime -> [(TypecheckedModule, [C.CoreBind])] -> HomeReprs
-homeReprs rt programs = HomeReprs (Map.fromList (map fst entries)) (Map.fromList (map snd entries))
+homeReprs rt programs = HomeReprs (Map.fromList (map fst entries)) (Map.fromList (map snd entries)) dictionaries
   where
-    entries = [((getName owner, (scheme, used)), (getName carrier, scope)) |
+    dictionaries = Map.fromList [(getName df, rhs) | (_, program) <- programs, (df, rhs) <- C.flattenBinds program, isDFunId df]
+    entries = [((getName owner, (scheme, field)), (getName carrier, Scope field span')) |
         (checked, program) <- programs, let bindings = C.flattenBinds program, let sources = sourceFields rt checked,
-        (owner, dictionary) <- bindings, Just (scheme, implementation) <- [homeField rt owner dictionary],
-        (method, carrier, span') <- sources, implementation == method,
+        (owner, dictionary) <- bindings, Just (scheme, method) <- [homeField rt owner dictionary],
+        (source, sourceSlots, carrier, span') <- sources, source == method,
         Just (carrierClass, [_, _]) <- [getClassPredTys_maybe (idType carrier)],
         getName carrierClass == runtimeName rt "Memorist.Base.Core" "Memorist",
-        Just rhs <- [lookup method bindings], Just (scope, used) <- [fieldScope scheme method span' rhs]]
+        Just rhs <- [lookup method bindings], Just field <- [fieldScope scheme method sourceSlots carrier rhs]]
 
--- Link context positions to the actual method's formal binders. An unused
--- position still needs resolved evidence, but cannot authorize a selector.
--- The raw and source passes also check sites erased from optimized Core.
-fieldScope :: Scheme -> Id -> SrcSpan -> C.CoreExpr -> Maybe (Scope, [Bool])
-fieldScope (Scheme variables context _) method span' rhs = do
-    let (binders, body) = C.collectBinders rhs
-        (params, rest) = splitAt (length variables) binders
+-- Match formal slots to both retained and desugared binders, even if the
+-- optimizer has erased every use of the original dictionary.
+fieldScope :: Scheme -> Id -> [Id] -> Id -> C.CoreExpr -> Maybe Field
+fieldScope (Scheme variables context _) method sourceSlots carrier rhs = do
+    let (params, rest) = splitAt (length variables) (fst (C.collectBinders rhs))
         ds = take (length context) rest
     guard (length params == length variables && all isTyVar params)
     let instantiate = substTyWith variables (map mkTyVarTy params)
-    guard (matchContextBinders ds (map instantiate context))
-    let free = exprFreeVars body
-        used = map (`elemVarSet` free) ds
-        slots = [getName v | (v, True) <- zip ds used]
-    pure (Scope (getName method) span' (mkVarSet params) slots, used)
+        predicates = map instantiate context
+    guard (matchContextBinders ds predicates && matchContextBinders sourceSlots predicates)
+    pure (Field (getName method) params (zipWith (\a b -> [getName a, getName b]) ds sourceSlots) carrier)
 
 -- Match the actual DFun telescope against the dictionary constructor and the
 -- reprM field's type AND evidence applications. No lookup by instance shape.
@@ -93,8 +90,8 @@ matchContextBinders ds predicates = length ds == length predicates && all isId d
 
 -- Link the field back to its retained source binder as well. Inlining or
 -- aliases must never turn an ordinary generic helper into a method body.
-sourceFields :: Runtime -> TypecheckedModule -> [(Id, Id, SrcSpan)]
-sourceFields rt checked = [(poly, carrier, span') | ab <- collectAst (tm_typechecked_source checked),
+sourceFields :: Runtime -> TypecheckedModule -> [(Id, [Id], Id, SrcSpan)]
+sourceFields rt checked = [(poly, abs_ev_vars ab, carrier, span') | ab <- collectAst (tm_typechecked_source checked),
     ABE poly _ _ _ <- abs_exports ab,
     FunBind (inner, _) name _ <- collectAst (abs_binds ab) :: [HsBind GhcTc], (location, span') <- locations, getLocA name == location,
     carrier <- wrapperVars inner]
@@ -110,29 +107,32 @@ sourceFields rt checked = [(poly, carrier, span') | ab <- collectAst (tm_typeche
 -- certified field they can also depend on its instance parameters: the field
 -- receives those from the same concrete DFun application. Local polymorphism
 -- and other given dictionaries cannot supply such a substitution.
-selectedHome :: HomeReprs -> Maybe Name -> Name -> [Type] -> Type -> Maybe [(Type, Bool)]
-selectedHome (HomeReprs heads scopes) caller owner arguments ty = do
-    (Scheme variables context headTy, used) <- Map.lookup owner heads
+selectedHome :: HomeReprs -> Maybe Name -> Name -> [Type] -> Type -> Maybe (Field, [Type])
+selectedHome (HomeReprs heads scopes _) caller owner arguments ty = do
+    (Scheme variables context headTy, field) <- Map.lookup owner heads
     guard (length variables == length arguments && all inScope arguments)
     let instantiate = substTyWith variables arguments
     guard (eqType (instantiate headTy) ty)
-    pure (zip (map instantiate context) used)
+    pure (field, map instantiate context)
   where
     scope = case caller >>= (`Map.lookup` scopes) of
-        Just (Scope _ _ params _) -> params
+        Just (Scope field _) -> mkVarSet (parameters field)
         Nothing -> emptyVarSet
     inScope t = tyCoVarsOfType t `subVarSet` scope
 
 methodCarrier :: HomeReprs -> Name -> Bool
-methodCarrier (HomeReprs _ scopes) = (`Map.member` scopes)
+methodCarrier (HomeReprs _ scopes _) = (`Map.member` scopes)
 
 contextSite :: HomeReprs -> Either Name SrcSpan -> Maybe Name
-contextSite (HomeReprs _ scopes) site = case [carrier | (carrier, Scope method span' _ _) <- Map.toList scopes,
-        either (== method) (`isSubspanOf` span') site] of
+contextSite (HomeReprs _ scopes _) site = case [carrier | (carrier, Scope field span') <- Map.toList scopes,
+        either (== implementation field) (`isSubspanOf` span') site] of
     [carrier] -> Just carrier
     _ -> Nothing
 
 methodContext :: HomeReprs -> Maybe Name -> Name -> Bool
-methodContext (HomeReprs _ scopes) caller ev = case caller >>= (`Map.lookup` scopes) of
-    Just (Scope _ _ _ slots) -> ev `elem` slots
+methodContext (HomeReprs _ scopes _) caller ev = case caller >>= (`Map.lookup` scopes) of
+    Just (Scope field _) -> any (ev `elem`) (slots field)
     Nothing -> False
+
+homeDictionary :: HomeReprs -> Id -> Maybe C.CoreExpr
+homeDictionary (HomeReprs _ _ dictionaries) df = Map.lookup (getName df) dictionaries

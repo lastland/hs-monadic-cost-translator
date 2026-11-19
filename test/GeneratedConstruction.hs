@@ -7,7 +7,7 @@ import Data.Data (Data)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf)
 import ConstructionAst (collectAst)
-import ConstructionEvidence (checkEvidence, methodNames)
+import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionRoles (supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
@@ -46,8 +46,9 @@ checkGeneratedConstruction output = do
     problems <- runGhc (Just libdir) $ do
         flags <- getSessionDynFlags
         logger <- getLogger
+        -- Inspect the imported DFun fields selected by superclass projections.
         (configured, leftovers, _) <- parseDynamicFlags logger flags
-            (map noLoc ["-package", "MemoristANT", "-package", "QuickCheck"])
+            (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", "QuickCheck"])
         unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
         _ <- setSessionDynFlags configured
             { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
@@ -74,14 +75,15 @@ checkGeneratedConstruction output = do
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
         (views, viewNames, viewCalls) <- viewSupport rt homes checkedPrograms
-        fmap concat $ forM checkedPrograms $ \(checked, program) -> do
+        reports <- forM checkedPrograms $ \(checked, program) -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
                 let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
                     (syntaxProblems, sites) = checkSyntax rt homes methods viewNames views viewCalls updates group
-                evidenceProblems <- checkEvidence rt representations program (homeDemandTypes rt checkedModules) (supportCoreNames views checked) checked sites
-                pure (syntaxProblems ++ evidenceProblems)
+                evidence <- collectEvidence rt representations program (supportCoreNames views checked) checked sites
+                pure (syntaxProblems, evidence)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
+        pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
 
 -- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
@@ -113,8 +115,10 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
-    mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs"]
-    rejectsAt "FieldBadUse.hs" [(7, reprFailure), (10, reprFailure)]
+    mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]
+    rejectsAt "FieldBadUse.hs" [(9, reprFailure), (12, reprFailure), (15, reprFailure), (18, reprFailure)]
+    rejectsAt "FieldHidden.hs" [(9, reprFailure)]
+    rejectsAt "FieldGrowth.hs" [(12, reprFailure)]
     accepts "ContextReprUse.hs"
     rejectsAt "ContextReprCycle.hs" [(12, reprFailure)]
     rejectsAt "ContextReprBad.hs"
