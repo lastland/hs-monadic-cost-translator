@@ -145,7 +145,7 @@ Top-level value bindings translate to monadic actions, and translated functions 
 
 ### Incomplete Six-Combinator Construction-Only Contract
 
-The target construction-only contract restricts generated code to the six runtime combinators `lazy`, `force`, `forcing`, `bind`, `ret`, and `tick` (with `do`/`pure` notation) plus checked metadata-preserving structural views ([issue #7](https://github.com/lastland/hs-monadic-cost-translator/issues/7#issuecomment-7000190468)). Full compliance is incomplete:
+The target construction-only contract restricts generated code to the six runtime combinators `lazy`, `force`, `forcing`, `bind`, `ret`, and `tick` (with `do`/`pure` notation) plus checked metadata-preserving structural views, with no exemption for observation helpers, compiler-derived instances, or generic dictionaries ([issue #7](https://github.com/lastland/hs-monadic-cost-translator/issues/7#issuecomment-7000190468)). Full compliance is incomplete:
 
 - **Legacy local sharing fallback**: Local value shapes outside the native lowering rules still emit legacy evaluator helpers (`sharedAt` / `sharedAtBy` using `eval` and `value`) and may require `Typeable` constraints absent from the source signature. In particular, construction-only sharing for potentially overlapping generic instantiations—such as a dictionary-sensitive local used at both an abstract `a` and concrete `Int`, which must share when `a = Int` and stay separate when `a = Integer`—is outside the current scope ([issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3)).
 - **Generated conversion and demand helpers**: Generated `Repr`, `Demand`, and `GeneratedDemand` support instances inspect thunk payloads and accounting metadata directly (`tval`, `usage`, `empty`, `union`), which have no exception under the six-combinator contract.
@@ -175,6 +175,7 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="double"
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="diagnostics fixture-policy"
   ```
+  Before compiling callers, the reference runner checks each generated module and its home imports against the full construction-only contract. Because current generated support still emits prohibited observation and demand helpers (such as `tval`), generated modules can translate and typecheck yet fail this guard before reference comparison. The `generated-construction` selector tests the guard itself against legal construction/structural-view controls and expected rejections.
 - **Supplemental external-runtime probes** (validates `MemoristANT` runtime behavior directly):
   ```sh
   sh scripts/stack-test.sh --stack-yaml integration/stack.yaml
