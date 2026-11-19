@@ -237,6 +237,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
+    rejectsAt "ErasedHomeMethod.hs" [(10, selected "QuickCheckRoles.make: unknown executable method/default dependency")]
     rejectsAt "ForallClosureChanged.hs" [(10, view "preserve"), (13, view "preserve")]
     rejects "ConstraintWrapperEscape.hs" [(11, tval)]
     rejectsIn "ConstraintWrapperEscape.hs" "DemandControl.hs" [(19, forbidden tval)]
