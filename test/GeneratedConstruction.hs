@@ -1,7 +1,7 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, unless)
 import Cost.Translate (translateFile)
 import Data.Data (Data)
 import Data.Foldable (toList)
@@ -36,7 +36,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (greName, rdrNameOcc)
 import GHC.Types.SrcLoc
     ( BufPos(..), BufSpan(..), GenLocated(..), RealSrcSpan, SrcSpan(RealSrcSpan)
-    , isRealSubspanOf, mkRealSrcLoc, mkRealSrcSpan, noLoc, srcSpanEndCol
+    , isRealSubspanOf, mkRealSrcLoc, mkRealSrcSpan, noLoc, srcSpanEndCol, srcSpanStartLine
     )
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Paths_cost_translate (getDataFileName)
@@ -199,7 +199,7 @@ checkGeneratedConstructionSpecimens = do
     -- Both projections are on line 6; only the filename distinguishes them.
     rejectsDespiteImport "PairedPayload.hs" 6 "HiddenConstruction.hs" 6 (forbidden tval)
     rejectsIn "DemandComputation.hs" "DemandControl.hs" [(19, forbidden tval)]
-    mixed "AlteredDemandView.hs" [10..12] "DemandControl.hs" [(19, forbidden tval)]
+    mixed "AlteredDemandView.hs" [TopBinding "generateField"] "DemandControl.hs" [(19, forbidden tval)]
     rejects "ViewAlteredMetadata.hs" [(6, "Memorist.Base.Thunk.Th"), (9, "Memorist.Base.Thunk.Th")]
     rejectsAt "ViewArbitraryConverter.hs" [(7, view "preserve"), (10, view "preserve")]
     rejects "ViewDeadConverter.hs" [(7, eval1)]
@@ -215,20 +215,23 @@ checkGeneratedConstructionSpecimens = do
     rejects "SchemaDeadHelper.hs" [(8, tval)]
     deferred <- specimen "DeferredCertificate.hs"
     typechecks deferred
-    expectRejection deferred [(deferred ++ ":", "unsupported construction compiler options: deferred errors")]
+    options <- rejection deferred
+    unless ((deferred ++ ": unsupported construction compiler options: deferred errors") `elem` lines options) $
+        fail (deferred ++ ": missing deferred-errors rejection, got " ++ options)
     rejectsAt "SplicedDeclaration.hs" [(1, "unsupported executable form: Template Haskell")]
     rejectsAt "RebindableExpansion.hs" [(13, "unsupported executable expansion")]
     accepts "ReboundDemand.hs"
-    mixed "SizedDemandOtherInput.hs" [13,16] "DemandControl.hs" [(19, forbidden tval)]
-    mixed "SizedDemandEscape.hs" [8] "DemandControl.hs" [(19, forbidden tval)]
+    mixed "SizedDemandOtherInput.hs" charGenerators "DemandControl.hs" [(19, forbidden tval)]
+    mixed "SizedDemandEscape.hs" [TopBinding "ordinary"] "DemandControl.hs" [(19, forbidden tval)]
     rejects "SizedDemandDead.hs" [(14, eval1)]
-    accepts "DatatypeGeneratorWrongRole.hs"
+    accepts "ArbitraryWithoutDemand.hs"
     rejectsDespiteImport "DatatypeGeneratorEscape.hs" 7 "DatatypeGeneratorControl.hs" 18 sized
     rejects "DatatypeGeneratorDead.hs" [(18, eval1)]
     rejectsAt "DemandDerivingEscape.hs" [(8, demandEq), (11, demandEq)]
     rejectsAt "DemandManualInstance.hs" [(15, demandEq)]
     rejectsAt "DemandProtectedDeriving.hs" [(13, protectedEq)]
-    mixed "SumGeneratorMissing.hs" [15] "SumGeneratorMissing.hs" [(9, defaultUsage)]
+    mixed "SumGeneratorMissing.hs" [InstanceMethod "Arbitrary" "Observation" "arbitrary"]
+        "SumGeneratorMissing.hs" [(9, defaultUsage)]
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
     rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
@@ -242,8 +245,8 @@ checkGeneratedConstructionSpecimens = do
     rejects "ConstraintWrapperDead.hs" [(15, eval1)]
     rejects "Construction.hs" [(21, "Memorist.Data.Interface.Data.abstract"), (21, "Memorist.Base.Thunk.tval")]
     rejectsAt "MethodControl.hs" [(19, carrier ">>=" ++ "; generic dictionaries confer no permission")]
-    mixed "DemandControl.hs" [14..16] "DemandControl.hs" [(19, forbidden tval)]
-    mixed "SizedDemandControl.hs" [13,16] "SizedDemandControl.hs" [(8, defaultUsage)]
+    mixed "DemandControl.hs" [TopBinding "generateField"] "DemandControl.hs" [(19, forbidden tval)]
+    mixed "SizedDemandControl.hs" charGenerators "SizedDemandControl.hs" [(8, defaultUsage)]
     rejects "DatatypeGeneratorControl.hs"
         [(13, "Memorist.Data.Interface.Demand.fullDemand"), (14, "Memorist.Data.Interface.Demand.usage"),
          (14, "Memorist.Base.Thunk.union"), (14, "Memorist.Base.Thunk.empty")]
@@ -274,6 +277,7 @@ checkGeneratedConstructionSpecimens = do
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
+    charGenerators = [InstanceMethod "Observation" "Char" "generate", InstanceMethod "DemandArb" "Char" "arbDemandFrom"]
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"
@@ -284,21 +288,24 @@ checkGeneratedConstructionSpecimens = do
             -- the Core reports on the binder independently of either matcher.
             masked = unlines (filter (not . isInfixOf "unapproved selected method GHC.Internal.Enum.enumFromTo:") (lines diagnostics))
         requireAt masked imported [(6, forbidden tval)]
-        dirty <- try @IOException (cleanAt masked output [12])
-        case dirty of
-            Left problem | range `isInfixOf` ioeGetErrorString problem -> pure ()
-            _ -> fail (output ++ ": steps passed as clean or failed for the wrong reason: " ++ show dirty)
+        cleanDefinitions diagnostics output [TopBinding "draw"]
+        expectAssertionFailure ("unexpected diagnostic in steps: " ++ range)
+            (cleanDefinitions masked output [TopBinding "steps"])
         requireAt masked output [(13, range)]
+        expectAssertionFailure (output ++ ":12: missing diagnostic: " ++ range)
+            (requireAt masked output [(12, range)])
     checksQuickCheckMixed = do
-        -- Only the exempt operand is forbidden in the two ordinary seq uses.
+        -- A bare seq in ordinary code must identify its exempt operand.
         let escape name = "QuickCheck binding used outside a generator or property: " ++ name
-        mixed "QuickCheckMixed.hs" [13,16] "QuickCheckMixed.hs"
+        mixed "QuickCheckMixed.hs" [TopBinding "draw", TopBinding "claim"] "QuickCheckMixed.hs"
             [(22, forbidden tval), (25, forbidden tval),
              (28, escape "QuickCheckRoles.sampleField"), (29, escape "QuickCheckMixed.claim"),
              (30, external "Test.QuickCheck.Gen.MkGen"), (31, external "Test.QuickCheck.Property.MkProperty"),
              (34, external "Test.QuickCheck.Gen.unGen"), (37, external "GHC.Prim.coerce"),
-              (40, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"),
-              (44, external "Test.QuickCheck.Arbitrary.arbitrary")]
+             (40, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"),
+             (44, external "Test.QuickCheck.Arbitrary.arbitrary"), (48, external "Test.QuickCheck.Arbitrary.arbitrary"),
+             (51, selected "QuickCheckRoles.make: unknown executable method/default dependency"),
+             (54, escape "QuickCheckRoles.choices")]
     -- Select reports to mask by exact path/line, independently of the matcher
     -- under test. Keep the location and the import's same-operation report.
     rejectsDespiteImport name line dependency importedLine reason = do
@@ -306,15 +313,21 @@ checkGeneratedConstructionSpecimens = do
         imported <- specimen dependency
         typechecks output
         diagnostics <- rejection output
-        let target = (site output line, reason)
-            dependencySite = (site imported importedLine, reason)
-            mask report | fst target `isPrefixOf` report = fst target ++ " unexpected operation"
+        let target = (line, reason)
+            mask report | Just text <- stripPrefix (output ++ ":") report,
+                          any (`isPrefixOf` text) [show line ++ ":", "(" ++ show line ++ ","] =
+                            output ++ ":" ++ takeWhile (/= ' ') text ++ " unexpected operation"
                         | otherwise = report
             masked = unlines (map mask (lines diagnostics))
-        requireDiagnostic diagnostics target
-        requireDiagnostic masked dependencySite
-        when (matchesDiagnostic target masked) $
-            fail (output ++ ": dependency masked missing target operation: " ++ reason)
+        requireAt diagnostics output [target]
+        requireAt masked imported [(importedLine, reason)]
+        expectAssertionFailure (output ++ ":" ++ show line ++ ": missing diagnostic: " ++ reason)
+            (requireAt masked output [target])
+    expectAssertionFailure message assertion = do
+        result <- try @IOException assertion
+        case result of
+            Left problem | message `isInfixOf` ioeGetErrorString problem -> pure ()
+            _ -> fail ("expected assertion failure: " ++ message ++ "\nGot " ++ show result)
     rejectsCompleteBox = do
         temporary <- getTemporaryDirectory
         directory <- createTempDirectory temporary "construction-box-artifact-"
@@ -325,7 +338,7 @@ checkGeneratedConstructionSpecimens = do
         copyFile source input
         translated <- translateFile input output
         either (fail . ("Box must translate before the construction verdict: " ++)) pure translated
-        definitions <- boxDefinitions <$> parseHaskellModule output
+        definitions <- definitionSpans <$> parseHaskellModule output
         checkBox output definitions
         -- Split the abstract equation after its binder, preserving the columns
         -- of its remaining tokens. The required observations move off that line.
@@ -338,17 +351,11 @@ checkGeneratedConstructionSpecimens = do
                 (before, after) <- splitAt (bufPos (bufSpanEnd bytes)) <$> readFile output
                 writeFile shiftedOutput ("\n" ++ before ++ "\n" ++ replicate (srcSpanEndCol location - 1) ' ' ++ after)
             _ -> fail (output ++ ": missing source offset of abstract")
-        parseHaskellModule shiftedOutput >>= checkBox shiftedOutput . boxDefinitions
+        parseHaskellModule shiftedOutput >>= checkBox shiftedOutput . definitionSpans
     checkBox output definitions = do
         typechecks output
-        reports <- rejection output >>= boxReports output
-        let check (key, expected) = do
-                (body, _) <- definition output definitions key
-                let actual = [(at, reason) | (at, reason) <- reports, at `isRealSubspanOf` body]
-                case (expected, actual) of
-                    ([], (at, reason):_) -> fail (pretty at ++ ": unexpected diagnostic in " ++ show key ++ ": " ++ reason)
-                    _ -> mapM_ (\reason -> unless (reason `elem` map snd actual) $
-                        fail (pretty body ++ ": missing diagnostic in " ++ show key ++ ": " ++ reason)) expected
+        reports <- rejection output >>= siteReports output
+        let check = checkDefinition output definitions reports
         mapM_ check
             [(InstanceMethod "Repr" "Box" "abstract", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
              (InstanceMethod "Demand" "BoxT" "fullDemand", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
@@ -358,10 +365,6 @@ checkGeneratedConstructionSpecimens = do
             [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
              InstanceMethod "GeneratedDemand" "BoxT" "genDemandBudget", InstanceMethod "Arbitrary" "BoxD" "arbitrary",
              InstanceMethod "DemandArb" "BoxT" "arbDemandFrom"]
-    definition output definitions key = case
-            [(body, binder) | (name, RealSrcSpan body _, binder) <- definitions, key == name] of
-        [entry] -> pure entry
-        matches -> fail (output ++ ": expected one definition of " ++ show key ++ ", found " ++ show (length matches))
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
@@ -372,35 +375,66 @@ checkGeneratedConstructionSpecimens = do
         typechecks output
         diagnostics <- rejection output
         requireAt diagnostics path expected
-        cleanAt diagnostics output clean
-    requireAt diagnostics path expected = mapM_ (requireDiagnostic diagnostics)
-        [(site path line, reason) | (line, reason) <- expected]
-    cleanAt diagnostics path allowed = case [report | report <- lines diagnostics, n <- allowed,
-            any (`isPrefixOf` report) [site path n, path ++ ":(" ++ show n ++ ","]] of
-        [] -> pure ()
-        report:_ -> fail ("unexpected diagnostic in a QuickCheck generator/property: " ++ report)
-    site path line = path ++ ":" ++ show (line :: Int) ++ ":"
-    expectRejection output expected = rejection output >>= \diagnostics -> mapM_ (requireDiagnostic diagnostics) expected
+        cleanDefinitions diagnostics output clean
+    cleanDefinitions diagnostics output keys = unless (null keys) $ do
+        definitions <- definitionSpans <$> parseHaskellModule output
+        reports <- siteReports output diagnostics
+        mapM_ (\key -> checkDefinition output definitions reports (key, [])) keys
+    requireAt diagnostics path expected = do
+        reports <- siteReports path diagnostics
+        let require target@(line, reason) = unless (hasSite target reports) $
+                fail (path ++ ":" ++ show line ++ ": missing diagnostic: " ++ reason ++
+                    case [actual | (at, actual) <- reports, srcSpanStartLine at == line] of
+                        [] -> "\nNo diagnostic starts on that line."
+                        found -> "\nOther reports on this line:\n" ++ unlines found)
+        mapM_ require expected
+    hasSite (line, reason) = any (\(at, actual) -> srcSpanStartLine at == line && matchesReason reason actual)
     rejection output = do
         result <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
         case result of
             Left problem -> pure (ioeGetErrorString problem)
             Right () -> fail (output ++ ": expected rejection, got Right ()")
-    requireDiagnostic diagnostics expected = unless (matchesDiagnostic expected diagnostics) $
-        fail ("missing diagnostic " ++ show expected ++ ", got " ++ diagnostics)
-    matchesDiagnostic (prefix, reason) = any (\line -> prefix `isPrefixOf` line && (": " ++ reason) `isInfixOf` line) . lines
     typechecks output = withSystemTempDirectory "construction-specimen-" $ \objects -> do
         (status, out, err) <- readProcessWithExitCode "ghc"
             ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
              "-outputdir", objects, "-package", "MemoristANT", "-package", "QuickCheck", output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
 
-data BoxDefinition = TopBinding String | InstanceMethod String String String deriving (Eq, Show)
+data SpecimenDefinition = TopBinding String | InstanceMethod String String String deriving Eq
+
+type BindingSpans = [(SpecimenDefinition, SrcSpan, SrcSpan)] -- whole definition, then binder
+type SiteReport = (RealSrcSpan, String)
+
+instance Show SpecimenDefinition where
+    show (TopBinding name) = name
+    show (InstanceMethod cls ty name) = name ++ " (instance " ++ cls ++ " " ++ ty ++ ")"
+
+-- Some checks specify the operation or its reason ahead of concrete evidence.
+-- A longer identifier with the same prefix must not satisfy that expectation.
+matchesReason :: String -> String -> Bool
+matchesReason expected actual = case stripPrefix expected actual of
+    Just rest -> null rest || any (`isPrefixOf` rest) [" ", ": ", "; "]
+    Nothing -> False
+
+definition :: FilePath -> BindingSpans -> SpecimenDefinition -> IO (RealSrcSpan, SrcSpan)
+definition path definitions key = case
+        [(body, binder) | (name, RealSrcSpan body _, binder) <- definitions, key == name] of
+    [entry] -> pure entry
+    matches -> fail (path ++ ": expected one definition of " ++ show key ++ ", found " ++ show (length matches))
+
+checkDefinition :: FilePath -> BindingSpans -> [SiteReport] -> (SpecimenDefinition, [String]) -> IO ()
+checkDefinition path definitions reports (key, expected) = do
+    (body, _) <- definition path definitions key
+    let actual = [(at, reason) | (at, reason) <- reports, at `isRealSubspanOf` body]
+    case (expected, actual) of
+        ([], (at, reason):_) -> fail (pretty at ++ ": unexpected diagnostic in " ++ show key ++ ": " ++ reason)
+        _ -> mapM_ (\reason -> unless (any (matchesReason reason . snd) actual) $
+            fail (pretty body ++ ": missing diagnostic in " ++ show key ++ ": " ++ reason)) expected
 
 -- Only a definition's binder counts, never a use in another function or a
 -- method with the same spelling in an instance for another type.
-boxDefinitions :: HsModule GhcPs -> [(BoxDefinition, SrcSpan, SrcSpan)]
-boxDefinitions parsed =
+definitionSpans :: HsModule GhcPs -> BindingSpans
+definitionSpans parsed =
     [(TopBinding (occ name), getLocA decl, getLocA name)
     | decl@(L _ (ValD _ (FunBind _ name _))) <- hsmodDecls parsed] ++
     [(InstanceMethod (occ cls) (occ ty) (occ name), getLocA binding, getLocA name)
@@ -412,8 +446,8 @@ boxDefinitions parsed =
 
 -- The guard exposes GHC's printed positions: a point, a one-line range, or
 -- a multi-line range. Its printed end column is inclusive; RealSrcSpan's is not.
-boxReports :: FilePath -> String -> IO [(RealSrcSpan, String)]
-boxReports path diagnostics = forM
+siteReports :: FilePath -> String -> IO [SiteReport]
+siteReports path diagnostics = forM
     [text | report <- lines diagnostics, Just text <- [stripPrefix (path ++ ":") report]] $ \text ->
         case break (== ' ') text of
             (location, ' ':reason) | Just (start, (line, column)) <- coordinates location ->

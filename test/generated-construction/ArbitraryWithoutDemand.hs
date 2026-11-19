@@ -1,4 +1,4 @@
-module DatatypeGeneratorWrongRole where
+module ArbitraryWithoutDemand where
 
 import QuickCheckRoles (sampleField)
 import qualified Memorist.Memorist as M
