@@ -28,3 +28,6 @@ pair = M.reprM ((17 :: Int), True)
 
 list :: M.MemoristM (L.ListT (M.MaybeT Int))
 list = M.reprM [Just (17 :: Int), Nothing]
+
+flipped :: M.MemoristM Int
+flipped = (\n -> M.tick >> pure n) =<< returned

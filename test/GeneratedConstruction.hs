@@ -106,6 +106,7 @@ updateConstructors _ = []
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
+    rejectsBecause "WrapperCarrier.hs" ["WrapperCarrier.hs:4:", "WrapperCarrier.hs:7:", "WrapperCarrier.hs:10:", "audited Memorist instance"]
     accepts "IntegerSummaryControl.hs"
     rejects "IntegerSummaryBypass.hs" [(7, "Memorist.Data.Interface.Data.abstract"), (10, "Memorist.Base.Thunk.tval")]
     rejectsAt "IntegerSummaryBypass.hs"
