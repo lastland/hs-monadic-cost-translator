@@ -3,6 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
+import ConstructionLocals (Locals, SourceSite(..), nestedSource)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -58,8 +59,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc uses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [SourceSite])
+checkSyntax rt qc locals uses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
@@ -71,7 +72,7 @@ checkSyntax rt qc uses homes methods restricted views viewCalls checked = case t
     expansionProblems value = ([unsupported expression
         | expression@(L _ (XExpr expansion)) <- collectAst value :: [LHsExpr GhcRn], not (sectionExpansion expansion)], [])
     unsupported expression = pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
-    walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
+    walk :: Data a => SrcSpan -> a -> ([String], [SourceSite])
     walk location value
         -- GHC caches a declaration's free variables on its renamed node. The
         -- actual uses are inside the method bodies, where their roles are known.
@@ -81,7 +82,8 @@ checkSyntax rt qc uses homes methods restricted views viewCalls checked = case t
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, exempt binding = ([], [])
+        | Just binding <- cast value, exempt binding =
+            foldr (plus . nested location) ([], []) (nestedSource locals binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
              else walk (getLocA name) matches
@@ -96,7 +98,7 @@ checkSyntax rt qc uses homes methods restricted views viewCalls checked = case t
                     HsVar _ name -> Just (unLoc name)
                     HsRecSel _ field -> Just (foExt field)
                     _ -> Nothing
-                site = ([], [(here, name) | Just name <- [reference], name `elem` methods])
+                site = ([], [MethodAt here name | Just name <- [reference], name `elem` methods])
                 body = case form of
                     _ | Just name <- reference, permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
                         ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
@@ -132,10 +134,12 @@ checkSyntax rt qc uses homes methods restricted views viewCalls checked = case t
       where
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
+    nested location binding = walk location binding `plus`
+        ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
     plus (a, b) (c, d) = (a ++ c, b ++ d)
     -- Matching or assigning a labelled field is not applying its selector.
     -- The constructor, field ownership, and nested pattern/expression still count.
-    recordField :: Data rhs => SrcSpan -> HsRecField GhcRn rhs -> ([String], [(SrcSpan, Name)])
+    recordField :: Data rhs => SrcSpan -> HsRecField GhcRn rhs -> ([String], [SourceSite])
     recordField location field = checkOperation (getLocA label) (foExt (unLoc label)) `plus` walk location (hfbRHS field)
       where label = hfbLHS field
     checkName location name | isQuickCheckBinding qc name =
