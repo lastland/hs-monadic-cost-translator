@@ -138,6 +138,7 @@ collectAst value
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
     rejects "QualifiedAlias.hs" [(4, "Memorist.Base.Core.value")]
     rejects "Unqualified.hs" [(7, "Memorist.Base.Core.eval1")]
     rejects "LetWrapper.hs" [(6, "Memorist.Base.Core.value")]
