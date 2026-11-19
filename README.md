@@ -177,6 +177,11 @@ and aliases. Pure representation conversions preserve root and field thunk
 identities across type instantiations without forcing unused payloads. Each
 function invocation still allocates fresh local thunks.
 
+If none of an unconstrained binding's quantified variables occurs in its result
+type, the binding reuses one ordinary thunk without a representation view.
+The variables may have higher or dependent kinds; their checked scopes remain
+available to type annotations in the right-hand side.
+
 An unconstrained local value with a translated source-datatype result can also
 share one polymorphic thunk when its right-hand side is an unguarded,
 nonrecursive constructor application or an `if` selecting such expressions.

@@ -24,7 +24,11 @@ import Cost.Translate.Frontend.Signatures
 import Cost.Translate.Frontend.Strict (strictBindNames)
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
-import Cost.Translate.Sharing (constrainedVariables, nativeSharing)
+import Cost.Translate.Sharing
+    ( constrainedVariables
+    , nativeSharing
+    , vacuousSharing
+    )
 import Cost.Translate.Typed (hasFreeVariables)
 import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
@@ -209,7 +213,10 @@ allocateShared sigs scope name action bindingType paths continuation
             Just (bodyType, convert) ->
                 let bodyName = plannedBody scope (unLoc name)
                     body = [O.sig bodyName bodyType, O.val bodyName [] action]
-                    mapped = O.call "mapThunk" [convert, O.v anchorVar]
+                    mapped =
+                        if maybe False vacuousSharing bindingType
+                            then O.v anchorVar
+                            else O.call "mapThunk" [convert, O.v anchorVar]
                     shared = O.val n [] mapped
                  in O.letE
                         body

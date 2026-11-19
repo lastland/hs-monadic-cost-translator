@@ -59,7 +59,10 @@ nativeSharing ::
     Either String (Maybe (O.Ty, O.Expr))
 nativeSharing datatypes renamings ty
     | null vars
-        || not (all ((`eqType` liftedTypeKind) . tyVarKind) vars)
+        || not
+            ( vacuousSharing ty
+                || all ((`eqType` liftedTypeKind) . tyVarKind) vars
+            )
         || not (null arguments) =
         Right Nothing
     | otherwise = case mapper vars result of
@@ -73,6 +76,13 @@ nativeSharing datatypes renamings ty
     where
         (vars, body) = splitForAllTyVars ty
         (arguments, result) = splitFunTys body
+
+vacuousSharing :: Type -> Bool
+vacuousSharing ty =
+    not (null variables)
+        && not (any (`elemVarSet` tyCoVarsOfType body) variables)
+    where
+        (variables, body) = splitForAllTyVars ty
 
 mapper :: [TyVar] -> Type -> Maybe O.Expr
 mapper vars value

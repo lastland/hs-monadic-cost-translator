@@ -3,6 +3,7 @@ module Cost.Translate.Sharing
     , specializedSharing
     , sharingType
     , nativeSharing
+    , vacuousSharing
     , nativeSharingSupport
     , sharingPaths
     , sharingSupport
