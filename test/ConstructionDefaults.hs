@@ -5,7 +5,7 @@ module ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault) where
 
 import ConstructionAst (collectAst, equations)
 import ConstructionDictionary (Environment, Evidence(..), Use(..), trace)
-import ConstructionRuntime (Family(UnknownMethod))
+import ConstructionRuntime (Family(UnknownMethod), scalarType)
 import Control.Monad (guard)
 import Data.Foldable (toList)
 import qualified Data.Map.Strict as Map
@@ -14,20 +14,21 @@ import GHC
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon)
 import GHC.Core.Coercion (Role(Nominal))
-import GHC.Core.DataCon (dataConRepArity)
+import GHC.Core.DataCon (dataConInstOrigArgTys, dataConRepArity, dataConUnivTyVars)
 import GHC.Core.FamInstEnv (FamInstEnvs, reduceTyFamApp_maybe)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Reduction (reductionReducedType)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.TyCon (isAlgTyCon, tyConSingleDataCon)
+import GHC.Core.TyCon (isDataTyCon, tyConSingleDataCon)
 import GHC.Core.Type (isPredTy, splitFunTys, splitTyConApp_maybe)
 import GHC.Tc.Types (tcg_tcs)
 import GHC.Types.Basic (DefMethSpec(VanillaDM))
 import GHC.Types.Id (isDFunId, isDataConId_maybe, isDataConWorkId_maybe)
 import GHC.Types.Name (isDataConName)
 
-data Defaults = Defaults [Name] [(Name, Name, Name)] -- DFun, selector, default
+data DefaultField = DefaultField { fieldDFun :: Name, fieldSelector :: Name, fieldDefault :: Name }
+data Defaults = Defaults [Name] [DefaultField]
 
 homeDefaults :: TypecheckedModule -> C.CoreProgram -> FamInstEnvs -> Environment -> [(Id, C.CoreExpr)] -> Defaults
 homeDefaults checked program families env raw = Defaults bodies (concatMap selected raw)
@@ -55,7 +56,7 @@ homeDefaults checked program families env raw = Defaults bodies (concatMap selec
         guard (getName actual == dm && eqType t ty)
         Instance owner predicate [] [] <- pure (trace env Set.empty Set.empty d)
         guard (owner == df && eqType predicate (idType df) && firstOrderMethod families (idType method))
-        pure (getName df, getName sel, dm)
+        pure DefaultField { fieldDFun = getName df, fieldSelector = getName sel, fieldDefault = dm }
     evidenceBody (C.Let (C.NonRec v _) body) | isPredTy (idType v) = evidenceBody body
     evidenceBody body = body
 
@@ -86,22 +87,33 @@ dataTree e = case C.collectArgs e of
 
 -- Require first-order data at the selected field, not just at the class
 -- signature. One family reduction per path suffices for scalar demand types.
+-- A newtype has no runtime constructor and can represent a function outright.
 firstOrderMethod :: FamInstEnvs -> Type -> Bool
 firstOrderMethod families signature = all (dataTy True) (result : map scaledThing args)
   where
     (args, result) = splitFunTys signature
-    dataTy step ty = case splitTyConApp_maybe ty of
-        Just (tc, ts) | isFamilyTyCon tc -> step && maybe False (dataTy False . reductionReducedType)
-                            (reduceTyFamApp_maybe families Nominal tc ts)
-                      | isAlgTyCon tc && not (isPredTy ty) -> all (dataTy step) ts
+    dataTy _ ty | scalarType ty = True
+    dataTy canReduceFamily ty = case splitTyConApp_maybe ty of
+        Just (tc, ts)
+            | isFamilyTyCon tc -> canReduceFamily && maybe False (dataTy False . reductionReducedType)
+                    (reduceTyFamApp_maybe families Nominal tc ts)
+            | isDataTyCon tc && not (isPredTy ty), let cons = tyConDataCons tc, not (null cons) ->
+                all (dataTy canReduceFamily) ts && all (firstOrderFields ty ts) cons
         _ -> False
+    -- Check one declaration, not a transitive graph of datatype definitions.
+    -- A field may be scalar, one of the checked arguments, or the exact same
+    -- instantiated datatype (as in a list tail). A changed recursive head,
+    -- a hidden callback or an unavailable constructor shape has no proof here.
+    firstOrderFields ty ts dc = isVanillaDataCon dc && length (dataConUnivTyVars dc) == length ts &&
+        all (known . scaledThing) (dataConInstOrigArgTys dc ts)
+      where known field = scalarType field || eqType field ty || any (eqType field) ts
 
 selectsDataDefault :: [Defaults] -> Use -> Bool
 selectsDataDefault modules = selected
   where
     bodies = Set.fromList [dm | Defaults ds _ <- modules, dm <- ds]
-    methods = Set.fromList [(df, n) | Defaults _ fields <- modules, (df, sel, dm) <- fields,
-        dm `Set.member` bodies, n <- [sel, dm]]
+    methods = Set.fromList [(fieldDFun field, n) | Defaults _ fields <- modules, field <- fields,
+        fieldDefault field `Set.member` bodies, n <- [fieldSelector field, fieldDefault field]]
     selected (Use n _ UnknownMethod [ty] [Instance df predicate [] []])
         | (getName df, n) `Set.member` methods, eqType predicate (idType df),
           Just (_, [t]) <- getClassPredTys_maybe predicate = eqType t ty
