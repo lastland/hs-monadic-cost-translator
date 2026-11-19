@@ -14,7 +14,8 @@ import qualified GHC.Core as C
 import GHC.Core.Class (classSCSelIds, classOpItems)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.Type (isPredTy, splitTyConApp_maybe)
+import GHC.Core.Type (isPredTy, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
+import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Utils (exprType)
 import GHC.Data.OrdList (fromOL)
 import GHC.HsToCore.Binds (dsTcEvBinds, dsTopLHsBinds)
@@ -29,19 +30,14 @@ import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.Var (isId)
 import GHC.Unit.Module.ModGuts (mg_binds)
 
-data Family = Computation | RepresentationMethod | ScalarMethod | ForbiddenMethod | UnknownMethod deriving (Eq)
 data Evidence = Given Type | Instance Name Type [Evidence] | Super Type Evidence | Unknown String
 data Use = Use Name Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
 families :: Runtime -> Map.Map Name Family
 families rt = Map.fromList
-    ([(name, Computation) | (label, name) <- standardNames rt, label `elem` map ("Prelude." ++)
-        ["pure", "return", ">>=", ">>", "=<<", "fmap", "<$>", "<*>", "<*", "*>"]] ++
-     [(name, ScalarMethod) | (label, name) <- standardNames rt, label `elem` map ("Prelude." ++)
-        ["+", "-", "*", "negate", "abs", "signum", "fromInteger", "fromRational", "/", "recip",
-         "div", "mod", "quot", "rem", "divMod", "quotRem", "==", "/=", "compare", "<", "<=", ">", ">=", "max", "min",
-         "show", "showsPrec", "showList"]])
+    [(name, family) | (occurrence, family) <- standardMethods,
+        (label, name) <- standardNames rt, label == "Prelude." ++ occurrence]
 
 -- The separately resolved runtime selectors are included without enumerating a
 -- module's exports or assigning permission to a same-spelled local method.
@@ -54,9 +50,16 @@ methodFamilies rt = do
                  name <- roleNames rt role]))
     entries <- fmap concat $ forM (Map.toList selected) $ \(name, family) -> do
         thing <- lookupName name
-        pure ([(name, (family, getName cls)) | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier]] ++
-            [(actual, (family, getName cls)) | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier],
-                (method, Just (actual, _)) <- classOpItems cls, getName method == name])
+        case thing of
+            Just (AnId identifier) | Just cls <- isClassOpId_maybe identifier -> pure $
+                (name, (family, getName cls)) : [(actual, (family, getName cls)) |
+                    (method, Just (actual, _)) <- classOpItems cls, getName method == name]
+            -- Overloaded wrappers are ordinary Ids. Their first argument after
+            -- type abstraction is the dictionary passed at the occurrence.
+            Just (AnId identifier) | family == Computation,
+                arg : _ <- fst (splitFunTys (snd (splitForAllTyVars (idType identifier)))),
+                Just (cls, [_]) <- getClassPredTys_maybe (scaledThing arg) -> pure [(name, (family, getName cls))]
+            _ -> fail ("cannot bind construction method: " ++ describeName name)
     pure (Map.fromList entries)
 
 methodNames :: Runtime -> Ghc [Name]

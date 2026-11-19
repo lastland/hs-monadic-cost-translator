@@ -3,7 +3,7 @@
 module ConstructionRuntime
     ( Runtime, Role(..), runtime, roleOf, roleNames, runtimeOwns, runtimeName
     , resolveValue, resolveExport, resolveType, describeName, isMemoristType, isProtected
-    , boundInstance, scalarType, standardNames
+    , boundInstance, scalarType, standardNames, standardMethods, Family(..)
     ) where
 
 import Control.Monad (forM, unless)
@@ -153,11 +153,17 @@ ordinaryValues :: [(String, String)]
 ordinaryValues = [("Prelude", name) | name <-
     [ "id", ".", "$", "const", "flip", "error", "undefined", "not", "&&", "||", "++", "otherwise", "seq"
     , "True", "False", "Just", "Nothing", "Left", "Right", "LT", "EQ", "GT"
-    , "pure", "return", ">>=", ">>", "=<<", "fmap", "<$>", "<*>", "<*", "*>"
-    , "+", "-", "*", "negate", "abs", "signum", "fromInteger", "fromRational"
-    , "/", "recip", "div", "mod", "quot", "rem", "divMod", "quotRem"
-    , "==", "/=", "compare", "<", "<=", ">", ">=", "max", "min", "show", "showsPrec", "showList"
-    ]] ++ [("Data.Void", "absurd")]
+    ]] ++ [("Data.Void", "absurd")] ++ [("Prelude", name) | (name, _) <- standardMethods]
+
+data Family = Computation | RepresentationMethod | ScalarMethod | ForbiddenMethod | UnknownMethod deriving (Eq)
+
+standardMethods :: [(String, Family)]
+standardMethods =
+    [(name, Computation) | name <- ["pure", "return", ">>=", ">>", "=<<", "fmap", "<$>", "<*>", "<*", "*>"]] ++
+    [(name, ScalarMethod) | name <-
+        ["+", "-", "*", "negate", "abs", "signum", "fromInteger", "fromRational", "/", "recip",
+         "div", "mod", "quot", "rem", "divMod", "quotRem", "==", "/=", "compare", "<", "<=", ">", ">=", "max", "min",
+         "show", "showsPrec", "showList"]]
 
 resolveValue :: Module -> String -> Ghc Name
 resolveValue owner occurrence = resolve owner occurrence True
