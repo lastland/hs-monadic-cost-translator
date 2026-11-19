@@ -377,6 +377,21 @@ Test groups and their execution are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/check-shell.sh
   ```
 
+### Generated Construction Checks
+
+The reference runner checks the complete generated module and its home imports
+before compiling callers. The checker requires concrete selected-instance and
+method evidence. Checked structural views must preserve thunk identity and the
+complete annotation; observation helpers, compiler derivation, and generic
+dictionaries grant no exemption from the construction contract.
+
+Current generated support still contains prohibited payload and accounting
+observers, including raw `tval` access. Such output can translate and typecheck
+successfully but fail the construction guard before reference comparison. The
+`generated-construction` group tests these expected rejections alongside legal
+construction and structural-view controls; passing that group does not mean the
+full reference suite passes.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE). The external `hs-pbt/` checkout remains subject to its own license.
