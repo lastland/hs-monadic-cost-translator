@@ -195,11 +195,12 @@ checkGeneratedConstructionSpecimens = do
     rejectsBecause "SumTagEscape.hs" ["constructor tags require the exact compiler dictionary in a checked stock-derived demand method"]
     rejectsBecause "ExplicitMethodWrongCarrier.hs" ["unapproved selected method", "audited Memorist instance"]
     rejectsBecause "UnusedExplicitMethod.hs" ["UnusedExplicitMethod.hs:8:", "unapproved selected method", "audited Memorist instance"]
+    rejectsBecause "ForallClosureChanged.hs" ["unchecked structural view use/escape", "Indexed", "PairT"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
          "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs",
          "SizedDemandControl.hs", "DatatypeGeneratorControl.hs", "DemandDerivingControl.hs", "SumGeneratorControl.hs",
-         "ExplicitMethodControl.hs"]
+         "ExplicitMethodControl.hs", "ForallClosureControl.hs"]
     putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
