@@ -91,7 +91,8 @@ resolveViews runtime' = do
     nothing <- named "Memorist.Data.Interface.Data" "NothingT"
     just <- named "Memorist.Data.Interface.Data" "JustT"
     pair <- named "Memorist.Data.Interface.Data" "PairT"
-    void <- maybe (fail "construction views: missing pre-resolved Void type") pure (lookup "Void" (observationTypes runtime'))
+    voidModule <- findModule (mkModuleName "Data.Void") Nothing
+    void <- resolveType voidModule "Void"
     ident <- standard "Prelude.id"
     absurd <- standard "Data.Void.absurd"
     pure (ViewRuntime thunk nil cons nothing just pair void ident absurd)

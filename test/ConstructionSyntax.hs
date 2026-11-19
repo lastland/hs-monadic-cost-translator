@@ -4,7 +4,6 @@ module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 
 import ConstructionAst
 import ConstructionRuntime
-import ConstructionRoles (unwrapConstraint)
 import Data.Data (Data, cast)
 import Data.Maybe (fromMaybe)
 import GHC
@@ -50,8 +49,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(Name, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted support viewCalls wrappers group = (expansionProblems, []) `plus` walk noSrcSpan group
+checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
+checkSyntax rt homes methods restricted views viewCalls group = (expansionProblems, []) `plus` walk noSrcSpan group
   where
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
@@ -63,12 +62,8 @@ checkSyntax rt homes methods restricted support viewCalls wrappers group = (expa
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
-            if (getLocA name, unLoc name) `elem` support then ([], [])
-            else walk (getLocA name) matches `plus`
-                case roleOf rt (unLoc name) of
-                    Just role | role `elem` [AbstractMethod, FullMethod, UsageMethod, DemandArbitraryMethod] ->
-                        ([pretty (getLocA name) ++ ": unsupported observation schema for " ++ describeName (unLoc name)], [])
-                    _ -> ([], [])
+             if (getLocA name, unLoc name) `elem` views then ([], [])
+             else walk (getLocA name) matches
         | Just (PatSynBind _ _) <- cast value :: Maybe (HsBind GhcRn) =
             ([pretty location ++ ": unsupported executable form: pattern synonym"], [])
         | Just expression <- cast value :: Maybe (LHsExpr GhcRn) =
@@ -88,9 +83,7 @@ checkSyntax rt homes methods restricted support viewCalls wrappers group = (expa
                                 Ambiguous{} -> ([], []) | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-             in if here `elem` viewCalls then ([], []) else case unwrapConstraint wrappers expression of
-                 Just continuation -> shape `plus` walk here continuation
-                 Nothing -> shape `plus` site `plus` body
+             in if here `elem` viewCalls then ([], []) else shape `plus` site `plus` body
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
             (if patternForm (unLoc pattern') then ([], []) else
                 ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'

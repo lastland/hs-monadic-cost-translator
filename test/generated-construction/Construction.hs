@@ -13,8 +13,8 @@ ordinary = do
 data Box = Box Int
 data BoxT = BoxT (M.Th Int)
 
--- Payload observation is admitted only as this verified Repr.abstract role,
--- never because an arbitrary helper happens to have a pure result type.
+-- An actual Repr.abstract body has no payload-observation permission.
+-- Its pure result type does not change the construction contract.
 instance M.Repr Box where
     type Rep Box = BoxT
     reprM (Box number) = BoxT <$> M.lazy (M.reprM number)

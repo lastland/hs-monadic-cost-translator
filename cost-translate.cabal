@@ -157,7 +157,6 @@ test-suite cost-translate-test
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionAst
-                     ConstructionDemand
                      ConstructionRuntime
                      ConstructionEvidence
                      ConstructionRoles

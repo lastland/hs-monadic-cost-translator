@@ -3,14 +3,16 @@
 module ConstructionRuntime
     ( Runtime, Role(..), runtime, roleOf, roleNames, runtimeOwns, runtimeName
     , resolveValue, resolveExport, resolveType, describeName, isMemoristType, isProtected
-    , boundInstance, scalarType, standardNames, observationNames, observationTypes
+    , boundInstance, scalarType, standardNames
     ) where
 
 import Control.Monad (forM, unless)
+import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import GHC
 import GHC.Builtin.Types (intTyCon, integerTyCon, boolTyCon, charTyCon, floatTyCon, doubleTyCon, unitTyCon, nilDataCon, consDataCon)
 import GHC.Core.ConLike (ConLike(..))
+import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (mkTyConApp, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
@@ -30,8 +32,6 @@ data Runtime = Runtime
     , typeNames :: Map.Map (String, String) TyCon
     , instances :: Map.Map Name (Name, [Type])
     , standardNames :: [(String, Name)]
-    , observationNames :: [(String, Name)]
-    , observationTypes :: [(String, TyCon)]
     }
 
 -- Audited against the actual library source and its loaded mi_src_hash. Keep
@@ -87,16 +87,32 @@ runtime = do
         actual <- findModule (mkModuleName label) Nothing
         name <- resolveExport actual occurrence
         pure (label ++ "." ++ occurrence, name)
-    quickCheck <- findModule (mkModuleName "Test.QuickCheck") Nothing
-    observation <- forM ["liftArbitrary", "liftShrink", "resize", "arbitrary", "shrink", "sized", "oneof"] $ \label ->
-        (label,) <$> resolveExport quickCheck label
-    generator <- resolveType quickCheck "Gen"
-    voidModule <- findModule (mkModuleName "Data.Void") Nothing
-    void <- resolveType voidModule "Void"
+    standard <- standardInstances ordinary
     pure (Runtime (moduleUnit root) (Map.fromList entries) (Map.fromList types)
-        (Map.fromList (concat [is | (_, _, is) <- owners]))
-        (("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary)
-        observation [("Gen", generator), ("Void", void)])
+        (Map.fromList (standard ++ concat [is | (_, _, is) <- owners]))
+        (("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary))
+
+-- Select closed standard instance heads, not all definitions in a base unit.
+-- The compiler version is pinned; each use must still match the selected class,
+-- complete concrete head and this actual DFun Name. No home/given dictionary is
+-- covered. Identity is only a dependency of the audited Memorist carrier.
+standardInstances :: [(String, Name)] -> Ghc [(Name, (Name, [Type]))]
+standardInstances ordinary = do
+    classes <- fmap concat $ forM ordinary $ \(_, name) -> do
+        thing <- lookupName name
+        pure [getName cls | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier]]
+    identityModule <- findModule (mkModuleName "Data.Functor.Identity") Nothing
+    identity <- resolveType identityModule "Identity"
+    setContext [IIDecl (simpleImportDecl (mkModuleName label)) | label <- ["Prelude", "Data.Functor.Identity"]]
+    fmap concat $ forM (nub classes) $ \expected -> do
+        details <- getInfo False expected
+        declared <- case details of
+            Just (_, _, found, _, _) -> pure found
+            Nothing -> fail ("construction setup: missing standard class: " ++ describeName expected)
+        pure [(getName identifier, (getName cls, [ty])) | instance' <- declared, let identifier = is_dfun instance',
+            ([], body) <- [splitForAllTyVars (idType identifier)], ([], predicate) <- [splitFunTys body],
+            Just (cls, [ty]) <- [getClassPredTys_maybe predicate], getName cls == expected,
+            (scalarType ty && not (eqType ty (mkTyConApp integerTyCon []))) || eqType ty (mkTyConApp identity [])]
 
 summaries :: [(String, String, Role)]
 summaries =
