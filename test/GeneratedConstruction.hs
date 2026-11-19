@@ -11,10 +11,10 @@ import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
-import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
+import ConstructionRoles (quickCheckRoles, homeDemandTypes)
 import ConstructionRuntime (resolveExport, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
-import ConstructionViews (viewSupport)
+import ConstructionViews (coreViewNames, viewSupport)
 import GeneratedFunctions (parseHaskellModule)
 import GHC
     ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
@@ -81,10 +81,10 @@ checkGeneratedConstruction output = do
         qc <- quickCheckRoles qcResult checkedModules
         let uses = quickCheckUses qcResult
             locals = localBindings qc checkedModules
-        (views, viewNames, viewCalls) <- viewSupport rt qc locals homes checkedPrograms
+        views <- viewSupport rt qc locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt qc locals uses homes methods viewNames views viewCalls checked
-            evidence <- collectEvidence rt qc locals representations program (supportCoreNames views checked) checked sites
+            let (syntaxProblems, sites) = checkSyntax rt qc locals uses homes methods views checked
+            evidence <- collectEvidence rt qc locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))

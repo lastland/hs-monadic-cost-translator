@@ -7,6 +7,7 @@ import ConstructionLocals (Locals, SourceSite(..), nestedSource)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
+import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
 import Data.Foldable (toList)
 import Data.List (nub)
@@ -65,13 +66,14 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [SourceSite])
-checkSyntax rt qc locals uses homes methods restricted views viewCalls checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
+checkSyntax rt qc locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     exempt = quickCheckBody qc checked
     qcUses = uses checked
+    (views, isViewCall) = moduleViews support checked
     updates = ambiguousUpdateReferences (tm_typechecked_source checked)
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
@@ -122,7 +124,7 @@ checkSyntax rt qc locals uses homes methods restricted views viewCalls checked =
                             | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-             in if here `elem` viewCalls then expansionProblems expression else shape `plus` site `plus` body
+             in if isViewCall here then expansionProblems expression else shape `plus` site `plus` body
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LPat GhcRn)) = recordField location field
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LHsExpr GhcRn)) = recordField location field
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
@@ -154,7 +156,7 @@ checkSyntax rt qc locals uses homes methods restricted views viewCalls checked =
     checkOperation location name = if permitted name then ([], []) else
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
-    permitted name | name `elem` restricted = False
+    permitted name | name `elem` restrictedViews support = False
     permitted name = case nameModule_maybe name of
         Nothing -> True
         Just owner | owner `elem` homes -> True

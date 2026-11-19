@@ -1,16 +1,18 @@
 -- | A metadata view is not an arbitrary (a -> b). Both its declaration and
 -- every retained source call need a closed structural certificate. Exporting
 -- a checked helper does not certify future external consumers (policy #7).
-module ConstructionViews (viewSupport) where
+module ConstructionViews (ViewSupport, viewSupport, restrictedViews, moduleViews, coreViewNames) where
 
 import ConstructionAst
 import ConstructionLocals (Locals, ordinaryCoreBindings)
-import ConstructionRoles (QuickCheck, isQuickCheckBinding)
+import ConstructionRoles (QuickCheck, isQuickCheckBinding, supportCoreNames)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (zip4)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, fromMaybe, mapMaybe)
+import qualified Data.Set as Set
 import GHC hiding (exprType)
 import GHC.Builtin.Types (liftedTypeKind)
 import qualified GHC.Core as C
@@ -25,11 +27,13 @@ import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCon (isAlgTyCon, isVisibleTyConBinder, tyConBinders)
 import qualified GHC.Core.Type as T
 import GHC.Core.Utils (exprType)
+import qualified GHC.Data.Strict as Strict
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types (tcg_tcs)
 import GHC.Types.Id (isDataConId_maybe)
 import GHC.Types.Name (nameModule_maybe)
+import GHC.Types.SrcLoc (BufSpan, getBufSpan)
 import GHC.Types.Var (isId, isTyVar)
 import GHC.Types.Var.Env (mkInScopeSet)
 import GHC.Types.Var.Set (isEmptyVarSet)
@@ -45,7 +49,25 @@ data Slot = Slot
     }
 data Policy = Policy { views :: ViewRuntime, maps :: [Id], lists :: [Id], slots :: [Slot] }
 
-viewSupport :: Runtime -> QuickCheck -> Locals -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
+data ViewSupport = ViewSupport
+    { restrictedViews :: [Name]
+    , viewSites :: Map.Map Module ([(SrcSpan, Name)], Set.Set BufSpan)
+    }
+
+-- A buffer offset identifies a token only within its own input module.
+moduleViews :: ViewSupport -> TypecheckedModule -> ([(SrcSpan, Name)], SrcSpan -> Bool)
+moduleViews support checked = (definitions, isCall)
+  where
+    owner = ms_mod (pm_mod_summary (tm_parsed_module checked))
+    (definitions, calls) = Map.findWithDefault ([], Set.empty) owner (viewSites support)
+    isCall span' = case getBufSpan span' of
+        Strict.Just bytes -> Set.member bytes calls
+        Strict.Nothing -> False
+
+coreViewNames :: ViewSupport -> TypecheckedModule -> [Name]
+coreViewNames support checked = supportCoreNames (fst (moduleViews support checked)) checked
+
+viewSupport :: Runtime -> QuickCheck -> Locals -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ViewSupport
 viewSupport runtime' qc locals homes checkedPrograms = do
     rt <- resolveViews runtime'
     let (checked, programs) = unzip checkedPrograms
@@ -66,21 +88,24 @@ viewSupport runtime' qc locals homes checkedPrograms = do
             in if length valid == length remaining then valid else prune valid
         policy = first { lists = listIds, slots = prune candidates }
         helpers = helperNames policy
-        support = [(getLocA name, unLoc name) | FunBind _ name _ <- source, unLoc name `elem` helpers]
-    calls <- fmap concat $ forM checked $ \m -> case tm_renamed_source m of
+    sites <- forM checked $ \m -> case tm_renamed_source m of
         Nothing -> fail "construction views: renamed source unavailable"
         Just (group, _, _, _, _) -> do
-            let callsites = [e | e <- collectAst group :: [LHsExpr GhcRn], sourceRoot policy homes e]
+            let owner = ms_mod (pm_mod_summary (tm_parsed_module m))
+                support = [(getLocA n, unLoc n) | FunBind _ n _ <- collectAst group :: [HsBind GhcRn], unLoc n `elem` helpers]
+                callsites = [e | e <- collectAst group :: [LHsExpr GhcRn], sourceRoot policy homes e]
                 typed = collectAst (tm_typechecked_source m) :: [LHsExpr GhcTc]
             session <- getSession
             (_, result) <- liftIO $ initDs session (fst (tm_internals_ m)) $
                 mapM (\candidate -> mapM dsLExpr [e | e <- typed, getLocA e == getLocA candidate]) callsites
-            pure [getLocA candidate | (candidate, expressions) <- zip callsites (fromMaybe [] result),
-                any (validRoot policy . typeLambdaBody . administrative) expressions]
+            let calls = Set.fromList [bytes | (candidate, expressions) <- zip callsites (fromMaybe [] result),
+                    Strict.Just bytes <- [getBufSpan (getLocA candidate)],
+                    any (validRoot policy . typeLambdaBody . administrative) expressions]
+            pure (owner, (support, calls))
     let problems = concat [walkBinding qc policy (C.NonRec v rhs) | program <- programs,
             (v, rhs) <- ordinaryCoreBindings locals qc (C.flattenBinds program)]
     unlessNull problems
-    pure (support, helpers, calls)
+    pure (ViewSupport helpers (Map.fromList sites))
   where
     unlessNull [] = pure ()
     unlessNull problems = fail (unlines problems)
