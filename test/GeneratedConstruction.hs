@@ -252,6 +252,7 @@ checkGeneratedConstructionSpecimens = do
     mixed "NestedOrdinaryView.hs" [TopBinding "control"] "NestedOrdinaryView.hs" [(11, view "preserve")]
     mixed "NestedOrdinaryPattern.hs" [TopBinding "law"] "NestedOrdinaryPattern.hs"
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]
+    rejects "NestedCallableType.hs" [(14, tval), (19, tval)]
     putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)

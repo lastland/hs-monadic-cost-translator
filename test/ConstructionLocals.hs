@@ -9,7 +9,10 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
 import qualified GHC.Core as C
-import GHC.Core.Type (isFunTy)
+import GHC.Core.Coercion (coercionLKind, coercionRKind)
+import GHC.Core.TyCo.Compare (eqType)
+import GHC.Core.Type (isFunTy, splitTyConApp_maybe)
+import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Tc.Utils.TcType (tcSplitNestedSigmaTys)
 import GHC.Types.Name.Set (NameSet)
 
@@ -42,10 +45,20 @@ localBindings qc modules = Locals values (reachable aliases independent)
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
+    -- A point-free helper can have an opaque family signature. Keep the
+    -- function shape witnessed at its typechecked definition or use; never
+    -- reduce potentially recursive families or interpret the helper itself.
+    asFunctions = concat [functionCasts w | m <- typed, w <- collectAst m]
+    functionCasts (WpCompose outer inner) = functionCasts outer ++ functionCasts inner
+    functionCasts (WpCast co) = [t | let l = coercionLKind co; r = coercionRKind co,
+        (t, other) <- [(l, r), (r, l)], isFunTy other]
+    functionCasts _ = []
+    callable t = isFunTy t || (maybe True (isTypeFamilyTyCon . fst) (splitTyConApp_maybe t) && any (eqType t) asFunctions)
     valueIds = Set.fromList [getName v | m <- typed, binding <- collectAst m :: [HsBind GhcTc],
         v <- collectHsBindBinders CollNoDictBinders binding,
-        let (_, _, result) = tcSplitNestedSigmaTys (idType v), not (isFunTy result)]
+        let (_, _, result) = tcSplitNestedSigmaTys (idType v), not (callable result)]
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
+    value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
     deps = Map.fromList [(n, refs) | (b, refs) <- locals, value b, n <- names b]
     -- Propagate only through values. Calling or passing a named function never
