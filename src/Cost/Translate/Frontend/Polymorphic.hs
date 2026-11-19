@@ -3,6 +3,7 @@ module Cost.Translate.Frontend.Polymorphic
     , allocatePayload
     ) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (guard, zipWithM)
 import Cost.Translate.Callable (spine)
 import Cost.Translate.Datatypes (renderType)
@@ -49,7 +50,8 @@ import GHC.Types.Var
     , setTyVarKind
     )
 
-data Payload = Payload [TyVar] Type PayloadBody
+data PayloadRoute = OriginalPayload | CheckedPayload
+data Payload = Payload PayloadRoute [TyVar] Type PayloadBody
 data PayloadBody
     = ConstructorPayload String [(String, Field)]
     | ConditionalPayload (LHsExpr GhcRn) Payload Payload
@@ -69,20 +71,52 @@ constructorPayload env name ty match = do
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
         rhs = m_grhss match
+        plan route scoped = case (grhssLocalBinds rhs, grhssGRHSs rhs) of
+            (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
+                (scoped,) <$> planPayload route env variables body expression
+            _ -> Nothing
+        original = do
+            scoped <- originalScope env name ty variables
+            plan OriginalPayload scoped
+        checked = do
+            scoped <- payloadScope env name ty
+            _ <-
+                either
+                    (const Nothing)
+                    Just
+                    (payloadBinders CheckedPayload env variables)
+            plan CheckedPayload scoped
     guard (not (null variables))
-    scoped <- payloadScope env name ty
-    _ <- either (const Nothing) Just (payloadBinders env variables)
-    case (grhssLocalBinds rhs, grhssGRHSs rhs) of
-        (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
-            (scoped,) <$> planPayload env variables body expression
-        _ -> Nothing
+    original <|> checked
+
+originalScope :: Env -> Name -> Type -> [TyVar] -> Maybe [TyVar]
+originalScope env name ty variables = do
+    guard (all (payloadKind . tyVarKind) variables)
+    guard (null names || map getName original == names)
+    pure (if null names then [] else original)
+    where
+        names = Map.findWithDefault [] name (scopedTypeVariables env)
+        original = fst (splitForAllTyVars ty)
+
+payloadKind :: Type -> Bool
+payloadKind kind
+    | isLiftedTypeKind kind = True
+    | Just (FTF_T_T, multiplicity, input, result) <- splitFunTy_maybe kind =
+        isManyTy multiplicity
+            && isLiftedTypeKind input
+            && isLiftedTypeKind result
+    | otherwise = False
 
 payloadScope :: Env -> Name -> Type -> Maybe [TyVar]
 payloadScope env name ty
     | null names = Just []
     | otherwise = do
         guard (map (getName . binderVar) explicit == names)
-        _ <- either (const Nothing) Just (payloadBinders env original)
+        _ <-
+            either
+                (const Nothing)
+                Just
+                (payloadBinders CheckedPayload env original)
         pure original
     where
         names = Map.findWithDefault [] name (scopedTypeVariables env)
@@ -95,21 +129,22 @@ payloadScope env name ty
                 )
                 (fst (splitForAllForAllTyBinders ty))
 
-planPayload :: Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
-planPayload env variables ty expression = do
+planPayload ::
+    PayloadRoute -> Env -> [TyVar] -> Type -> LHsExpr GhcRn -> Maybe Payload
+planPayload route env variables ty expression = do
     let (headExpression, arguments) = spine expression
     body <- case unLoc headExpression of
         HsIf _ condition yes no
             | null arguments ->
                 ConditionalPayload condition
-                    <$> planPayload env variables ty yes
-                    <*> planPayload env variables ty no
+                    <$> planPayload route env variables ty yes
+                    <*> planPayload route env variables ty no
         HsVar _ located
             | [argument] <- arguments
             , Just target <- payloadFunction env (unLoc located) -> do
                 [slot] <- pure (argumentNames env (argumentKey expression) 1)
                 ApplicationPayload target slot
-                    <$> planPayload env variables ty argument
+                    <$> planPayload route env variables ty argument
         HsVar _ located -> do
             let name = unLoc located
             (tc, types) <- splitTyConApp_maybe ty
@@ -126,13 +161,14 @@ planPayload env variables ty expression = do
             planned <- zipWithM field fields arguments
             pure (ConstructorPayload target (zip names planned))
         _ -> Nothing
-    pure (Payload variables ty body)
+    pure (Payload route variables ty body)
     where
         field ty' argument =
             case filter dependent variables of
                 [] -> Just (Ordinary argument)
-                quantified ->
-                    Generalized <$> planPayload env quantified ty' argument
+                quantified -> do
+                    nested <- planPayload route env quantified ty' argument
+                    pure (Generalized nested)
             where
                 dependent variable =
                     variable `elementOfUniqSet` tyCoVarsOfType ty'
@@ -154,15 +190,17 @@ payloadFunction env name = do
         _ -> Nothing
 
 payloadType :: Env -> Payload -> Either String O.Ty
-payloadType env (Payload variables ty _) =
+payloadType env (Payload route variables ty _) =
     O.forallT
-        <$> payloadBinders env variables
+        <$> payloadBinders route env variables
         <*> renderType (sourceDatatypes env) ty
 
-payloadBinders :: Env -> [TyVar] -> Either String [O.Binder]
-payloadBinders env variables = do
-    guardNames
-    mapM binder variables
+payloadBinders :: PayloadRoute -> Env -> [TyVar] -> Either String [O.Binder]
+payloadBinders route env variables = case route of
+    OriginalPayload -> mapM binder variables
+    CheckedPayload -> do
+        guardNames
+        mapM (binder . normalized) variables
     where
         captured =
             filter
@@ -174,13 +212,12 @@ payloadBinders env variables = do
                 Right ()
             | otherwise = Left "ambiguous payload binder scope"
         kinds = substTyWith variables (map mkTyVarTy variables)
+        normalized variable =
+            setTyVarKind variable (kinds (tyVarKind variable))
         binder variable
             | isLiftedTypeKind (tyVarKind variable) =
                 pure (O.b (getOccString variable))
-            | otherwise =
-                renderBinder
-                    (sourceDatatypes env)
-                    (setTyVarKind variable (kinds (tyVarKind variable)))
+            | otherwise = renderBinder (sourceDatatypes env) variable
 
 typedOperation :: String -> O.Ty -> O.Expr
 typedOperation name = O.typeApp (O.typeApp (O.v name) (O.t "M.MemoristM"))
@@ -199,7 +236,7 @@ emitPayload ::
     Env ->
     Payload ->
     Either String O.Expr
-emitPayload emit env payload@(Payload _ _ body) = case body of
+emitPayload emit env payload@(Payload _ _ _ body) = case body of
     ApplicationPayload target name argument -> do
         ty <- payloadType env argument
         action <- emitPayload emit env argument
@@ -243,11 +280,21 @@ allocatePayload ::
     ([TyVar], Payload) ->
     O.Expr ->
     Either String O.Expr
-allocatePayload emit env name (_, payload) continuation
+allocatePayload emit env name allocation@(_, payload) continuation
     | let used = usedNames continuation
-    , localName env name `Set.notMember` used =
-        emitPayload emit env payload >> pure continuation
-allocatePayload emit env name (scoped, payload) continuation = do
+    , localName env name `Set.notMember` used = case payload of
+        Payload OriginalPayload _ _ _ -> pure continuation
+        _ -> emitPayload emit env payload >> pure continuation
+    | otherwise = allocateUsedPayload emit env name allocation continuation
+
+allocateUsedPayload ::
+    (LHsExpr GhcRn -> Either String O.Expr) ->
+    Env ->
+    Name ->
+    ([TyVar], Payload) ->
+    O.Expr ->
+    Either String O.Expr
+allocateUsedPayload emit env name (scoped, payload) continuation = do
     ty <- payloadType env payload
     action <- emitPayload emit env payload
     sourceBinders <- mapM (renderBinder (sourceDatatypes env)) scoped
@@ -273,9 +320,9 @@ allocatePayload emit env name (scoped, payload) continuation = do
                 else [O.sig body bodyType, O.val body [] allocation]
         producer = if null scoped then allocation else O.v body
         signature = case payload of
-            Payload variables source _ ->
+            Payload route variables source _ ->
                 O.forallT
-                    <$> payloadBinders env variables
+                    <$> payloadBinders route env variables
                     <*> ( O.tc "M.Th" . (: [])
                             <$> renderType (sourceDatatypes env) source
                         )
