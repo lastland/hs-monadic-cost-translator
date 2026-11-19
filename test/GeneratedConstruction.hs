@@ -124,7 +124,8 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "RecurFlipBad.hs" [(7, reprFailure)]
     rejectsAt "RecurOtherUse.hs" [(6, reprFailure)]
     rejectsAt "NewtypeLabelBad.hs" [(6, reprFailure)]
-    rejectsAt "LabelFamilyCast.hs" [(17, reprFailure)]
+    rejectsAt "LabelFamilyList.hs" [(17, reprFailure)]
+    accepts "LabelFamilyCast.hs"
     rejectsAt "ScopeCarrierBad.hs" [(11, reprFailure)]
     accepts "ContextReprUse.hs"
     rejectsAt "ContextReprCycle.hs" [(12, reprFailure)]
