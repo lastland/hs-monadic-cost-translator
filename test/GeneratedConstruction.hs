@@ -16,8 +16,8 @@ import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GeneratedFunctions (parseHaskellModule)
 import GHC
-    ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
-    , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind
+    ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
+    , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
@@ -106,6 +106,7 @@ checkGeneratedConstructionSpecimens = do
     mixed "QuickCheckFieldUse.hs" [TopBinding "ignoreItem", TopBinding "readBool"] "QuickCheckFieldUse.hs"
         [(9, qcValue "QuickCheckFieldUse.item")]
     accepts "QuickCheckMappedLines.hs"
+    checksMappedBang
     mixed "QuickCheckStrictArgument.hs" [TopBinding "strict", TopBinding "prop_specialized"] "QuickCheckStrictArgument.hs"
         [(11, qcValue "QuickCheckStrictArgument.strict"), (14, qcValue "GHC.Prim.seq"),
          (17, "strict pattern forces a QuickCheck value outside a generator or property")]
@@ -250,14 +251,13 @@ checkGeneratedConstructionSpecimens = do
           "ExplicitMethodControl.hs", "ForallClosureControl.hs"]
     mixed "NestedOrdinaryWhere.hs" [TopBinding "claim"] "NestedOrdinaryWhere.hs" [(9, forbidden tval)]
     accepts "NestedQuickCheckControl.hs"
-    mixed "NestedOrdinaryLet.hs" [LocalBinding "claim" "draw", LocalBinding "claim" "check"] "NestedOrdinaryLet.hs"
+    mixed "NestedOrdinaryLet.hs" [LocalBinding (TopBinding "claim") "draw", LocalBinding (TopBinding "claim") "check"] "NestedOrdinaryLet.hs"
         [(11, carrier "pure"), (12, carrier "pure"), (14, forbidden tval), (15, forbidden tval), (20, forbidden tval)]
-    mixed "NestedOrdinaryView.hs" [TopBinding "control"] "NestedOrdinaryView.hs" [(11, view "preserve")]
+    rejectsAt "NestedOrdinaryView.hs" [(11, view "preserve")]
     mixed "NestedOrdinaryPattern.hs" [TopBinding "law"] "NestedOrdinaryPattern.hs"
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]
     rejects "NestedCallableType.hs" [(14, tval), (19, tval)]
-    mixed "NestedInstanceRoles.hs" [InstanceMethod "Make" ["Property"] "make"] "NestedInstanceRoles.hs"
-        [(13, forbidden tval), (19, forbidden tval)]
+    checksNestedInstanceRoles
     putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
@@ -277,6 +277,24 @@ checkGeneratedConstructionSpecimens = do
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
     charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
+    checksNestedInstanceRoles = do
+        output <- specimen "NestedInstanceRoles.hs"
+        typechecks output
+        diagnostics <- rejection output
+        let make tys = InstanceMethod "Make" tys "make"
+            gen = make ["Gen", "Int"]
+        checkDefinitions diagnostics output
+            [(SoleRhs gen, []), (LocalBinding gen "deadShrink", [forbidden tval]),
+             (make ["Bool"], [forbidden tval]), (make ["Property"], [])]
+    checksMappedBang = do
+        output <- specimen "QuickCheckMappedBang.hs"
+        typechecks output
+        parsed <- parseHaskellModule output
+        reports <- rejection output >>= siteReports "OrdinaryBang.hs"
+        case [at | pat@(L _ BangPat{}) <- collectAst parsed :: [LPat GhcPs], RealSrcSpan at _ <- [getLocA pat]] of
+            [at] -> unless ((at, "strict pattern forces a QuickCheck value outside a generator or property") `elem` reports) $
+                fail (pretty at ++ ": missing rejection at the remapped bang")
+            _ -> fail (output ++ ": expected exactly one bang pattern")
     checksDiagnosticSites = do
         output <- specimen "MixedDiagnosticSites.hs"
         imported <- specimen "HiddenConstruction.hs"
@@ -409,14 +427,16 @@ checkGeneratedConstructionSpecimens = do
              "-outputdir", objects, "-package", "MemoristANT", "-package", quickCheckPackage, output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
 
-data SpecimenDefinition = TopBinding String | LocalBinding String String | InstanceMethod String [String] String deriving Eq
+data SpecimenDefinition = TopBinding String | LocalBinding SpecimenDefinition String
+    | InstanceMethod String [String] String | SoleRhs SpecimenDefinition deriving Eq
 
-type BindingSpans = [(SpecimenDefinition, SrcSpan, SrcSpan)] -- whole definition, then binder
+type BindingSpans = [(SpecimenDefinition, SrcSpan, SrcSpan)] -- selected region, then binder
 type SiteReport = (RealSrcSpan, String)
 
 instance Show SpecimenDefinition where
     show (TopBinding name) = name
-    show (LocalBinding owner name) = name ++ " (in " ++ owner ++ ")"
+    show (LocalBinding owner name) = name ++ " (in " ++ show owner ++ ")"
+    show (SoleRhs owner) = "right-hand side of " ++ show owner
     show (InstanceMethod cls args name) = name ++ " (instance " ++ cls ++ " " ++ ty ++ ")"
       where ty = case args of [one] -> one; _ -> "(" ++ unwords args ++ ")"
 
@@ -445,19 +465,22 @@ checkDefinition path definitions reports (key, expected) = do
 -- Only a definition's binder counts, never a use in another function or a
 -- method with the same spelling in an instance for another type.
 definitionSpans :: HsModule GhcPs -> BindingSpans
-definitionSpans parsed =
-    [(TopBinding (occ name), getLocA decl, getLocA name)
-    | decl@(L _ (ValD _ (FunBind _ name _))) <- hsmodDecls parsed] ++
-    [(LocalBinding (occ owner) (occ name), getLocA binding, getLocA name)
-    | L _ (ValD _ (FunBind _ owner matches)) <- hsmodDecls parsed,
-      binding@(L _ (FunBind _ name _)) <- collectAst matches :: [LHsBind GhcPs]] ++
-    [(InstanceMethod (occ cls) tys (occ name), getLocA binding, getLocA name)
+definitionSpans parsed = concat $
+    [regions (TopBinding (occ name)) (getLocA decl) name matches
+    | decl@(L _ (ValD _ (FunBind _ name matches))) <- hsmodDecls parsed] ++
+    [regions (InstanceMethod (occ cls) tys (occ name)) (getLocA binding) name matches
     | L _ (InstD _ (ClsInstD _ inst)) <- hsmodDecls parsed,
       HsAppTy _ lhs rhs <- [unLoc (ignoreParens (getLHsInstDeclHead (cid_poly_ty inst)))],
       HsTyVar _ _ cls <- [unLoc (ignoreParens lhs)], Just tys <- [typeNames rhs],
-      binding@(L _ (FunBind _ name _)) <- toList (cid_binds inst)]
+      binding@(L _ (FunBind _ name matches)) <- toList (cid_binds inst)]
   where
     occ = occNameString . rdrNameOcc . unLoc
+    regions key at name matches = (key, at, getLocA name) :
+        [(LocalBinding key (occ n), getLocA binding, getLocA n)
+        | binding@(L _ (FunBind _ n _)) <- collectAst matches :: [LHsBind GhcPs]] ++
+        -- The expression span excludes the equation's where declarations.
+        [(SoleRhs key, getLocA rhs, getLocA name)
+        | [L _ match] <- [unLoc (mg_alts matches)], [L _ (GRHS _ _ rhs)] <- [grhssGRHSs (m_grhss match)]]
     typeNames ty = case unLoc (ignoreParens ty) of
         HsTyVar _ _ n -> Just [occ n]
         HsAppTy _ f x | HsTyVar _ _ n <- unLoc (ignoreParens x) -> (++ [occ n]) <$> typeNames f
