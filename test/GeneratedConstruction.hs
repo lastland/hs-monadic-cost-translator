@@ -166,9 +166,13 @@ checkGeneratedConstructionSpecimens = do
     rejectsBecause "ViewEscape.hs" ["unchecked structural view use/escape"]
     rejectsBecause "ViewCrossInput.hs" ["unchecked structural view use/escape"]
     rejectsBecause "ViewRawPattern.hs" ["unapproved runtime operation Memorist.Base.Thunk.Th"]
+    mapM_ (\name -> rejectsBecause name ["unchecked structural view use/escape"])
+        ["SchemaIndependentFields.hs", "SchemaChangedConstructor.hs", "SchemaCallback.hs", "SchemaEscape.hs",
+         "SchemaTypeOnly.hs", "SchemaOpaque.hs"]
+    rejectsBecause "SchemaDeadHelper.hs" ["unapproved runtime operation Memorist.Base.Thunk.tval"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
-         "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs"]
+         "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs"]
     putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
