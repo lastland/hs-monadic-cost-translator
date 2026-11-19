@@ -72,8 +72,9 @@ checkEvidence rt homes program demands support checked sites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        rootProblems = concat [atBinder binder (problems (Left (getName binder)) (uses selected environment givens rhs)) |
-            (binder, rhs) <- C.flattenBinds program, getName binder `notElem` support]
+        bindingProblems env given bs = concat [atBinder binder (problems (Left (getName binder)) (uses selected env given rhs)) |
+            (binder, rhs) <- bs, getName binder `notElem` support]
+        rootProblems = bindingProblems environment givens (C.flattenBinds program)
     session <- getSession
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
@@ -91,8 +92,7 @@ checkEvidence rt homes program demands support checked sites = do
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawProblems = concat [atBinder binder (problems (Left (getName binder)) (uses selected env allGivens rhs)) |
-                        (binder, rhs) <- raw, getName binder `notElem` support]
+                    rawProblems = bindingProblems env allGivens raw
                  in rawProblems ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [pretty location ++ ": no selected method certificate for " ++ describeName name]

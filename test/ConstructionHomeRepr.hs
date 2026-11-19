@@ -49,9 +49,8 @@ fieldScope (Scheme variables context _) method span' rhs = do
         (params, rest) = splitAt (length variables) binders
         ds = take (length context) rest
     guard (length params == length variables && all isTyVar params)
-    guard (length ds == length context && all isId ds)
     let instantiate = substTyWith variables (map mkTyVarTy params)
-    guard (and (zipWith eqType (map idType ds) (map instantiate context)))
+    guard (matchContextBinders ds (map instantiate context))
     let free = exprFreeVars body
         used = map (`elemVarSet` free) ds
         slots = [getName v | (v, True) <- zip ds used]
@@ -66,7 +65,7 @@ homeField rt owner dictionary = do
     guard (getName cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr")
     let selectors = classAllSelIds cls
         (ds, body) = C.collectBinders afterTypes
-    guard (length ds == length context && all isId ds && and (zipWith eqType (map idType ds) (map instantiate context)))
+    guard (matchContextBinders ds (map instantiate context))
     (C.Var worker, C.Type headTy : fields) <- pure (C.collectArgs body)
     guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)))
     guard (eqType headTy (instantiate ty) && length selectors == length fields)
@@ -87,6 +86,10 @@ homeField rt owner dictionary = do
     sameType _ = const False
     sameVar (C.Var v) = (== v)
     sameVar _ = const False
+
+matchContextBinders :: [Id] -> [Type] -> Bool
+matchContextBinders ds predicates = length ds == length predicates && all isId ds &&
+    and (zipWith eqType (map idType ds) predicates)
 
 -- Link the field back to its retained source binder as well. Inlining or
 -- aliases must never turn an ordinary generic helper into a method body.
