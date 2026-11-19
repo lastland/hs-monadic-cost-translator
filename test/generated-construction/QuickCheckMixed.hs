@@ -2,7 +2,7 @@ module QuickCheckMixed where
 
 import Data.Coerce (coerce)
 import qualified Memorist.Memorist as M
-import QuickCheckRoles (Draw, Verdict, Make(..), fieldLaw, sampleField)
+import QuickCheckRoles (Draw, Verdict, Make(..), SamplesRecord(..), fieldLaw, sampleField)
 import qualified Test.QuickCheck as Q
 import qualified Test.QuickCheck.Gen as G
 import qualified Test.QuickCheck.Property as P
@@ -49,3 +49,6 @@ instance Make Bool where
 
 forceMade :: M.MemoristM ()
 forceMade = (make :: Draw Int) `seq` pure ()
+
+forceField :: SamplesRecord -> M.MemoristM ()
+forceField r = choices r `seq` pure ()

@@ -31,3 +31,8 @@ instance Make (Random.Gen Int) where
 
 instance Make Random.Property where
     make = Random.forAll (make :: Draw Int) $ \n -> n Random.=== n
+
+data SamplesRecord = SamplesRecord { choices :: Draw Bool, statement :: Verdict }
+
+recordLaw :: SamplesRecord -> Verdict
+recordLaw r = Random.forAll (choices r) (\_ -> statement r)
