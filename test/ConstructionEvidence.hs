@@ -5,6 +5,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 import ConstructionDictionary
 import ConstructionAst
 import ConstructionHomeRepr
+import ConstructionLocals (Locals, ordinaryCoreBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -70,15 +71,15 @@ methodNames rt modules = do
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String
 
-collectEvidence :: Runtime -> QuickCheck -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [Site]
-collectEvidence rt qc homes program support checked sites = do
+collectEvidence :: Runtime -> QuickCheck -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [Site]
+collectEvidence rt qc locals homes program support checked sites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
         bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses qc selected env given rhs) |
-            (binder, rhs) <- bs, not (isQuickCheckBinding qc binder), getName binder `notElem` support]
+            (binder, rhs) <- ordinaryCoreBindings locals qc bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
     let global = fst (tm_internals_ checked)

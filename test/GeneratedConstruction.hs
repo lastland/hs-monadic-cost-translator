@@ -8,6 +8,7 @@ import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
+import ConstructionLocals (localBindings)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
@@ -81,10 +82,11 @@ checkGeneratedConstruction output = do
         qcResult <- quickCheckResult
         qc <- quickCheckRoles qcResult checkedModules
         let uses = quickCheckUses qcResult programs
-        (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
+            locals = localBindings qc checkedModules
+        (views, viewNames, viewCalls) <- viewSupport rt qc locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt qc (uses checked) homes methods viewNames views viewCalls checked
-            evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
+            let (syntaxProblems, sites) = checkSyntax rt qc locals (uses checked) homes methods viewNames views viewCalls checked
+            evidence <- collectEvidence rt qc locals representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
     unless (null problems) (fail (unlines problems))
@@ -247,6 +249,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "NestedQuickCheckControl.hs"
     mixed "NestedOrdinaryLet.hs" [LocalBinding "claim" "draw", LocalBinding "claim" "check"] "NestedOrdinaryLet.hs"
         [(11, carrier "pure"), (12, carrier "pure"), (14, forbidden tval), (15, forbidden tval), (20, forbidden tval)]
+    mixed "NestedOrdinaryView.hs" [TopBinding "control"] "NestedOrdinaryView.hs" [(11, view "preserve")]
     putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)

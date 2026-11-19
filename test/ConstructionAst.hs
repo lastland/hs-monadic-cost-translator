@@ -1,5 +1,5 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, allBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (isJust, maybeToList)
@@ -23,15 +23,18 @@ children walk value
 
 -- Visit each binding immediately before the let bindings in its RHS.
 allBindings :: C.CoreProgram -> [(Id, C.CoreExpr)]
-allBindings bindings = concat [pair : inside rhs | pair@(_, rhs) <- C.flattenBinds bindings]
-  where
-    inside (C.Let b body) = allBindings [b] ++ inside body
-    inside (C.App f x) = inside f ++ inside x
-    inside (C.Lam _ body) = inside body
-    inside (C.Case scrutinee _ _ alternatives) = inside scrutinee ++ concatMap inside (C.rhssOfAlts alternatives)
-    inside (C.Cast body _) = inside body
-    inside (C.Tick _ body) = inside body
-    inside _ = []
+allBindings = concatMap tree . C.flattenBinds
+  where tree pair@(_, rhs) = pair : concatMap tree (nestedBindings rhs)
+
+-- Immediate binding boundaries; leave each binding's RHS to its own walk.
+nestedBindings :: C.CoreExpr -> [(Id, C.CoreExpr)]
+nestedBindings (C.Let b body) = C.flattenBinds [b] ++ nestedBindings body
+nestedBindings (C.App f x) = nestedBindings f ++ nestedBindings x
+nestedBindings (C.Lam _ body) = nestedBindings body
+nestedBindings (C.Case scrutinee _ _ alts) = nestedBindings scrutinee ++ concatMap nestedBindings (C.rhssOfAlts alts)
+nestedBindings (C.Cast body _) = nestedBindings body
+nestedBindings (C.Tick _ body) = nestedBindings body
+nestedBindings _ = []
 
 pretty :: Outputable a => a -> String
 pretty = showSDocUnsafe . ppr

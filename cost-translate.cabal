@@ -163,6 +163,7 @@ test-suite cost-translate-test
                      ConstructionAst
                      ConstructionRuntime
                      ConstructionHomeRepr
+                     ConstructionLocals
                      ConstructionDictionary
                      ConstructionEvidence
                      ConstructionRoles

@@ -4,6 +4,7 @@
 module ConstructionViews (viewSupport) where
 
 import ConstructionAst
+import ConstructionLocals (Locals, ordinaryCoreBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -44,8 +45,8 @@ data Slot = Slot
     }
 data Policy = Policy { views :: ViewRuntime, maps :: [Id], lists :: [Id], slots :: [Slot] }
 
-viewSupport :: Runtime -> QuickCheck -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
-viewSupport runtime' qc homes checkedPrograms = do
+viewSupport :: Runtime -> QuickCheck -> Locals -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
+viewSupport runtime' qc locals homes checkedPrograms = do
     rt <- resolveViews runtime'
     let (checked, programs) = unzip checkedPrograms
         definitions = concatMap allBindings programs
@@ -76,7 +77,8 @@ viewSupport runtime' qc homes checkedPrograms = do
                 mapM (\candidate -> mapM dsLExpr [e | e <- typed, getLocA e == getLocA candidate]) callsites
             pure [getLocA candidate | (candidate, expressions) <- zip callsites (fromMaybe [] result),
                 any (validRoot policy . typeLambdaBody . administrative) expressions]
-    let problems = concatMap (concatMap (walkBinding qc policy)) programs
+    let problems = concat [walkBinding qc policy (C.NonRec v rhs) | program <- programs,
+            (v, rhs) <- ordinaryCoreBindings locals qc (C.flattenBinds program)]
     unlessNull problems
     pure (support, helpers, calls)
   where
