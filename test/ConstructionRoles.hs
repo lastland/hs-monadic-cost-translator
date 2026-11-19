@@ -12,8 +12,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.FamInstEnv (FamInst(..))
-import GHC.Core.Type (splitPiTys, splitTyConApp_maybe)
-import GHC.Data.FastString (fsLit)
+import GHC.Core.Type (splitTyConApp_maybe)
 import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
 import GHC.Types.SrcLoc (getBufSpan)
@@ -25,10 +24,8 @@ newtype QuickCheck = QuickCheck (Set.Set Name)
 isQuickCheckBinding :: NamedThing a => QuickCheck -> a -> Bool
 isQuickCheckBinding (QuickCheck names) = (`Set.member` names) . getName
 
-quickCheckRoles :: [TypecheckedModule] -> Ghc QuickCheck
-quickCheckRoles modules = do
-    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (fsLit "QuickCheck"))
-    constructors <- mapM (resolveType qc) ["Gen", "Property"]
+quickCheckRoles :: (Type -> Bool) -> [TypecheckedModule] -> Ghc QuickCheck
+quickCheckRoles result modules = do
     let declared = Set.fromList [name | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group, Just name <- [bindingName binding]]
         -- A renamed method refers to its class selector. The typechecked binds
@@ -39,8 +36,7 @@ quickCheckRoles modules = do
             [v | ABE poly mono _ _ <- collectAst (tm_typechecked_source m), v <- [poly, mono]]
     things <- mapM lookupName (filter isExternalName (Set.toList declared))
     let ids = [v | Just (AnId v) <- things] ++ concatMap locals modules
-    pure (QuickCheck (Set.fromList [getName v | v <- ids,
-        Just (tc, _) <- [splitTyConApp_maybe (snd (splitPiTys (idType v)))], tc `elem` constructors]))
+    pure (QuickCheck (Set.fromList [getName v | v <- ids, result (idType v)]))
 
 -- One selector can have both a Gen-valued implementation and an ordinary one.
 -- Match the implementation at its binder token in this module's input buffer;

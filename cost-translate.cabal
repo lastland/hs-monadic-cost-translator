@@ -166,6 +166,7 @@ test-suite cost-translate-test
                      ConstructionDictionary
                      ConstructionEvidence
                      ConstructionRoles
+                     ConstructionQuickCheckUses
                      ConstructionSyntax
                      ConstructionViews
                      GeneratedFunctions

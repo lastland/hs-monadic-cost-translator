@@ -57,8 +57,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
-checkSyntax rt qc homes methods restricted views viewCalls checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> QuickCheck -> (SrcSpan -> Name -> Bool) -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> TypecheckedModule -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc qcUse homes methods restricted views viewCalls checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
@@ -92,6 +92,8 @@ checkSyntax rt qc homes methods restricted views viewCalls checked = case tm_ren
                     ([pretty here ++ ": unsupported executable expression: " ++ pretty form], [])
                 site = case form of HsVar _ name | unLoc name `elem` methods -> ([], [(here, unLoc name)]); _ -> ([], [])
                 body = case form of
+                    HsVar _ (L _ name) | qcUse here name, permitted name, not (isQuickCheckBinding qc name) ->
+                        ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
                     XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
                         L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
                             walk here (L annotation original :: LHsExpr GhcRn)

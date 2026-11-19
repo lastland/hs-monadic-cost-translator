@@ -1,5 +1,5 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, allBindings, pretty, spine, variable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, allBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (isJust, maybeToList)
@@ -50,6 +50,18 @@ variable :: LHsExpr GhcRn -> Maybe Name
 variable expression = case spine expression of
     (L _ (HsVar _ name), []) -> Just (unLoc name)
     _ -> Nothing
+
+-- A type application or compiler wrapper can carry the instantiation. Keep
+-- the source variable's site; never borrow the type of a surrounding term call.
+typedVariable :: LHsExpr GhcTc -> Maybe (SrcSpan, Name)
+typedVariable expression = at (getLocA expression) (unLoc expression)
+  where
+    at location (HsVar _ name) = Just (location, getName (unLoc name))
+    at _ (HsAppType _ function _) = typedVariable function
+    at _ (HsPar _ function) = typedVariable function
+    at _ (ExprWithTySig _ function _) = typedVariable function
+    at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
+    at _ _ = Nothing
 
 call :: [Name] -> LHsExpr GhcRn -> Maybe [LHsExpr GhcRn]
 call names expression = case spine expression of

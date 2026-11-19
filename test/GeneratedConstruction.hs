@@ -8,6 +8,7 @@ import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAst (pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
+import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
@@ -51,7 +52,7 @@ checkGeneratedConstruction output = do
         logger <- getLogger
         -- Inspect the imported DFun fields selected by superclass projections.
         (configured, leftovers, _) <- parseDynamicFlags logger flags
-            (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", "QuickCheck"])
+            (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", quickCheckPackage])
         unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
         _ <- setSessionDynFlags configured
             { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
@@ -77,10 +78,11 @@ checkGeneratedConstruction output = do
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
-        qc <- quickCheckRoles checkedModules
+        qcResult <- quickCheckResult
+        qc <- quickCheckRoles qcResult checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls checked
+            let (syntaxProblems, sites) = checkSyntax rt qc (quickCheckUses qcResult checked) homes methods viewNames views viewCalls checked
             evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
@@ -94,7 +96,10 @@ checkGeneratedConstructionSpecimens = do
     checksQuickCheckMixed
     checksMixedMakeInstances
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
-        [(8, "QuickCheck value used outside a generator or property: <local>.k")]
+        [(8, qcValue "<local>.k")]
+    mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"
+        [(9, qcValue "<local>.draw"), (16, qcValue "<local>.claim"), (23, qcValue "QuickCheckValueUses.first")]
+    accepts "QuickCheckUnusedArgument.hs"
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]
@@ -241,6 +246,7 @@ checkGeneratedConstructionSpecimens = do
     eval1 = "Memorist.Base.Core.eval1"
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
+    qcValue name = "QuickCheck value used outside a generator or property: " ++ name
     selected op = "unapproved selected method " ++ op
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
@@ -381,7 +387,7 @@ checkGeneratedConstructionSpecimens = do
     typechecks output = withSystemTempDirectory "construction-specimen-" $ \objects -> do
         (status, out, err) <- readProcessWithExitCode "ghc"
             ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
-             "-outputdir", objects, "-package", "MemoristANT", "-package", "QuickCheck", output] ""
+             "-outputdir", objects, "-package", "MemoristANT", "-package", quickCheckPackage, output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
 
 data SpecimenDefinition = TopBinding String | InstanceMethod String [String] String deriving Eq
