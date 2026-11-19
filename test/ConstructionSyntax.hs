@@ -1,12 +1,52 @@
 -- | The generated language is finite. All declarations and all local bodies,
 -- including unused ones, start in the construction role.
-module ConstructionSyntax (checkSyntax) where
+module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
 import ConstructionRuntime
 import Data.Data (Data, cast)
+import Data.Maybe (fromMaybe)
 import GHC
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
+
+-- Source and selected-evidence certificates require ordinary, successful GHC
+-- checking of the same source. Run this for the entire graph before loading it.
+checkCompilerOptions :: ModSummary -> [String]
+checkCompilerOptions summary =
+    [fromMaybe (pretty (ms_mod summary)) original ++ ": unsupported construction compiler options: " ++ reason
+    | (reason, active) <-
+        [("deferred errors", any (`gopt` options)
+            [Opt_DeferTypeErrors, Opt_DeferTypedHoles, Opt_DeferOutOfScopeVariables])
+        ,("compiler plugins", not (null (pluginModNames options) && null (externalPluginSpecs options)))
+        ,("preprocessed source", gopt Opt_Pp options || original /= Just (ms_hspp_file summary))]
+    , active]
+  where
+    options = ms_hspp_opts summary
+    original = ml_hs_file (ms_location summary)
+
+-- Renaming expands splices away. Inspect parsed syntax before load can execute
+-- them, including splices in types, patterns, annotations and home dependencies.
+checkParsedSyntax :: ParsedModule -> [String]
+checkParsedSyntax parsed =
+    [pretty (getLoc (pm_parsed_source parsed)) ++ ": unsupported executable form: Template Haskell"
+    | any expressionTH (collectAst source) ||
+      any typeTH (collectAst source) || any patternTH (collectAst source) ||
+      not (null (collectAst source :: [SpliceDecl GhcPs])) ||
+      not (null (collectAst source :: [AnnDecl GhcPs]))]
+  where
+    source = pm_parsed_source parsed
+    expressionTH :: HsExpr GhcPs -> Bool
+    expressionTH HsTypedSplice{} = True
+    expressionTH HsUntypedSplice{} = True
+    expressionTH HsTypedBracket{} = True
+    expressionTH HsUntypedBracket{} = True
+    expressionTH _ = False
+    typeTH :: HsType GhcPs -> Bool
+    typeTH HsSpliceTy{} = True
+    typeTH _ = False
+    patternTH :: Pat GhcPs -> Bool
+    patternTH SplicePat{} = True
+    patternTH _ = False
 
 checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
 checkSyntax rt homes methods restricted support viewCalls = walk noSrcSpan

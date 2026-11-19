@@ -1,7 +1,7 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, displayException, try)
-import Control.Monad (forM, forM_, unless, (>=>))
+import Control.Monad (forM, forM_, unless)
 import Data.Data (Data, cast, gmapQ)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
@@ -11,7 +11,7 @@ import ConstructionEvidence (checkEvidence, methodNames)
 import ConstructionDemand (demandSupport)
 import ConstructionRoles (supportBindings, supportCoreNames)
 import ConstructionRuntime (runtime, runtimeOwns, roleOf, roleNames, Role(..), describeName, standardNames)
-import ConstructionSyntax (checkSyntax)
+import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GHC
     ( AmbiguousFieldOcc(..), GhcTc, HsExpr(..), HsFieldBind(..)
@@ -58,15 +58,20 @@ checkGeneratedConstruction output = do
         target <- guessTarget output Nothing Nothing
         setTargets [target]
         graph <- depanal [] False
+        let summaries = mgModSummaries graph
+            homes = map ms_mod summaries
+            optionProblems = concatMap checkCompilerOptions summaries
+        unless (null optionProblems) (fail (unlines optionProblems))
+        parsedModules <- mapM parseModule summaries
+        let parsedProblems = concatMap checkParsedSyntax parsedModules
+        unless (null parsedProblems) (fail (unlines parsedProblems))
         -- A home import is not an opaque dependency certificate. Inspect every
         -- body in the complete loaded home graph, even an unused imported wrapper.
         loaded <- load LoadAllTargets
         case loaded of
             Failed -> fail (output ++ ": cannot load generated module for name resolution")
             Succeeded -> pure ()
-        let summaries = mgModSummaries graph
-            homes = map ms_mod summaries
-        checkedModules <- mapM (parseModule >=> typecheckModule) summaries
+        checkedModules <- mapM typecheckModule parsedModules
         let constructors = concatMap (roleNames rt) [Representation, DemandData] ++
                 [name | (_, name) <- standardNames rt, isDataConName name] ++
                 [getName constructor | checked <- checkedModules, tycon <- tcg_tcs (fst (tm_internals_ checked)),
@@ -170,6 +175,8 @@ checkGeneratedConstructionSpecimens = do
         ["SchemaIndependentFields.hs", "SchemaChangedConstructor.hs", "SchemaCallback.hs", "SchemaEscape.hs",
          "SchemaTypeOnly.hs", "SchemaOpaque.hs"]
     rejectsBecause "SchemaDeadHelper.hs" ["unapproved runtime operation Memorist.Base.Thunk.tval"]
+    rejectsBecause "DeferredCertificate.hs" ["unsupported construction compiler options"]
+    rejectsBecause "SplicedDeclaration.hs" ["unsupported executable form: Template Haskell"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
          "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs"]
