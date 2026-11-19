@@ -6,6 +6,7 @@
 -- Constructors stay private: the observer owns forcing and cost measurement.
 module ReferenceSupport
     ( Sample(..), Probe, scalar, scalarSource, boolean, integer, demanded, snapshot, failure
+    , cost, distinct
     , generatedDemands, drawProbeDemands, runProbes
     ) where
 
@@ -48,6 +49,14 @@ snapshot = Snapshot
 
 failure :: String -> (Sample -> M.MemoristM Int) -> Probe
 failure = Failure
+
+cost :: M.MemoristM Int -> Integer
+cost program = let result = M.eval1 program
+    in MT.toInteger (M.calcCost result (M.fullDemand (M.value result)))
+
+distinct :: Eq a => [a] -> Bool
+distinct [] = True
+distinct (x:xs) = x `notElem` xs && distinct xs
 
 generatedDemands :: D.DemandProbe Sample -> Probe
 generatedDemands = Generated

@@ -4,9 +4,8 @@ module Case (probes) where
 import Control.Monad (replicateM)
 import qualified Example as Source
 import qualified Generated as G
-import qualified Memorist.Base.Thunk as MT
 import qualified Memorist.Memorist as M
-import ReferenceSupport (Sample(..), Probe, scalarSource, snapshot, failure)
+import ReferenceSupport (Sample(..), Probe, scalarSource, snapshot, failure, cost, distinct)
 
 type Views = M.PairT (G.BoxT M.PairT) (G.BoxT M.PairT)
 
@@ -70,14 +69,6 @@ names (M.PairT a b) = (,) <$> nodes a <*> nodes b
     nodes root = do
         G.BoxT fixed optional <- M.force root
         pure [M.tname root, M.tname fixed, M.tname optional]
-
-distinct :: Eq a => [a] -> Bool
-distinct [] = True
-distinct (x:xs) = x `notElem` xs && distinct xs
-
-cost :: M.MemoristM Int -> Integer
-cost program = let result = M.eval1 program
-    in MT.toInteger (M.calcCost result (M.fullDemand (M.value result)))
 
 probes :: [Probe]
 probes =
