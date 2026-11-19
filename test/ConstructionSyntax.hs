@@ -80,7 +80,8 @@ checkSyntax rt qc qcUses homes methods restricted views viewCalls checked = case
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, exempt binding = ([], [])
+        | Just binding <- cast value, exempt binding =
+            foldr plus ([], []) (children nested binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
              else walk (getLocA name) matches
@@ -127,6 +128,11 @@ checkSyntax rt qc qcUses homes methods restricted views viewCalls checked = case
       where
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
+    nested :: Data a => a -> ([String], [(SrcSpan, Name)])
+    nested value
+        | Just binding@(FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn), matchGroupArity matches > 0 =
+            walk (getLocA name) binding
+        | otherwise = foldr plus ([], []) (children nested value)
     plus (a, b) (c, d) = (a ++ c, b ++ d)
     -- Matching or assigning a labelled field is not applying its selector.
     -- The constructor, field ownership, and nested pattern/expression still count.
