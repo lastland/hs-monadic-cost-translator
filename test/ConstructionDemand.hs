@@ -4,6 +4,7 @@ module ConstructionDemand (demandSupport, homeDemandTypes) where
 
 import ConstructionAst
 import ConstructionRuntime
+import ConstructionRoles (stripConstraints)
 import Control.Monad (forM)
 import Data.List (nub)
 import Data.Maybe (mapMaybe, isNothing)
@@ -27,20 +28,21 @@ data Schema = Schema
     , qc :: [(String, Name)]
     , genType :: Name
     , demandTypes :: [TyCon]
+    , wrappers :: [(Name, Name)]
     , interfaces :: [Interface]
     , genFields :: [Name]
     , shrinkFields :: [Name]
     , arbitraryFields :: [Name]
     }
 
-demandSupport :: Runtime -> [Name] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Name)], [Name])
-demandSupport runtime' dataNames checked = do
+demandSupport :: Runtime -> [Name] -> [(Name, Name)] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Name)], [Name])
+demandSupport runtime' dataNames wrapperNames checked = do
     gen <- maybe (fail "construction support: missing pre-resolved Gen type") pure (lookup "Gen" (observationTypes runtime'))
     let homeTypes = [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
         classes = mapMaybe tyConClass_maybe homeTypes
         protocol = mapMaybe (demandInterface runtime' (getName gen)) classes
         demands = homeDemandTypes runtime' checked
-        schema = Schema runtime' dataNames (observationNames runtime') (getName gen) demands protocol [] [] []
+        schema = Schema runtime' dataNames (observationNames runtime') (getName gen) demands wrapperNames protocol [] [] []
         sourceBindings = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
         typedBindings = [(getLocA name, idType (unLoc name)) | m <- checked,
@@ -256,7 +258,9 @@ exactMethod policy name binding
         _ -> False
     | otherwise = False
   where
-    allCases predicate = case equations binding of Just cases -> not (null cases) && all (uncurry predicate) cases; _ -> False
+    allCases predicate = case equations binding of
+        Just cases -> not (null cases) && and [predicate pats (stripConstraints (wrappers policy) body) | (pats, body) <- cases]
+        _ -> False
     sizedFrom input generator = case unLoc (fst (spine generator)) of
         SectionR _ operation argument -> variable operation `elem` map Just generators && variable argument == Just input
         _ -> False

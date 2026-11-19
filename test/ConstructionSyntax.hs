@@ -4,6 +4,7 @@ module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 
 import ConstructionAst
 import ConstructionRuntime
+import ConstructionRoles (unwrapConstraint)
 import Data.Data (Data, cast)
 import Data.Maybe (fromMaybe)
 import GHC
@@ -49,8 +50,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted support viewCalls group = (expansionProblems, []) `plus` walk noSrcSpan group
+checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(Name, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
+checkSyntax rt homes methods restricted support viewCalls wrappers group = (expansionProblems, []) `plus` walk noSrcSpan group
   where
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
@@ -87,7 +88,9 @@ checkSyntax rt homes methods restricted support viewCalls group = (expansionProb
                                 Ambiguous{} -> ([], []) | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-            in if here `elem` viewCalls then ([], []) else shape `plus` site `plus` body
+             in if here `elem` viewCalls then ([], []) else case unwrapConstraint wrappers expression of
+                 Just continuation -> shape `plus` walk here continuation
+                 Nothing -> shape `plus` site `plus` body
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
             (if patternForm (unLoc pattern') then ([], []) else
                 ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'

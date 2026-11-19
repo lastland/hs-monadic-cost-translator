@@ -9,7 +9,7 @@ import Data.Maybe (isJust, maybeToList)
 import ConstructionAst (pretty)
 import ConstructionEvidence (checkEvidence, methodNames)
 import ConstructionDemand (demandSupport, homeDemandTypes)
-import ConstructionRoles (supportBindings, supportCoreNames)
+import ConstructionRoles (supportBindings, supportCoreNames, constraintWrappers)
 import ConstructionRuntime (runtime, runtimeOwns, roleOf, roleNames, Role(..), describeName, standardNames)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
@@ -76,13 +76,14 @@ checkGeneratedConstruction output = do
                 [name | (_, name) <- standardNames rt, isDataConName name] ++
                 [getName constructor | checked <- checkedModules, tycon <- tcg_tcs (fst (tm_internals_ checked)),
                     isAlgTyCon tycon, not (isClassTyCon tycon), constructor <- tyConDataCons tycon]
-        (demand, restricted) <- demandSupport rt constructors checkedModules
+        wrappers <- constraintWrappers checkedModules
+        (demand, restricted) <- demandSupport rt constructors wrappers checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt homes checkedModules
         fmap concat $ forM checkedModules $ \checked -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
-                let support = supportBindings rt constructors group ++ demand ++ views
-                    (syntaxProblems, sites) = checkSyntax rt homes methods (restricted ++ viewNames) support viewCalls group
+                let support = supportBindings rt constructors wrappers group ++ demand ++ views
+                    (syntaxProblems, sites) = checkSyntax rt homes methods (restricted ++ viewNames) support viewCalls wrappers group
                     updates = [pretty location ++ ": unapproved runtime operation " ++ describeName name ++
                         " is forbidden in generated code" | (location, name) <- ambiguousUpdateReferences (tm_typechecked_source checked),
                         runtimeOwns rt name, roleOf rt name `notElem` [Just Primitive, Just Representation, Just DemandData]]
@@ -196,11 +197,16 @@ checkGeneratedConstructionSpecimens = do
     rejectsBecause "ExplicitMethodWrongCarrier.hs" ["unapproved selected method", "audited Memorist instance"]
     rejectsBecause "UnusedExplicitMethod.hs" ["UnusedExplicitMethod.hs:8:", "unapproved selected method", "audited Memorist instance"]
     rejectsBecause "ForallClosureChanged.hs" ["unchecked structural view use/escape", "Indexed", "PairT"]
+    rejectsBecause "ConstraintWrapperEscape.hs"
+        ["unapproved runtime operation Memorist.Base.Thunk.tval", "unapproved external operation DemandControl.generateField"]
+    rejectsBecause "ConstraintWrapperAltered.hs" ["unsupported observation schema for Memorist.Data.Interface.Data.abstract"]
+    rejectsBecause "ConstraintWrapperWrongProtocol.hs" ["unsupported observation schema for Memorist.Data.Interface.Data.abstract"]
+    rejectsBecause "ConstraintWrapperDead.hs" ["unapproved runtime operation Memorist.Base.Core.eval1"]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
          "MethodControl.hs", "DemandControl.hs", "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs",
          "SizedDemandControl.hs", "DatatypeGeneratorControl.hs", "DemandDerivingControl.hs", "SumGeneratorControl.hs",
-         "ExplicitMethodControl.hs", "ForallClosureControl.hs"]
+         "ExplicitMethodControl.hs", "ForallClosureControl.hs", "ConstraintWrapperControl.hs"]
     putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)

@@ -1,14 +1,55 @@
 -- | Narrow, declaration-specific observation roles. These are not exemptions
 -- for pure functions: an unrecognized body is checked as construction code.
-module ConstructionRoles (supportBindings, supportCoreNames) where
+module ConstructionRoles (supportBindings, supportCoreNames, constraintWrappers, unwrapConstraint, stripConstraints) where
 
 import ConstructionAst
 import ConstructionRuntime
+import Control.Monad (forM)
 import Data.Maybe (mapMaybe)
 import GHC
+import GHC.Builtin.Types (constraintKind, liftedTypeKind)
+import GHC.Core.TyCo.Compare (eqType)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Core.Type (mkTyVarTy, splitForAllTyVars, splitFunTys, splitTyConApp_maybe, tyVarKind)
 
-supportBindings :: Runtime -> [Name] -> HsGroup GhcRn -> [(SrcSpan, Name)]
-supportBindings rt constructors group =
+-- The helper is an identity on its constrained continuation. Check both its
+-- complete source body and its actual rank-2 Proxy contract, never its name.
+constraintWrappers :: [TypecheckedModule] -> Ghc [(Name, Name)]
+constraintWrappers checked = do
+    owner <- findModule (mkModuleName "Data.Proxy") Nothing
+    proxy <- resolveType owner "Proxy"
+    constructor <- resolveExport owner "Proxy"
+    fmap concat $ forM [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
+            binding <- collectAst group :: [HsBind GhcRn]] $ \binding -> case binding of
+        FunBind _ name _ | Just [([L _ (WildPat _), pat], body)] <- equations binding,
+                Just input <- plainPattern pat, variable body == Just input -> do
+            thing <- lookupName (unLoc name)
+            pure [(unLoc name, constructor) | Just (AnId identifier) <- [thing], wrapperType proxy (idType identifier)]
+        _ -> pure []
+  where
+    wrapperType proxy ty = case splitForAllTyVars ty of
+        ([c, r], body) | eqType (tyVarKind c) constraintKind, eqType (tyVarKind r) liftedTypeKind,
+                let predicate = mkTyVarTy c; result = mkTyVarTy r -> case splitFunTys body of
+            ([dictionary, probe, continuation], output)
+                | eqType (scaledThing dictionary) predicate, eqType output result,
+                  Just (actual, [kind, constraint]) <- splitTyConApp_maybe (scaledThing probe),
+                  actual == proxy, eqType kind constraintKind, eqType constraint predicate,
+                  ([given], value) <- splitFunTys (scaledThing continuation) ->
+                    eqType (scaledThing given) predicate && eqType value result
+            _ -> False
+        _ -> False
+
+unwrapConstraint :: [(Name, Name)] -> LHsExpr GhcRn -> Maybe (LHsExpr GhcRn)
+unwrapConstraint wrappers expression = case
+        [body | (helper, proxy) <- wrappers, Just [probe, body] <- [call [helper] expression], variable probe == Just proxy] of
+    [body] -> Just body
+    _ -> Nothing
+
+stripConstraints :: [(Name, Name)] -> LHsExpr GhcRn -> LHsExpr GhcRn
+stripConstraints wrappers expression = maybe expression (stripConstraints wrappers) (unwrapConstraint wrappers expression)
+
+supportBindings :: Runtime -> [Name] -> [(Name, Name)] -> HsGroup GhcRn -> [(SrcSpan, Name)]
+supportBindings rt constructors wrappers group =
     [(getLocA name, unLoc name) | binding@(FunBind _ name _) <- collectAst group :: [HsBind GhcRn],
         case roleOf rt (unLoc name) of
             Just AbstractMethod -> exactAbstract binding
@@ -17,7 +58,7 @@ supportBindings rt constructors group =
             _ -> False]
   where
     names = roleNames rt
-    exactAbstract binding = allEquations binding $ \pats body -> case pats of
+    exactAbstract binding = allEquations wrappers binding $ \pats body -> case pats of
         [pat] | Just input <- plainPattern pat, variable body == Just input -> True
         [pat] | Just fields <- fieldsOf pat, Just (_, arguments) <- dataCall body, length fields == length arguments ->
             and (zipWith abstractField fields arguments)
@@ -27,14 +68,14 @@ supportBindings rt constructors group =
             Just [input] -> variable input == Just field
             _ -> False
         _ -> False
-    exactFull binding = allEquations binding $ \pats body -> case pats of
+    exactFull binding = allEquations wrappers binding $ \pats body -> case pats of
         [pat] | Just input <- plainPattern pat, variable body == Just input -> True
         [pat] | Just fields <- fieldsOf pat, Just (_, arguments) <- dataCall body, length fields == length arguments ->
             and (zipWith (\field expression -> case call (names FullMethod) expression of
                 Just [input] -> variable input == Just field
                 _ -> False) fields arguments)
         _ -> False
-    exactUsage binding = allEquations binding $ \pats body -> case pats of
+    exactUsage binding = allEquations wrappers binding $ \pats body -> case pats of
         [pat, demand] | Just fields <- fieldsOf pat, Just demands <- fieldsOf demand, length fields == length demands ->
             accounting (zip fields demands) body
         [L _ (WildPat _), L _ (WildPat _)] -> variable body `elem` map Just (names EmptyAccounting)
@@ -54,9 +95,9 @@ supportBindings rt constructors group =
         (L _ (HsVar _ constructor), arguments) | unLoc constructor `elem` constructors -> Just (unLoc constructor, arguments)
         _ -> Nothing
 
-allEquations :: HsBind GhcRn -> ([LPat GhcRn] -> LHsExpr GhcRn -> Bool) -> Bool
-allEquations binding valid = case equations binding of
-    Just cases -> not (null cases) && all (uncurry valid) cases
+allEquations :: [(Name, Name)] -> HsBind GhcRn -> ([LPat GhcRn] -> LHsExpr GhcRn -> Bool) -> Bool
+allEquations wrappers binding valid = case equations binding of
+    Just cases -> not (null cases) && and [valid pats (stripConstraints wrappers body) | (pats, body) <- cases]
     Nothing -> False
 
 -- GHC gives instance methods fresh internal identifiers. Follow only the finite
