@@ -14,6 +14,7 @@ import Cost.Translate.Specialize.Analysis
     , HelperSpecialization (..)
     , LexicalOwner (ownerName, ownerSpan)
     , ReferenceOwnership (referenceAncestors, referenceSpan)
+    , ReferenceSite
     )
 import Cost.Translate.Typed
     ( FunctionType
@@ -21,6 +22,7 @@ import Cost.Translate.Typed
         , functionDeclaredType
         , functionVariables
         )
+    , SourceKey
     )
 import Cost.Translate.Validation (scalarType)
 import Data.List (find, nubBy)
@@ -144,7 +146,7 @@ outsideReferences ::
     Analysis ->
     Name ->
     Type ->
-    [(String, Type)] ->
+    [(SourceKey, Type)] ->
     Maybe [Type]
 outsideReferences Analysis {..} name body normalizedReferences =
     if name `Set.member` recursive
@@ -165,11 +167,11 @@ outsideReferences Analysis {..} name body normalizedReferences =
         else pure (map snd normalizedReferences)
 
 classifyReference ::
-    Map.Map (Name, String) [ReferenceOwnership] ->
+    Map.Map ReferenceSite [ReferenceOwnership] ->
     Name ->
     Type ->
     LHsBind GhcRn ->
-    (String, Type) ->
+    (SourceKey, Type) ->
     Maybe (Bool, Type)
 classifyReference ownership name body binding (site, actualType) = do
     [reference] <- Map.lookup (name, site) ownership
@@ -212,7 +214,7 @@ validateCandidate ::
     Type ->
     TyVar ->
     TyVar ->
-    [(String, Maybe Type)] ->
+    [(SourceKey, Maybe Type)] ->
     Maybe ()
 validateCandidate Analysis {..} name count ty tau variable owned references = do
     unless

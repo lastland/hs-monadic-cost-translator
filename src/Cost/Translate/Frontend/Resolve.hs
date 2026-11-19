@@ -10,12 +10,12 @@ import Cost.Translate.Callable (callArity)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Syntax (builtin)
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Typed (sourceKey)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
 import GHC
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Types.Name (getOccString)
-import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 
 resolve :: Env -> Name -> Maybe Binding
 resolve env name = case lookupEnv name env of
@@ -107,7 +107,7 @@ resolveAt env expression name = case resolve env name of
     Just (SpecializedThunks thunks) -> do
         (ty, _) <-
             Map.lookup
-                (showSDocUnsafe (ppr (getLocA expression)))
+                (sourceKey (getLocA expression))
                 (inferredExpressions env)
         Thunk . snd <$> find (eqType ty . fst) thunks
     binding -> binding

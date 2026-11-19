@@ -9,14 +9,14 @@ import Cost.Translate.Specialize.Selection
     ( specialization
     , substitute
     )
-import Cost.Translate.Typed (FunctionType)
+import Cost.Translate.Typed (FunctionType, SourceKey)
 import Data.Map.Strict qualified as Map (Map, fromList)
 import GHC (GhcRn, HsGroup, Name, Type)
 
 specializeHelpers ::
     HsGroup GhcRn ->
     Map.Map Name FunctionType ->
-    Map.Map String Type ->
+    Map.Map SourceKey Type ->
     (Map.Map Name Type, Type -> Type)
 specializeHelpers group checked hints =
     ( Map.fromList

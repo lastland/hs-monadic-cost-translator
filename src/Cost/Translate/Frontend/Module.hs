@@ -26,8 +26,8 @@ emitModule ::
     Bool ->
     [TyCon] ->
     Map.Map Name Type ->
-    Map.Map String String ->
-    Map.Map String Type ->
+    Map.Map Typed.SourceKey String ->
+    Map.Map Typed.SourceKey Type ->
     Map.Map Name Typed.FunctionType ->
     HsGroup GhcRn ->
     (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)

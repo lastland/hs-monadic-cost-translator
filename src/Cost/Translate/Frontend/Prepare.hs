@@ -23,7 +23,6 @@ import GHC.Paths (libdir)
 import GHC.Types.Name (getOccString)
 import GHC.Types.Var (isId, varName)
 import GHC.Unit.Module.ModGuts (mg_binds)
-import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import System.FilePath (takeDirectory)
 
 generate :: FilePath -> String -> IO (Either Diagnostic String, String)
@@ -82,7 +81,7 @@ renderChecked ::
     ModSummary ->
     TypecheckedModule ->
     DesugaredModule ->
-    Map.Map String Type ->
+    Map.Map Typed.SourceKey Type ->
     Set.Set Name ->
     (Either Diagnostic String, String)
 renderChecked file target flags summary checked desugared hints strictValues =
@@ -147,13 +146,18 @@ bindingTypes checked =
             , isId i
             ]
 
-literalTypes :: TypecheckedModule -> Map.Map String String
+literalTypes :: TypecheckedModule -> Map.Map Typed.SourceKey String
 literalTypes checked =
-    Map.fromList
-        [ (showSDocUnsafe (ppr (getLocA expression)), name)
-        | expression@(L _ (HsOverLit _ literal)) <-
-            collect (tm_typechecked_source checked) :: [LHsExpr GhcTc]
-        , Just (tc, []) <- [splitTyConApp_maybe (overLitType literal)]
-        , let name = getOccString tc
-        , name `elem` ["Int", "Integer", "Float", "Double"]
-        ]
+    Map.mapMaybe unique $
+        Map.fromListWith
+            (++)
+            [ (Typed.sourceKey (getLocA expression), [name])
+            | expression@(L _ (HsOverLit _ literal)) <-
+                collect (tm_typechecked_source checked) :: [LHsExpr GhcTc]
+            , Just (tc, []) <- [splitTyConApp_maybe (overLitType literal)]
+            , let name = getOccString tc
+            , name `elem` ["Int", "Integer", "Float", "Double"]
+            ]
+    where
+        unique [name] = Just name
+        unique _ = Nothing

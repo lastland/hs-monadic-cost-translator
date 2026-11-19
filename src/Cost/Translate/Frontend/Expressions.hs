@@ -21,7 +21,11 @@ import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Signatures (monadicType)
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
-import Cost.Translate.Typed (hasFreeVariables, hasFreshAnnotationVariables)
+import Cost.Translate.Typed
+    ( hasFreeVariables
+    , hasFreshAnnotationVariables
+    , sourceKey
+    )
 import Data.Map.Strict qualified as Map
 import GHC
 import GHC.Builtin.Types (unitDataCon)
@@ -40,7 +44,7 @@ emitLiteral env located literal =
         )
     where
         value = O.overLit (ol_val literal)
-        location = showSDocUnsafe (ppr (getLocA located))
+        location = sourceKey (getLocA located)
 
 emitVariable :: Env -> LHsExpr GhcRn -> Name -> Either String O.Expr
 emitVariable env located name =
@@ -169,5 +173,5 @@ conditionalAction condition yes no =
 expressionEvidence :: Env -> LHsExpr GhcRn -> Maybe (Type, O.Ty)
 expressionEvidence env expression = Map.lookup location evidence
     where
-        location = showSDocUnsafe (ppr (getLocA expression))
+        location = sourceKey (getLocA expression)
         evidence = inferredExpressions env

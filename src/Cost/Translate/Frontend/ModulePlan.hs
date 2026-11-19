@@ -27,9 +27,9 @@ import GHC.Types.Basic (RecFlag (..))
 moduleEnvironment ::
     Set.Set Name ->
     [TyCon] ->
-    Map.Map String String ->
+    Map.Map Typed.SourceKey String ->
     Map.Map Name Type ->
-    Map.Map String Type ->
+    Map.Map Typed.SourceKey Type ->
     Map.Map Name ([TyVar], [Type]) ->
     HsGroup GhcRn ->
     (Env, Map.Map Name [Type])
@@ -105,7 +105,7 @@ constructorLayouts datatypes =
 specializedLocals ::
     [TyCon] ->
     Map.Map Name Type ->
-    Map.Map String Type ->
+    Map.Map Typed.SourceKey Type ->
     Map.Map Name ([TyVar], [Type]) ->
     Set.Set Name ->
     HsGroup GhcRn ->

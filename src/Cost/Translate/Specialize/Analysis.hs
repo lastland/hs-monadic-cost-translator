@@ -1,7 +1,12 @@
 module Cost.Translate.Specialize.Analysis where
 
 import Cost.Translate.Callable (expressions, spine)
-import Cost.Translate.Typed (FunctionType (..), expressionTypeAt)
+import Cost.Translate.Typed
+    ( FunctionType (..)
+    , SourceKey
+    , expressionTypeAt
+    , sourceKey
+    )
 import Data.Data (Data, cast, gmapQ)
 import Data.Map.Strict qualified as Map
     ( Map
@@ -38,7 +43,6 @@ import GHC
     )
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Basic (RecFlag (..))
-import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 
 data HelperReference
     = BareReference
@@ -62,22 +66,24 @@ data ReferenceOwnership = ReferenceOwnership
     , referenceSpan :: SrcSpan
     }
 
+type ReferenceSite = (Name, SourceKey)
+
 data Analysis = Analysis
     { bindings :: [LHsBind GhcRn]
     , recursive :: Set.Set Name
     , candidates :: [(Name, Int, FunctionType)]
     , declarations :: Map.Map Name [TyVar]
     , lexical :: Map.Map Name [Name]
-    , uses :: Map.Map Name [(String, Maybe Type)]
-    , ownership :: Map.Map (Name, String) [ReferenceOwnership]
-    , calls :: Map.Map (Name, String) [HelperReference]
+    , uses :: Map.Map Name [(SourceKey, Maybe Type)]
+    , ownership :: Map.Map ReferenceSite [ReferenceOwnership]
+    , calls :: Map.Map ReferenceSite [HelperReference]
     , checked :: Map.Map Name FunctionType
     }
 
 analyze ::
     HsGroup GhcRn ->
     Map.Map Name FunctionType ->
-    Map.Map String Type ->
+    Map.Map SourceKey Type ->
     Analysis
 analyze group checked hints =
     Analysis
@@ -162,8 +168,8 @@ scopes checked variables syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
 
 helperUses ::
     HsGroup GhcRn ->
-    Map.Map String Type ->
-    Map.Map Name [(String, Maybe Type)]
+    Map.Map SourceKey Type ->
+    Map.Map Name [(SourceKey, Maybe Type)]
 helperUses group hints =
     Map.fromListWith
         (++)
@@ -177,7 +183,7 @@ helperUses group hints =
         useType = expressionTypeAt source hints
 
 referenceOwners ::
-    (Data a) => [LexicalOwner] -> a -> [((Name, String), [ReferenceOwnership])]
+    (Data a) => [LexicalOwner] -> a -> [(ReferenceSite, [ReferenceOwnership])]
 referenceOwners owners syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
     Just binding@(L _ (FunBind _ name _)) ->
         let owner =
@@ -202,7 +208,7 @@ referenceOwners owners syntax = case cast syntax :: Maybe (LHsBind GhcRn) of
 
 helperApplications ::
     HsGroup GhcRn ->
-    [((Name, String), HelperReference)]
+    [(ReferenceSite, HelperReference)]
 helperApplications group =
     [ ((unLoc name, location function), reference (length arguments))
     | expression <- expressions group
@@ -216,7 +222,7 @@ helperApplications group =
     , HsVar _ name <- [unLoc function]
     ]
 
-helperCalls :: HsGroup GhcRn -> Map.Map (Name, String) [HelperReference]
+helperCalls :: HsGroup GhcRn -> Map.Map ReferenceSite [HelperReference]
 helperCalls group =
     Map.fromListWith
         (++)
@@ -236,8 +242,8 @@ arity matches = case unLoc (mg_alts matches) of
     L _ match : _ -> length (m_pats match)
     [] -> 0
 
-location :: LHsExpr GhcRn -> String
-location = showSDocUnsafe . ppr . getLocA
+location :: LHsExpr GhcRn -> SourceKey
+location = sourceKey . getLocA
 
 collect :: (Data a, Data b) => b -> [a]
 collect value = maybeToList (cast value) ++ concat (gmapQ collect value)

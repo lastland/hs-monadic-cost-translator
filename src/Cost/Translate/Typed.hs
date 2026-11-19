@@ -1,5 +1,7 @@
 module Cost.Translate.Typed
-    ( expressionTypes
+    ( SourceKey
+    , sourceKey
+    , expressionTypes
     , expressionTypeAt
     , FunctionType (..)
     , functionTypes
@@ -16,14 +18,16 @@ import Data.Maybe (isJust)
 import Data.Ord (comparing)
 import Data.Set qualified as Set
 import GHC hiding (exprType)
+import GHC.Core.ConLike (conLikeName)
 import GHC.Core.FVs (exprFreeIds)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.Subst (substTy)
-import GHC.Core.Type (isPredTy, mkVisFunTy, splitFunTys)
+import GHC.Core.Type (isPredTy, mkVisFunTy)
 import GHC.Core.Unify (tcMatchTy)
 import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
+import GHC.Data.Strict qualified as Strict
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
 import GHC.Tc.Types (tcg_ev_binds)
@@ -35,27 +39,35 @@ import GHC.Tc.Types.Evidence
     )
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.Id (isDFunId)
+import GHC.Types.SrcLoc (BufSpan)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import GHC.Types.Var (Var, isId)
 import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
+
+type SourceKey = Either String (RealSrcSpan, Strict.Maybe BufSpan)
+
+sourceKey :: SrcSpan -> SourceKey
+sourceKey (RealSrcSpan virtual buffer) = Right (virtual, buffer)
+sourceKey span' = Left (showSDocUnsafe (ppr span'))
 
 expressionTypes ::
     HscEnv ->
     TypecheckedModule ->
     [LHsExpr GhcRn] ->
     [LHsExpr GhcTc] ->
-    IO (Map.Map String Type)
+    IO (Map.Map SourceKey Type)
 expressionTypes session checked source typed = do
     let locations =
-            Set.fromList
-                [location e | e <- source, interesting (unLoc e)]
+            Map.fromListWith
+                (+)
+                [(location e, 1 :: Int) | e <- source, interesting (unLoc e)]
         original =
             Map.fromListWith
                 (\_ outer -> outer)
                 [ (location e, e)
                 | e <- typed
-                , location e `Set.member` locations
+                , Map.lookup (location e) locations == Just 1
                 ]
         names =
             Map.fromListWith
@@ -67,7 +79,7 @@ expressionTypes session checked source typed = do
         references =
             Map.fromListWith
                 (++)
-                [ (showSDocUnsafe (ppr (last path)), [(name, path, e)])
+                [ (sourceKey (last path), [(name, path, e)])
                 | e <- typed
                 , Just (name, path) <- [reference e]
                 ]
@@ -78,34 +90,36 @@ expressionTypes session checked source typed = do
             traverse (fmap exprType . dsLExpr) selected
     maybe (fail "GHC type-evidence desugaring failed") pure result
     where
-        location = showSDocUnsafe . ppr . getLocA
+        location = sourceKey . getLocA
         interesting HsVar {} = True
         interesting ExprWithTySig {} = True
         interesting _ = False
 
 recover ::
-    Map.Map String [(Name, SrcSpan)] ->
-    Map.Map String Int ->
-    Map.Map String [(Name, [SrcSpan], LHsExpr GhcTc)] ->
-    String ->
+    Map.Map SourceKey [(Name, SrcSpan)] ->
+    Map.Map SourceKey Int ->
+    Map.Map SourceKey [(Name, [SrcSpan], LHsExpr GhcTc)] ->
+    SourceKey ->
     LHsExpr GhcTc ->
     Maybe (LHsExpr GhcTc)
-recover names counts refs site original = case Map.lookup site refs of
-    Just candidates | any (\(_, path, _) -> length path > 1) candidates -> do
-        [(name, sourceSpan)] <- Map.lookup site names
+recover names counts refs site original = case Map.lookup site names of
+    Just [(name, sourceSpan)] -> do
+        candidates <- Map.lookup site refs
         let pathLength (_, path, _) = length path
             (_, outerPath, outer) = maximumBy (comparing pathLength) candidates
             sameReference (checkedName, path, _) =
                 checkedName == name && path `isSuffixOf` outerPath
             uniqueSpan span' =
-                Map.lookup (showSDocUnsafe (ppr span')) counts == Just 1
+                Map.lookup (sourceKey span') counts == Just 1
         if last outerPath == sourceSpan
             && all sameReference candidates
             && length candidates == length outerPath
             && all uniqueSpan outerPath
             then Just outer
             else Nothing
-    _ -> Just original
+    Nothing
+        | Map.lookup site counts == Just 1 -> Just original
+    _ -> Nothing
 reference :: LHsExpr GhcTc -> Maybe (Name, [SrcSpan])
 reference expression = case getLocA expression of
     RealSrcSpan {} -> do
@@ -113,10 +127,8 @@ reference expression = case getLocA expression of
         pure (name, getLocA expression : path)
     _ -> Nothing
 nested :: HsExpr GhcTc -> Maybe (Name, [SrcSpan])
-nested (HsVar _ name)
-    | let (_, _, tau) = tcSplitSigmaTy (idType (unLoc name))
-    , not (null (fst (splitFunTys tau))) =
-        Just (getName (unLoc name), [])
+nested (HsVar _ name) = Just (getName (unLoc name), [])
+nested (XExpr (ConLikeTc constructor _ _)) = Just (conLikeName constructor, [])
 nested (HsPar _ expression) = reference expression
 nested (XExpr (WrapExpr (HsWrap wrapper expression)))
     | applications wrapper = nested expression
@@ -129,7 +141,7 @@ applications WpHole = True
 applications _ = False
 
 expressionTypeAt ::
-    [LHsExpr GhcRn] -> Map.Map String Type -> LHsExpr GhcRn -> Maybe Type
+    [LHsExpr GhcRn] -> Map.Map SourceKey Type -> LHsExpr GhcRn -> Maybe Type
 expressionTypeAt source hints = select
     where
         locations =
@@ -141,7 +153,7 @@ expressionTypeAt source hints = select
                 | Map.lookup (location expression) locations == Just 1 ->
                     Map.lookup (location expression) hints
             _ -> Nothing
-        location = showSDocUnsafe . ppr . getLocA
+        location = sourceKey . getLocA
 
 data FunctionType = FunctionType
     { functionDeclaredType :: Type

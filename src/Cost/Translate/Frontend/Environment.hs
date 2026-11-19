@@ -18,6 +18,7 @@ import Cost.Translate.Frontend.Allocation
 import Cost.Translate.Frontend.NamePlan
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Typed (SourceKey)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
@@ -34,9 +35,9 @@ data Binding
 
 data Env = Env
     { envBindings :: Map.Map Name Binding
-    , inferredLiterals :: Map.Map String String
+    , inferredLiterals :: Map.Map SourceKey String
     , inferredBindings :: Map.Map Name Type
-    , inferredExpressions :: Map.Map String (Type, O.Ty)
+    , inferredExpressions :: Map.Map SourceKey (Type, O.Ty)
     , sourceDatatypes :: [TyCon]
     , reflectiveBindings :: Set.Set Name
     , singleConstructors :: Set.Set String
