@@ -4,6 +4,7 @@ module Cost.Translate.Frontend.Syntax
     , builtin
     , arity
     , firstPatterns
+    , parameterBinders
     , fieldName
     , actionKey
     , patternRoot
@@ -13,9 +14,11 @@ module Cost.Translate.Frontend.Syntax
     , explicitScopes
     ) where
 
+import Control.Applicative ((<|>))
 import Data.Data (Data, cast, gmapQ)
+import Data.List (transpose)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (maybeToList)
+import Data.Maybe (listToMaybe, mapMaybe, maybeToList)
 import GHC
 import GHC.Data.FastString (FastString, unpackFS)
 import GHC.Types.Name (getOccString, nameModule_maybe)
@@ -54,6 +57,19 @@ firstPatterns :: MatchGroup GhcRn (LHsExpr GhcRn) -> [LPat GhcRn]
 firstPatterns matches = case unLoc (mg_alts matches) of
     L _ match : _ -> m_pats match
     [] -> []
+
+parameterBinders :: MatchGroup GhcRn (LHsExpr GhcRn) -> [Maybe Name]
+parameterBinders matches =
+    map choose (transpose (map (m_pats . unLoc) (unLoc (mg_alts matches))))
+    where
+        choose [] = Nothing
+        choose (p : ps) =
+            binder True p <|> listToMaybe (mapMaybe (binder False) ps)
+        binder first (L _ pat) = case pat of
+            VarPat _ n | first -> Just (unLoc n)
+            AsPat _ n _ -> Just (unLoc n)
+            ParPat _ nested -> binder first nested
+            _ -> Nothing
 
 fieldName :: FieldOcc GhcRn -> Name
 fieldName = foExt

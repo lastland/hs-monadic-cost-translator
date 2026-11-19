@@ -6,7 +6,7 @@ module Cost.Translate.Frontend.NamePlan
 
 import Cost.Translate.Callable (expressions, spine)
 import Cost.Translate.Frontend.Allocation
-import Cost.Translate.Frontend.PatternPaths
+import Cost.Translate.Frontend.Match.Paths
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Sharing (Specialization)
 import Cost.Translate.Sharing.Schema
@@ -103,14 +103,9 @@ sourceBinders syntax binds =
 
 parametersFor :: LHsBind GhcRn -> [((Name, Int), Maybe Name)]
 parametersFor (L _ (FunBind _ name matches)) =
-    [ ((unLoc name, i), patternName pattern')
-    | (i, pattern') <- zip [0 ..] (firstPatterns matches)
+    [ ((unLoc name, i), binder)
+    | (i, binder) <- zip [0 ..] (parameterBinders matches)
     ]
-    where
-        patternName (L _ (VarPat _ n)) = Just (unLoc n)
-        patternName (L _ (AsPat _ n _)) = Just (unLoc n)
-        patternName (L _ (ParPat _ nested)) = patternName nested
-        patternName _ = Nothing
 parametersFor _ = []
 
 expressionSites :: Map.Map Name [Name] -> LHsExpr GhcRn -> [(String, Int)]
