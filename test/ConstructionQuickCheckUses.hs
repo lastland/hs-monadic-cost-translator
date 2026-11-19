@@ -13,7 +13,7 @@ import qualified GHC.Core as Core
 import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
-import GHC.Data.FastString (fsLit)
+import GHC.Data.FastString (mkFastString)
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Id.Make (seqId)
 import GHC.Types.SrcLoc (srcSpanToRealSrcSpan)
@@ -21,11 +21,11 @@ import GHC.Types.Var (isId)
 import GHC.Types.Var.Set (elemVarSet)
 
 quickCheckPackage :: String
-quickCheckPackage = "QuickCheck-2.17.1.0"
+quickCheckPackage = "QuickCheck"
 
 quickCheckResult :: Ghc (Type -> Bool)
 quickCheckResult = do
-    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (fsLit "QuickCheck"))
+    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (mkFastString quickCheckPackage))
     constructors <- mapM (resolveType qc) ["Gen", "Property"]
     pure $ \ty -> case splitTyConApp_maybe (snd (splitPiTys ty)) of
         Just (constructor, _) -> constructor `elem` constructors
