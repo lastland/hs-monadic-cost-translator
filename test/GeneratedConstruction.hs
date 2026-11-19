@@ -116,6 +116,9 @@ checkGeneratedConstructionSpecimens = do
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
          (27, qcValue "OperandEquations.pairAlias")]
     accepts "OperandIgnored.hs"
+    mixed "OperandForceSites.hs" (map TopBinding ["prop_first", "prop_lazy", "prop_second", "prop_rebound"]) "OperandForceSites.hs"
+        [(33, qcValue "OperandForceSites.first"), (36, qcValue "OperandForceSites.strictId"),
+         (37, qcValue "OperandForceSites.bangFirst")]
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]
     mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"

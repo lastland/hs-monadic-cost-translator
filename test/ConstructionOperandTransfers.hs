@@ -27,7 +27,7 @@ type Call = (SrcSpan, Name, Type)
 
 -- The template contains the equation's skolems, shared with its operand
 -- types. AbsBinds exports can use different quantified variables.
-data Body = Body { template :: Type, operands :: [Type], calls :: [Call] }
+data Body = Body { template :: Type, forcedOperands :: [Type], calls :: [Call] }
 
 ordinaryOperandTransfers :: (Type -> Bool) -> QuickCheck -> [TypecheckedModule] -> [String]
 ordinaryOperandTransfers result qc modules = concatMap report sources
@@ -51,7 +51,7 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
     open body ty = do
         v <- getTyVar_maybe (fst (splitAppTys ty))
         if v `elemVarSet` tyCoVarsOfType (template body) then Just v else Nothing
-    seeds = Map.map (\body -> Set.fromList (mapMaybe (open body) (operands body))) bodies
+    seeds = Map.map (\body -> Set.fromList (mapMaybe (open body) (forcedOperands body))) bodies
     edges = Map.map (mapMaybe instantiate . calls) bodies
     close known =
         let step name body = Set.union (seeds Map.! name) $ Set.fromList
@@ -70,7 +70,7 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
         | e <- collectAst source, Just call@(location, name, _) <- [typedCall e],
           Just (key, body, sub) <- [instantiate call],
           let becomes ty = not (result ty) && result (substTy sub ty),
-          any becomes (operands body) || any (becomes . mkTyVarTy) (heads Map.! key)]
+          any becomes (forcedOperands body) || any (becomes . mkTyVarTy) (heads Map.! key)]
 
 rho :: Type -> Type
 rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
@@ -114,9 +114,10 @@ typedCall expr = do
         Strict.Just _ -> pure (location, name, lhsExprType expr)
         Strict.Nothing -> Nothing
 
--- Retain every equation, its guards and its lexical intermediates. A binding
--- introduction is not an operand. In particular matching a pair does not use
--- the types of both fields; the RHS occurrence identifies the actual field.
+-- Retain force sites from every equation, even erased ones. The wired-in seq
+-- forces its first operand; a bang forces the matched value. Other variable
+-- and selector occurrences can refer to known callees, but passing their
+-- result back to the caller does not put it in a force position in this body.
 bodyUses :: Data a => QuickCheck -> a -> ([Type], [Call])
 bodyUses qc = walk
   where
@@ -126,7 +127,7 @@ bodyUses qc = walk
         | otherwise = own <> mconcat (children walk node)
       where
         own | Just e <- cast node, Just call@(_, name, ty) <- typedCall e =
-                  (snd (splitPiTys ty) : [scaledThing first | name == getName seqId,
+                  ([scaledThing first | name == getName seqId,
                       first:_ <- [fst (splitFunTys (rho ty))]], [call])
             | Just pat@(L _ BangPat{}) <- cast node :: Maybe (LPat GhcTc) = ([hsLPatType pat], [])
             | otherwise = ([], [])
