@@ -164,15 +164,13 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     conditional ty evidence = case root evidence of
         Given binder predicate | methodCarrier homes binder, Just (_, [_, carrier]) <- getClassPredTys_maybe predicate -> eqType ty carrier
         _ -> False
-    memorist ty evidence
-        | selectedPredicate ty evidence && conditional ty evidence = True
-        | isMemoristType rt ty, selectedPredicate ty evidence = case root evidence of
-            Instance owner predicate _ children' | runtimeOwns rt owner -> case (boundInstance rt owner, getClassPredTys_maybe predicate) of
-                (Just (cls, _), Just (selected, arguments)) -> cls == getName selected &&
-                    not (null arguments) && eqType (last arguments) ty && all ordinary children'
-                _ -> False
-            _ -> False
-        | otherwise = False
+    auditedCarrier ty evidence = isMemoristType rt ty && case root evidence of
+        Instance owner predicate _ children' | runtimeOwns rt owner,
+                Just (cls, _) <- boundInstance rt owner,
+                Just (actual, arguments) <- getClassPredTys_maybe predicate ->
+            cls == getName actual && not (null arguments) && eqType (last arguments) ty && all ordinary children'
+        _ -> False
+    memorist ty evidence = selectedPredicate ty evidence && (conditional ty evidence || auditedCarrier ty evidence)
     -- Neither a home nor an audited runtime reprM grants its abstract field.
     concreteRepr ty evidence = case evidence of
         Instance owner predicate instantiation [] | selectedHome homes caller owner instantiation ty,
@@ -195,12 +193,7 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
         ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->
                 -- The second dictionary belongs to reprM's carrier, not Repr.
-                conditional carrier evidence || isMemoristType rt carrier && case root evidence of
-                    Instance owner predicate _ children' | runtimeOwns rt owner,
-                            Just (boundClass, _) <- boundInstance rt owner,
-                            Just (actual, arguments) <- getClassPredTys_maybe predicate ->
-                        boundClass == getName actual && not (null arguments) && eqType (last arguments) carrier && all ordinary children'
-                    _ -> False
+                conditional carrier evidence || auditedCarrier carrier evidence
             _ -> False
         _ -> False
 
