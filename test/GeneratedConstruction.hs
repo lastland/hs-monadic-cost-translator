@@ -114,7 +114,11 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     accepts "ContextReprUse.hs"
-    rejectsAt "ContextReprBad.hs" [(8, reprFailure), (11, reprFailure), (14, reprFailure), (19, functorWrapper), (20, forbidden tval)]
+    rejectsAt "ContextReprCycle.hs" [(12, reprFailure)]
+    rejectsAt "ContextReprBad.hs"
+        [(8, reprFailure), (11, reprFailure), (14, reprFailure), (19, functorWrapper), (20, forbidden tval),
+         (25, reprFailure), (31, selected "GHC.Classes.==: unknown concrete scalar instance"),
+         (40, selected "ContextReprBad.inspect: unknown executable method/default dependency")]
     accepts "ParamReprUse.hs"
     rejectsAt "ParamReprBad.hs"
         [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval),

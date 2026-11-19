@@ -12,7 +12,7 @@ import qualified Data.Set as Set
 import GHC hiding (exprType)
 import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon)
 import qualified GHC.Core as C
-import GHC.Core.Class (classSCSelIds, classOpItems)
+import GHC.Core.Class (classSCSelIds, classOpItems, classMethods)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
@@ -72,7 +72,7 @@ checkEvidence rt homes program demands support checked sites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        rootProblems = concat [atBinder binder (problems (uses selected environment givens rhs)) |
+        rootProblems = concat [atBinder binder (problems (Left (getName binder)) (uses selected environment givens rhs)) |
             (binder, rhs) <- C.flattenBinds program, getName binder `notElem` support]
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -91,18 +91,18 @@ checkEvidence rt homes program demands support checked sites = do
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawProblems = concat [atBinder binder (problems (uses selected env allGivens rhs)) |
+                    rawProblems = concat [atBinder binder (problems (Left (getName binder)) (uses selected env allGivens rhs)) |
                         (binder, rhs) <- raw, getName binder `notElem` support]
                  in rawProblems ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [pretty location ++ ": no selected method certificate for " ++ describeName name]
-                        certificates -> [pretty location ++ ": " ++ problem | problem <- problems certificates]
+                        certificates -> [pretty location ++ ": " ++ problem | problem <- problems (Right location) certificates]
                     | ((location, name), candidates) <- zip sites expressions]
             Nothing -> ["cannot desugar the retained source method certificates"]
     pure (rootProblems ++ siteProblems)
   where
     atBinder binder = map ((pretty (nameSrcSpan (getName binder)) ++ ": ") ++)
-    problems = concatMap (checkUse rt homes demands)
+    problems site = concatMap (checkUse rt homes demands (contextSite homes site))
 
 -- Explicit type application retains its dictionary on a typed prefix, not on
 -- the bare HsVar. Follow only that prefix and compiler wrappers back to the same
@@ -117,8 +117,8 @@ typedMethodHead expression = at (getLocA expression) (unLoc expression)
     at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
     at _ _ = Nothing
 
-checkUse :: Runtime -> HomeReprs -> [TyCon] -> Use -> [String]
-checkUse rt homes demands (Use name expectedClass family types dictionaries) =
+checkUse :: Runtime -> HomeReprs -> [TyCon] -> Maybe Name -> Use -> [String]
+checkUse rt homes demands field (Use name expectedClass family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
   where
@@ -132,6 +132,7 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
                 | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
             ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                 | demandOperand ty -> Just "demand-data methods have no observation exemption"
+                | selectedPredicate ty evidence && fieldSlot evidence -> Nothing
                 | scalarType ty && selectedPredicate ty evidence && ordinary evidence -> Nothing
                 | otherwise -> Just "unknown concrete scalar instance"
             ForbiddenMethod -> Just "runtime observation/accounting methods have no construction permission"
@@ -173,9 +174,12 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
     memorist ty evidence = selectedPredicate ty evidence && (conditional ty evidence || auditedCarrier ty evidence)
     -- Neither a home nor an audited runtime reprM grants its abstract field.
     concreteRepr ty evidence = case evidence of
-        Instance owner predicate instantiation [] | selectedHome homes caller owner instantiation ty,
+        Given _ predicate | fieldSlot evidence, Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
+            getName cls == reprClass && eqType argument ty
+        Instance owner predicate instantiation dependencies | Just context <- selectedHome homes caller owner instantiation ty,
                 Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
-            getName cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr" && eqType argument ty
+            getName cls == reprClass && eqType argument ty && length context == length dependencies &&
+                and (zipWith contextChild context dependencies)
         Instance owner predicate _ dependencies | runtimeOwns rt owner,
                 Just (cls, _) <- boundInstance rt owner,
                 cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr",
@@ -186,6 +190,24 @@ checkUse rt homes demands (Use name expectedClass family types dictionaries) =
                 length dependencies == length arguments && and (zipWith concreteRepr arguments dependencies)
             _ -> False
         _ -> False
+    reprClass = runtimeName rt "Memorist.Data.Interface.Data" "Repr"
+    -- Descend only through evidence GHC actually supplied. A formal slot is
+    -- discharged at every DFun call, never by expanding another method body.
+    contextChild (predicate, used) child | Just actual <- predicateOf child, eqType actual predicate,
+            Just (cls, operands) <- getClassPredTys_maybe predicate = case operands of
+        [ty] | getName cls == reprClass -> concreteRepr ty child
+        _ | not used || not (scalarClass cls) -> resolved child
+        [ty] -> fieldSlot child || (scalarType ty && ordinary child)
+        _ -> False
+    contextChild _ _ = False
+    scalarClass = any (\method -> Map.lookup (getName method) (families rt) == Just ScalarMethod) . classMethods
+    -- An inert dictionary confers no method permission, even at a source
+    -- site erased from Core. It must still have a fully selected origin.
+    resolved (Instance _ _ _ children') = all resolved children'
+    resolved (Super _ parent) = resolved parent
+    resolved evidence = fieldSlot evidence
+    fieldSlot (Given binder _) = methodContext homes field binder
+    fieldSlot _ = False
     caller = case dictionaries of
         [_, evidence] | Given binder _ <- root evidence -> Just binder
         _ -> Nothing
