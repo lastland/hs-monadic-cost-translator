@@ -96,6 +96,12 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
+    mixed "OperandPropertyCall.hs" [TopBinding "strict"] "OperandPropertyCall.hs"
+        [(12, qcValue "OperandPropertyCall.strict")]
+    mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
+        [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
+         (16, qcValue "OperandEquations.erased")]
+    accepts "OperandIgnored.hs"
     mixed "QuickCheckArgumentProperty.hs" [TopBinding "gen", TopBinding "prop_transfer"] "QuickCheckArgumentConsumer.hs"
         [(8, qcValue "<local>.k")]
     mixed "QuickCheckValueUses.hs" [TopBinding "prop_force", TopBinding "first"] "QuickCheckValueUses.hs"
