@@ -8,8 +8,8 @@ import Data.Data (Data, cast)
 import GHC
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
 
-checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted support = walk noSrcSpan
+checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
+checkSyntax rt homes methods restricted support viewCalls = walk noSrcSpan
   where
     walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
     walk location value
@@ -32,6 +32,9 @@ checkSyntax rt homes methods restricted support = walk noSrcSpan
                     ([pretty here ++ ": unsupported executable expression: " ++ pretty form], [])
                 site = case form of HsVar _ name | unLoc name `elem` methods -> ([], [(here, unLoc name)]); _ -> ([], [])
                 body = case form of
+                    XExpr (ExpandedThingRn (OrigExpr original) _) -> case expression of
+                        L annotation _ -> walk here (L annotation original :: LHsExpr GhcRn)
+                    XExpr{} -> ([pretty here ++ ": unsupported executable expansion"], [])
                     RecordUpd { rupd_expr = input, rupd_flds = RegularRecUpdFields _ fields } ->
                         walk here input `plus` foldr plus ([], [])
                             [walk here (hfbRHS (unLoc field)) `plus` case unLoc (hfbLHS (unLoc field)) of
@@ -39,7 +42,7 @@ checkSyntax rt homes methods restricted support = walk noSrcSpan
                                 Ambiguous{} -> ([], []) | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-            in shape `plus` site `plus` body
+            in if here `elem` viewCalls then ([], []) else shape `plus` site `plus` body
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
             (if patternForm (unLoc pattern') then ([], []) else
                 ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'

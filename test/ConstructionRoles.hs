@@ -40,7 +40,7 @@ supportBindings rt constructors group =
         [L _ (WildPat _), L _ (WildPat _)] -> variable body `elem` map Just (names EmptyAccounting)
         _ -> False
     accounting [] expression = variable expression `elem` map Just (names EmptyAccounting)
-    accounting ((field, demand) : rest) expression = case unLoc expression of
+    accounting ((field, demand) : rest) expression = case unLoc (fst (spine expression)) of
         OpApp _ left operator right | variable operator `elem` map Just (names UnionAccounting) ->
             case call (names UsageMethod) left of
                 Just [input, demanded] -> variable input == Just field && variable demanded == Just demand && accounting rest right

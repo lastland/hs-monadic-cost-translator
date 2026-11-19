@@ -3,7 +3,7 @@
 module ConstructionRuntime
     ( Runtime, Role(..), runtime, roleOf, roleNames, runtimeOwns, runtimeName
     , resolveValue, resolveExport, resolveType, describeName, isMemoristType, isProtected
-    , boundInstance, scalarType, standardNames
+    , boundInstance, scalarType, standardNames, observationNames, observationTypes
     ) where
 
 import Control.Monad (forM, unless)
@@ -30,6 +30,8 @@ data Runtime = Runtime
     , typeNames :: Map.Map (String, String) TyCon
     , instances :: Map.Map Name (Name, [Type])
     , standardNames :: [(String, Name)]
+    , observationNames :: [(String, Name)]
+    , observationTypes :: [(String, TyCon)]
     }
 
 -- Audited against the actual library source and its loaded mi_src_hash. Keep
@@ -85,9 +87,16 @@ runtime = do
         actual <- findModule (mkModuleName label) Nothing
         name <- resolveExport actual occurrence
         pure (label ++ "." ++ occurrence, name)
+    quickCheck <- findModule (mkModuleName "Test.QuickCheck") Nothing
+    observation <- forM ["liftArbitrary", "liftShrink", "resize", "arbitrary", "shrink", "sized", "oneof"] $ \label ->
+        (label,) <$> resolveExport quickCheck label
+    generator <- resolveType quickCheck "Gen"
+    voidModule <- findModule (mkModuleName "Data.Void") Nothing
+    void <- resolveType voidModule "Void"
     pure (Runtime (moduleUnit root) (Map.fromList entries) (Map.fromList types)
         (Map.fromList (concat [is | (_, _, is) <- owners]))
-        (("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary))
+        (("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary)
+        observation [("Gen", generator), ("Void", void)])
 
 summaries :: [(String, String, Role)]
 summaries =

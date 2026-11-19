@@ -162,6 +162,7 @@ test-suite cost-translate-test
                      ConstructionEvidence
                      ConstructionRoles
                      ConstructionSyntax
+                     ConstructionViews
                      GeneratedFunctions
                      ReferencePolicy
                      ReferenceRunner

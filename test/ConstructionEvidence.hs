@@ -45,12 +45,9 @@ families rt = Map.fromList
 -- module's exports or assigning permission to a same-spelled local method.
 methodFamilies :: Runtime -> Ghc (Map.Map Name Family)
 methodFamilies rt = do
-    primitive <- forM ["lazy", "force", "tick"] $ \name -> do
-        owner <- findModule (mkModuleName "Memorist.Base.Core") Nothing
-        (, Computation) <$> resolveValue owner name
-    owner <- findModule (mkModuleName "Memorist.Data.Interface.Data") Nothing
-    repr <- resolveValue owner "reprM"
-    let selected = Map.union (families rt) (Map.fromList ((repr, RepresentationMethod) : primitive))
+    let selected = Map.union (families rt) (Map.fromList
+            ([(name, Computation) | name <- roleNames rt Primitive] ++
+             [(name, RepresentationMethod) | name <- roleNames rt ReprMethod]))
     defaults <- fmap concat $ forM (Map.toList selected ++ [(name, EmptyUsageDefault) | name <- roleNames rt UsageMethod]) $ \(name, family) -> do
         thing <- lookupName name
         pure [(actual, family) | Just (AnId identifier) <- [thing], Just cls <- [isClassOpId_maybe identifier],
@@ -86,7 +83,8 @@ checkEvidence rt homes support checked sites = do
                 let rawBindings = concatMap allBindings (C.Rec raw : dictionaries)
                     env = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]) environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
-                in concat [case [u | expression <- candidates, u@(Use actual _ _ _) <- uses selected env allGivens expression, actual == name] of
+                in concat [case [u | expression <- candidates, u@(Use actual _ arguments dictionaries') <- uses selected env allGivens expression,
+                            actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [pretty location ++ ": no selected method certificate for " ++ describeName name]
                         certificates -> [pretty location ++ ": " ++ problem | problem <- problems certificates]
                     | ((location, name), candidates) <- zip sites expressions]
@@ -224,7 +222,8 @@ uses selected = walk
 
 renderEvidence :: Evidence -> String
 renderEvidence (Given ty) = "given " ++ pretty ty
-renderEvidence (Instance name ty _) = describeName name ++ " :: " ++ pretty ty
+renderEvidence (Instance name ty dependencies) = describeName name ++ " :: " ++ pretty ty ++
+    concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
 renderEvidence (Unknown why) = "unresolved " ++ why
 

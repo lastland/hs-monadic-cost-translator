@@ -31,13 +31,10 @@ data Schema = Schema
 
 demandSupport :: Runtime -> [Name] -> [TypecheckedModule] -> Ghc ([(SrcSpan, Name)], [Name])
 demandSupport runtime' dataNames checked = do
-    module' <- findModule (mkModuleName "Test.QuickCheck") Nothing
-    operations <- forM ["liftArbitrary", "liftShrink", "resize", "arbitrary", "shrink", "sized", "oneof"] $ \label ->
-        (label,) <$> resolveExport module' label
-    gen <- resolveType module' "Gen"
+    gen <- maybe (fail "construction support: missing pre-resolved Gen type") pure (lookup "Gen" (observationTypes runtime'))
     let classes = mapMaybe tyConClass_maybe [tc | m <- checked, tc <- tcg_tcs (fst (tm_internals_ m))]
         protocol = mapMaybe (demandInterface runtime' (getName gen)) classes
-        schema = Schema runtime' dataNames operations (getName gen) protocol [] [] []
+        schema = Schema runtime' dataNames (observationNames runtime') (getName gen) protocol [] [] []
         sourceBindings = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
     candidates <- forM sourceBindings $ \binding -> case binding of

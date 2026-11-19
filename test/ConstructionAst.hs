@@ -29,6 +29,8 @@ spine expression = case unLoc expression of
     HsAppType _ f _ -> spine f
     HsPar _ f -> spine f
     ExprWithTySig _ f _ -> spine f
+    XExpr (ExpandedThingRn (OrigExpr original) _) -> case expression of
+        L location _ -> spine (L location original)
     _ -> (expression, [])
 
 variable :: LHsExpr GhcRn -> Maybe Name
