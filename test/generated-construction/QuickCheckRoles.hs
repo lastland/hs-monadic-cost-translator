@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module QuickCheckRoles where
 
 import qualified Memorist.Memorist as M
@@ -21,3 +22,12 @@ instance Samples ()
 
 defaultLaw :: Verdict
 defaultLaw = Random.forAll (draw ()) Random.property
+
+class Make a where
+    make :: a
+
+instance Make (Random.Gen Int) where
+    make = Random.chooseInt (0, 20)
+
+instance Make Random.Property where
+    make = Random.forAll (make :: Draw Int) $ \n -> n Random.=== n
