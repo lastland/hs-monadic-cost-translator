@@ -107,6 +107,9 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     rejectsBecause "WrapperCarrier.hs" ["WrapperCarrier.hs:4:", "WrapperCarrier.hs:7:", "WrapperCarrier.hs:10:", "audited Memorist instance"]
+    accepts "HomeReprUse.hs"
+    rejectsBecause "HomeReprUnsafe.hs" ["HomeReprUnsafe.hs:10:", "audited Memorist instance", "HomeReprUnsafe.hs:11:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
+    rejectsBecause "HomeReprGiven.hs" ["HomeReprGiven.hs:8:", "reprM requires a concrete method-specific construction closure and audited carrier"]
     accepts "IntegerSummaryControl.hs"
     rejects "IntegerSummaryBypass.hs" [(7, "Memorist.Data.Interface.Data.abstract"), (10, "Memorist.Base.Thunk.tval")]
     rejectsAt "IntegerSummaryBypass.hs"
