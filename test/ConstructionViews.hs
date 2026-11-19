@@ -4,6 +4,7 @@
 module ConstructionViews (viewSupport) where
 
 import ConstructionAst
+import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -43,14 +44,14 @@ data Slot = Slot
     }
 data Policy = Policy { views :: ViewRuntime, maps :: [Id], lists :: [Id], slots :: [Slot] }
 
-viewSupport :: Runtime -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
-viewSupport runtime' homes checkedPrograms = do
+viewSupport :: Runtime -> QuickCheck -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ([(SrcSpan, Name)], [Name], [SrcSpan])
+viewSupport runtime' qc homes checkedPrograms = do
     rt <- resolveViews runtime'
     let (checked, programs) = unzip checkedPrograms
         definitions = concatMap allBindings programs
         source = [binding | m <- checked, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group :: [HsBind GhcRn]]
-        exactSource valid name = any (\binding -> binderName binding == Just name && valid binding) source
+        exactSource valid name = any (\binding -> bindingName binding == Just name && valid binding) source
         mapIds = [v | (v, body) <- definitions, exactMap rt v body, exactSource (sourceMap rt) (getName v)]
         first = Policy rt mapIds [] []
         listIds = [v | (v, body) <- definitions, exactList first v body, exactSource (sourceList first (getName v)) (getName v)]
@@ -75,7 +76,7 @@ viewSupport runtime' homes checkedPrograms = do
                 mapM (\candidate -> mapM dsLExpr [e | e <- typed, getLocA e == getLocA candidate]) callsites
             pure [getLocA candidate | (candidate, expressions) <- zip callsites (fromMaybe [] result),
                 any (validRoot policy . typeLambdaBody . administrative) expressions]
-    let problems = concatMap (concatMap (walkBinding policy)) programs
+    let problems = concatMap (concatMap (walkBinding qc policy)) programs
     unlessNull problems
     pure (support, helpers, calls)
   where
@@ -260,9 +261,9 @@ administrative = go
     go (C.Case scrutinee v ty alternatives) = C.Case (go scrutinee) v ty [C.Alt dc vs (go rhs) | C.Alt dc vs rhs <- alternatives]
     go body = body
 
-walkBinding :: Policy -> C.CoreBind -> [String]
-walkBinding policy binding = concat [walk (nameSrcSpan (getName v)) expression
-    | (v, expression) <- C.flattenBinds [binding], getName v `notElem` helperNames policy]
+walkBinding :: QuickCheck -> Policy -> C.CoreBind -> [String]
+walkBinding qc policy binding = concat [walk (nameSrcSpan (getName v)) expression
+    | (v, expression) <- C.flattenBinds [binding], not (isQuickCheckBinding qc v), getName v `notElem` helperNames policy]
   where
     walk location expression = case C.collectArgs expression of
         (C.Var v, _) | getName v `elem` helperNames policy ->
@@ -270,16 +271,12 @@ walkBinding policy binding = concat [walk (nameSrcSpan (getName v)) expression
         _ -> case expression of
             C.App f x -> recur f ++ recur x
             C.Lam _ body -> recur body
-            C.Let b body -> walkBinding policy b ++ recur body
+            C.Let b body -> walkBinding qc policy b ++ recur body
             C.Case scrutinee _ _ alternatives -> recur scrutinee ++ concat [recur rhs | C.Alt _ _ rhs <- alternatives]
             C.Cast body _ -> recur body
             C.Tick _ body -> recur body
             _ -> []
       where recur = walk location
-
-binderName :: HsBind GhcRn -> Maybe Name
-binderName (FunBind _ name _) = Just (unLoc name)
-binderName _ = Nothing
 
 sourceMap :: ViewRuntime -> HsBind GhcRn -> Bool
 sourceMap rt binding = case equations binding of

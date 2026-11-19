@@ -3,6 +3,7 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
+import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Data.Data (Data, cast)
 import Data.List (nub)
@@ -50,20 +51,22 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted views viewCalls updates group = (expansionProblems, []) `plus` walk noSrcSpan group
+checkSyntax :: Runtime -> QuickCheck -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> [(SrcSpan, Name)] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
+checkSyntax rt qc homes methods restricted views viewCalls updates = walk noSrcSpan
   where
     -- Inspect expansions even inside declaration/call certificates. Looking only
     -- at OrigExpr would hide an implicit external hook such as ifThenElse.
-    expansionProblems = [pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
-        | expression@(L _ (XExpr expansion)) <- collectAst group :: [LHsExpr GhcRn], not (sectionExpansion expansion)]
+    expansionProblems value = ([unsupported expression
+        | expression@(L _ (XExpr expansion)) <- collectAst value :: [LHsExpr GhcRn], not (sectionExpansion expansion)], [])
+    unsupported expression = pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
     walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
     walk location value
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
+        | Just binding <- cast value, Just name <- bindingName binding, isQuickCheckBinding qc name = ([], [])
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
-             if (getLocA name, unLoc name) `elem` views then ([], [])
+             if (getLocA name, unLoc name) `elem` views then expansionProblems matches
              else walk (getLocA name) matches
         | Just (PatSynBind _ PSB{psb_id = name}) <- cast value :: Maybe (HsBind GhcRn) =
             ([pretty (getLocA name) ++ ": unsupported executable form: pattern synonym"], [])
@@ -74,8 +77,9 @@ checkSyntax rt homes methods restricted views viewCalls updates group = (expansi
                     ([pretty here ++ ": unsupported executable expression: " ++ pretty form], [])
                 site = case form of HsVar _ name | unLoc name `elem` methods -> ([], [(here, unLoc name)]); _ -> ([], [])
                 body = case form of
-                    XExpr (ExpandedThingRn (OrigExpr original) _) -> case expression of
-                        L annotation _ -> walk here (L annotation original :: LHsExpr GhcRn)
+                    XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
+                        L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
+                            walk here (L annotation original :: LHsExpr GhcRn)
                     XExpr{} -> ([pretty here ++ ": unsupported executable expansion"], [])
                     RecordUpd { rupd_expr = input, rupd_flds = RegularRecUpdFields _ fields } ->
                         walk here input `plus` foldr plus ([], [])
@@ -87,7 +91,7 @@ checkSyntax rt homes methods restricted views viewCalls updates group = (expansi
                             | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-             in if here `elem` viewCalls then ([], []) else shape `plus` site `plus` body
+             in if here `elem` viewCalls then expansionProblems expression else shape `plus` site `plus` body
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
             (if patternForm (unLoc pattern') then ([], []) else
                 ([pretty (getLocA pattern') ++ ": unsupported executable pattern: " ++ pretty pattern'], [])) `plus` descend (getLocA pattern') pattern'
@@ -101,6 +105,8 @@ checkSyntax rt homes methods restricted views viewCalls updates group = (expansi
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
     plus (a, b) (c, d) = (a ++ c, b ++ d)
+    checkName location name | isQuickCheckBinding qc name =
+        ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
     checkName location name = if permitted name then ([], []) else
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
           " operation " ++ describeName name ++ " is forbidden in generated code"], [])

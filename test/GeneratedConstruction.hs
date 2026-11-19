@@ -5,17 +5,18 @@ import Control.Monad (forM, unless, when)
 import Cost.Translate (translateFile)
 import Data.Data (Data)
 import Data.Foldable (toList)
-import Data.List (isInfixOf, isPrefixOf)
-import ConstructionAst (collectAst)
+import Data.List (isInfixOf, isPrefixOf, stripPrefix)
+import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
-import ConstructionRoles (supportCoreNames, homeDemandTypes)
+import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
 import ConstructionRuntime (runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
+import GeneratedFunctions (parseHaskellModule)
 import GHC
-    ( AmbiguousFieldOcc(..), GhcTc, HsExpr(..), HsFieldBind(..)
-    , HsMatchContext(..), LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan
+    ( AmbiguousFieldOcc(..), ClsInstDecl(..), GhcPs, GhcTc, HsBindLR(FunBind), HsDecl(..), HsExpr(..), HsFieldBind(..)
+    , HsMatchContext(..), HsModule(..), HsType(..), InstDecl(ClsInstD), LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..)
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
@@ -24,12 +25,19 @@ import GHC
     , unLoc, ghcLink
     )
 import GHC.Core.ConLike (conLikeName)
+import GHC.Data.FastString (mkFastString)
+import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
+import GHC.Hs.Type (getLHsInstDeclHead, ignoreParens)
 import GHC.Unit.Module.ModGuts (mg_binds)
 import GHC.Paths (libdir)
 import GHC.Types.GREInfo (conLikeName_Name)
-import GHC.Types.Name.Reader (greName)
-import GHC.Types.SrcLoc (noLoc)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.Name.Reader (greName, rdrNameOcc)
+import GHC.Types.SrcLoc
+    ( BufPos(..), BufSpan(..), GenLocated(..), RealSrcSpan, SrcSpan(RealSrcSpan)
+    , isRealSubspanOf, mkRealSrcLoc, mkRealSrcSpan, noLoc, srcSpanEndCol
+    )
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import Paths_cost_translate (getDataFileName)
 import System.FilePath ((</>), takeDirectory)
@@ -74,13 +82,14 @@ checkGeneratedConstruction output = do
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
-        (views, viewNames, viewCalls) <- viewSupport rt homes checkedPrograms
+        qc <- quickCheckRoles checkedModules
+        (views, viewNames, viewCalls) <- viewSupport rt qc homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
           case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
                 let updates = ambiguousUpdateReferences (tm_typechecked_source checked)
-                    (syntaxProblems, sites) = checkSyntax rt homes methods viewNames views viewCalls updates group
-                evidence <- collectEvidence rt representations program (supportCoreNames views checked) checked sites
+                    (syntaxProblems, sites) = checkSyntax rt qc homes methods viewNames views viewCalls updates group
+                evidence <- collectEvidence rt qc representations program (supportCoreNames views checked) checked sites
                 pure (syntaxProblems, evidence)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
         pure (concatMap fst reports ++ checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
@@ -302,37 +311,43 @@ checkGeneratedConstructionSpecimens = do
         copyFile source input
         translated <- translateFile input output
         either (fail . ("Box must translate before the construction verdict: " ++)) pure translated
-        checkBox output
-        -- Exercise the same verdict after a layout-only change to the artifact.
+        definitions <- boxDefinitions <$> parseHaskellModule output
+        checkBox output definitions
+        -- Split the abstract equation after its binder, preserving the columns
+        -- of its remaining tokens. The required observations move off that line.
         shifted <- createTempDirectory directory "shifted-"
         copyFile input (shifted </> "Example.hs")
         let shiftedOutput = shifted </> "Generated.hs"
-        readFile output >>= writeFile shiftedOutput . ('\n' :)
-        checkBox shiftedOutput
-    checkBox output = do
+        (_, binder) <- definition output definitions (InstanceMethod "Repr" "Box" "abstract")
+        case binder of
+            RealSrcSpan location (Strict.Just bytes) -> do
+                (before, after) <- splitAt (bufPos (bufSpanEnd bytes)) <$> readFile output
+                writeFile shiftedOutput ("\n" ++ before ++ "\n" ++ replicate (srcSpanEndCol location - 1) ' ' ++ after)
+            _ -> fail (output ++ ": missing source offset of abstract")
+        parseHaskellModule shiftedOutput >>= checkBox shiftedOutput . boxDefinitions
+    checkBox output definitions = do
         typechecks output
-        diagnostics <- rejection output
-        source <- lines <$> readFile output
-        let locate fragment = case [n | (n, text) <- zip [1..] source, fragment `isInfixOf` text] of
-                [n] -> pure n
-                _ -> fail (output ++ ": expected one generated line containing " ++ show fragment)
-            ordinary (fragment, reasons) = do
-                n <- locate fragment
-                requireAt diagnostics output [(n, reason) | reason <- reasons]
-            generator first lastLine = do
-                start <- locate first
-                end <- locate lastLine
-                unless (start <= end) (fail (output ++ ": invalid generator range " ++ first))
-                cleanAt diagnostics output [start..end]
-        mapM_ ordinary
-            [("abstract (BoxT", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
-             ("fullDemand (BoxT", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
-             ("usage (BoxT", map forbidden ["Memorist.Data.Interface.Demand.usage", "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]),
-             ("shrinkField t =", [forbidden tval, external "Test.QuickCheck.Arbitrary.liftShrink"])]
-        generator "arbitraryField n" "QC.liftArbitrary (QC.resize"
-        generator "genField n t" "QC.liftArbitrary (genDemandBudget"
-        mapM locate ["genDemandBudget n (BoxT", "genBoxDemand = genDemandBudget",
-            "arbitrary = QC.sized", "arbDemandFrom x = QC.sized"] >>= cleanAt diagnostics output
+        reports <- rejection output >>= boxReports output
+        let check (key, expected) = do
+                (body, _) <- definition output definitions key
+                let actual = [(at, reason) | (at, reason) <- reports, at `isRealSubspanOf` body]
+                case (expected, actual) of
+                    ([], (at, reason):_) -> fail (pretty at ++ ": unexpected diagnostic in " ++ show key ++ ": " ++ reason)
+                    _ -> mapM_ (\reason -> unless (reason `elem` map snd actual) $
+                        fail (pretty body ++ ": missing diagnostic in " ++ show key ++ ": " ++ reason)) expected
+        mapM_ check
+            [(InstanceMethod "Repr" "Box" "abstract", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
+             (InstanceMethod "Demand" "BoxT" "fullDemand", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
+             (InstanceMethod "Demand" "BoxT" "usage", map forbidden ["Memorist.Data.Interface.Demand.usage", "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]),
+             (TopBinding "shrinkField", [forbidden tval, external "Test.QuickCheck.Arbitrary.liftShrink"])]
+        mapM_ (\key -> check (key, []))
+            [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
+             InstanceMethod "GeneratedDemand" "BoxT" "genDemandBudget", InstanceMethod "Arbitrary" "BoxD" "arbitrary",
+             InstanceMethod "DemandArb" "BoxT" "arbDemandFrom"]
+    definition output definitions key = case
+            [(body, binder) | (name, RealSrcSpan body _, binder) <- definitions, key == name] of
+        [entry] -> pure entry
+        matches -> fail (output ++ ": expected one definition of " ++ show key ++ ", found " ++ show (length matches))
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
@@ -365,3 +380,36 @@ checkGeneratedConstructionSpecimens = do
             ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
              "-outputdir", objects, "-package", "MemoristANT", "-package", "QuickCheck", output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
+
+data BoxDefinition = TopBinding String | InstanceMethod String String String deriving (Eq, Show)
+
+-- Only a definition's binder counts, never a use in another function or a
+-- method with the same spelling in an instance for another type.
+boxDefinitions :: HsModule GhcPs -> [(BoxDefinition, SrcSpan, SrcSpan)]
+boxDefinitions parsed =
+    [(TopBinding (occ name), getLocA decl, getLocA name)
+    | decl@(L _ (ValD _ (FunBind _ name _))) <- hsmodDecls parsed] ++
+    [(InstanceMethod (occ cls) (occ ty) (occ name), getLocA binding, getLocA name)
+    | L _ (InstD _ (ClsInstD _ inst)) <- hsmodDecls parsed,
+      HsAppTy _ lhs rhs <- [unLoc (ignoreParens (getLHsInstDeclHead (cid_poly_ty inst)))],
+      HsTyVar _ _ cls <- [unLoc (ignoreParens lhs)], HsTyVar _ _ ty <- [unLoc (ignoreParens rhs)],
+      binding@(L _ (FunBind _ name _)) <- toList (cid_binds inst)]
+  where occ = occNameString . rdrNameOcc . unLoc
+
+-- The guard exposes GHC's printed positions: a point, a one-line range, or
+-- a multi-line range. Its printed end column is inclusive; RealSrcSpan's is not.
+boxReports :: FilePath -> String -> IO [(RealSrcSpan, String)]
+boxReports path diagnostics = forM
+    [text | report <- lines diagnostics, Just text <- [stripPrefix (path ++ ":") report]] $ \text ->
+        case break (== ' ') text of
+            (location, ' ':reason) | Just (start, (line, column)) <- coordinates location ->
+                pure (mkRealSrcSpan (point start) (point (line, column + 1)), reason)
+            _ -> fail (path ++ ": cannot read diagnostic position: " ++ text)
+  where
+    point = uncurry (mkRealSrcLoc (mkFastString path))
+    coordinates text = case reads text of
+        [(start, '-':rest)] | [(end, ":")] <- reads rest -> Just (start, end)
+        _ -> case reads text of
+            [(line, ':':rest)] | [(column, ":")] <- reads rest -> Just ((line, column), (line, column))
+                | [(first, '-':end)] <- reads rest, [(lastCol, ":")] <- reads end -> Just ((line, first), (line, lastCol))
+            _ -> Nothing

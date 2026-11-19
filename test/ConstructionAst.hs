@@ -1,5 +1,5 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, allBindings, pretty, spine, variable, call, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, allBindings, pretty, spine, variable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (isJust, maybeToList)
@@ -55,6 +55,12 @@ call :: [Name] -> LHsExpr GhcRn -> Maybe [LHsExpr GhcRn]
 call names expression = case spine expression of
     (L _ (HsVar _ name), args) | unLoc name `elem` names -> Just args
     _ -> Nothing
+
+-- A pattern that defines several values does not have a single result role.
+bindingName :: HsBind GhcRn -> Maybe Name
+bindingName (FunBind _ name _) = Just (unLoc name)
+bindingName PatBind{pat_lhs = pat} = plainPattern pat
+bindingName _ = Nothing
 
 plainPattern :: LPat GhcRn -> Maybe Name
 plainPattern (L _ (VarPat _ name)) = Just (unLoc name)

@@ -5,6 +5,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 import ConstructionDictionary
 import ConstructionAst
 import ConstructionHomeRepr
+import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -64,15 +65,15 @@ methodNames rt = Map.keys <$> methodFamilies rt
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String
 
-collectEvidence :: Runtime -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [Site]
-collectEvidence rt homes program support checked sites = do
+collectEvidence :: Runtime -> QuickCheck -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [(SrcSpan, Name)] -> Ghc [Site]
+collectEvidence rt qc homes program support checked sites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses selected env given rhs) |
-            (binder, rhs) <- bs, getName binder `notElem` support]
+        bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses qc selected env given rhs) |
+            (binder, rhs) <- bs, not (isQuickCheckBinding qc binder), getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -92,7 +93,7 @@ collectEvidence rt homes program support checked sites = do
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
                     rawSites = bindingSites env allGivens raw
-                 in rawSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
+                 in rawSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates
@@ -253,8 +254,8 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
             _ -> False
         _ -> False
 
-uses :: Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
-uses selected = walk
+uses :: QuickCheck -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
+uses qc selected = walk
   where
     walk env given expression = case expression of
         C.Lam binder body -> walk env (if isId binder && isPredTy (idType binder)
@@ -262,7 +263,7 @@ uses selected = walk
         C.Let binding body ->
             let bs = C.flattenBinds [binding]
                 next = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- bs]) env
-            in walk next given body ++ concatMap (walk next given . snd) bs
+            in walk next given body ++ concat [walk next given rhs | (v, rhs) <- bs, not (isQuickCheckBinding qc v)]
         C.Cast body _ -> walk env given body
         C.Tick _ body -> walk env given body
         C.Case scrutinee _ _ alternatives -> walk env given scrutinee ++ concat [walk env given rhs | C.Alt _ _ rhs <- alternatives]
