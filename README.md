@@ -8,7 +8,7 @@ Building and running the translator with candidate verification requires:
 
 - **GHC 9.10.3**: The translator uses GHC 9.10.3's internal API. Cabal rejects other compiler versions during dependency resolution.
 - **Stack (LTS 24.22)**: `stack.yaml` pins LTS 24.22 (GHC 9.10.3) and `QuickCheck-2.17.1.0` to match the target runtime.
-- **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a compatible `MemoristANT` checkout at `hs-pbt/` in the repository root and apply the [private-allocator patch](patches/README.md) before building (`hs-pbt/` is git-ignored and not bundled with this repository):
+- **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a local `MemoristANT-0.1.0.0` checkout at `hs-pbt/` in the repository root and apply the [private-allocator patch](patches/README.md) before building (`hs-pbt/` is git-ignored and not bundled with this repository, and no upstream repository URL or base commit revision is recorded):
   ```sh
   git apply --check --directory=hs-pbt patches/memorist-private-allocator.patch
   git apply --directory=hs-pbt patches/memorist-private-allocator.patch
@@ -175,6 +175,8 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="double"
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="diagnostics fixture-policy"
   ```
+  Whereas `cost-translate` only typechecks generated candidates against the `MemoristANT` API, the suite's construction guard requires the compiled `MemoristANT` interfaces to match the exact audited runtime module source fingerprints pinned in [`test/ConstructionRuntime.hs`](test/ConstructionRuntime.hs). An API-compatible `hs-pbt/` checkout alone is therefore insufficient: the audited sources must include the [private-allocator patch](patches/README.md) (see that guide to verify an existing checkout) and, if `src/Memorist/Example/ListInf.hs` is unpatched, the tracked [`scanl` laziness patch](.scratch/translator-poc/scanl-demand-fix.patch) (verify with `git apply --reverse --check --directory=hs-pbt .scratch/translator-poc/scanl-demand-fix.patch`, or apply with `git apply --directory=hs-pbt .scratch/translator-poc/scanl-demand-fix.patch` and rebuild `MemoristANT:lib`).
+
   Before compiling callers, the reference runner checks each generated module and its home imports against the full construction-only contract. Because current generated support still emits prohibited observation and demand helpers (such as `tval`), generated modules can translate and typecheck yet fail this guard before reference comparison. The `generated-construction` selector tests the guard itself against legal construction/structural-view controls and expected rejections.
 - **Supplemental external-runtime probes** (validates `MemoristANT` runtime behavior directly):
   ```sh
