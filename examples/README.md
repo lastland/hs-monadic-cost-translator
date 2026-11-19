@@ -24,7 +24,7 @@ The root test suite (`cost-translate-test`) translates and tests these five file
 | [`ThunkArguments.hs`](ThunkArguments.hs) | `manual-thunk-arguments` | Direct thunk reuse across arguments, fields, and callables vs. computed suspensions |
 | [`ThunkMatching.hs`](ThunkMatching.hs) | `manual-thunk-matching` | Thunk identity preservation in `case` and pattern guards, plus polymorphic and dictionary sharing |
 | [`ScopedAnnotations.hs`](ScopedAnnotations.hs) | `manual-scoped-annotations` | Scoped type annotations on `case` and guard subjects under shadowed `forall` binders |
-| [`ConstructorEquations.hs`](ConstructorEquations.hs) | `manual-constructor-equations` | Single-inspection grouping for adjacent disjoint constructors vs. guard/wildcard barriers |
+| [`ConstructorEquations.hs`](ConstructorEquations.hs) | `manual-constructor-equations` | Shared constructor inspections across equations and source-ordered guard fallthrough |
 | [`TerminalDo.hs`](TerminalDo.hs) | `manual-terminal-do` | Flat ordinary `do` blocks for function entry ticks and conditionals vs. scoped annotations |
 
 Run all five automated reference comparisons together with:
@@ -177,6 +177,8 @@ infcost' (fromPure1 streamM (5 :: Int))
 ### `InsertionSort.hs`
 
 `insert` places a value before the first equal or larger element in a sorted list and reuses the remaining suffix. `insertionSort` sorts the tail recursively, then inserts the head. Inserting before a tie keeps equal elements in their original order.
+
+In `insertM`, look for a single `case` on the list. Only its `ConsT` branch forces the two elements for `<=`. If the comparison succeeds, the new head points to the original list thunk; otherwise the new tail suspends the recursive `insertM` call.
 
 | Call | Value | Cost |
 | :--- | :--- | :--- |
@@ -366,8 +368,8 @@ runInt (fromPure1 guardFactoryM (5 :: Integer))
 
 `ConstructorEquations.hs` demonstrates how multi-equation functions compile to constructor inspections and ordered fallbacks:
 
-- Contiguous unary equations with distinct outer constructors (`choose` on `[]` and `y : _`) share a single outer `M.force` and a single `case` expression with `L.NilT` and `L.ConsT` branches.
-- Wildcard and variable equations (`wildcard`, `variable`, and the local unary `pick` helpers in `guardedWildcard` and `guardedVariable`) and repeated constructors (`repeated`) act as ordering barriers so guards execute before any constructor inspection from later equations.
+- `choose` and `repeated` each inspect the list once. In `repeated`, a failed guard in the `ConsT` branch tries the next cons equation without forcing the outer list again.
+- Wildcard and variable equations (`wildcard`, `variable`, and the local `pick` helpers in `guardedWildcard` and `guardedVariable`) keep their place. A guard can succeed on an undefined list when its equation does not inspect that list.
 
 Translate `examples/ConstructorEquations.hs` and inspect `chooseM` in `"$work/Generated.hs"`:
 
