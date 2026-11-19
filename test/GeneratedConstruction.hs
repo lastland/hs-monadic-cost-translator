@@ -61,7 +61,6 @@ checkGeneratedConstruction output = do
         _ <- setSessionDynFlags configured
             { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
         rt <- runtime
-        methods <- methodNames rt
         target <- guessTarget output Nothing Nothing
         setTargets [target]
         graph <- depanal [] False
@@ -79,6 +78,7 @@ checkGeneratedConstruction output = do
             Failed -> fail (output ++ ": cannot load generated module for name resolution")
             Succeeded -> pure ()
         checkedModules <- mapM typecheckModule parsedModules
+        methods <- methodNames rt checkedModules
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms

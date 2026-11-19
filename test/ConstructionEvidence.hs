@@ -25,7 +25,7 @@ import GHC.Data.OrdList (fromOL)
 import GHC.HsToCore.Binds (dsTcEvBinds, dsTopLHsBinds)
 import GHC.HsToCore.Expr (dsLExpr)
 import GHC.HsToCore.Monad (initDs)
-import GHC.Tc.Types (tcg_ev_binds)
+import GHC.Tc.Types (tcg_ev_binds, tcg_tcs)
 import GHC.Tc.Types.Evidence (TcEvBinds(..))
 import GHC.Types.Basic (Boxity(Boxed))
 import GHC.Types.Name (nameOccName)
@@ -60,8 +60,13 @@ methodFamilies rt = do
             _ -> fail ("cannot bind construction method: " ++ describeName name)
     pure (Map.fromList entries)
 
-methodNames :: Runtime -> Ghc [Name]
-methodNames rt = Map.keys <$> methodFamilies rt
+-- Home selectors also need retained source sites: a redundant equation can
+-- disappear even from raw Core. Registration asks for evidence, not permission.
+methodNames :: Runtime -> [TypecheckedModule] -> Ghc [Name]
+methodNames rt modules = do
+    known <- methodFamilies rt
+    pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
+        Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String
 
