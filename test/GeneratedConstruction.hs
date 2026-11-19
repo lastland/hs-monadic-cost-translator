@@ -167,6 +167,8 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "UnknownExternal.hs" [(6, external "GHC.Internal.Data.Typeable.Internal.someTypeRep")]
     rejects "UnknownRuntime.hs" [(7, "Memorist.Base.Extension.composeTM")]
     rejectsIn "ImportedWrapper.hs" "HiddenConstruction.hs" [(6, forbidden tval)]
+    -- Both projections are on line 6; only the filename distinguishes them.
+    rejectsDespiteImport "PairedPayload.hs" 6 "HiddenConstruction.hs" 6 (forbidden tval)
     rejectsIn "DemandComputation.hs" "DemandControl.hs" [(16, forbidden tval)]
     rejects "AlteredDemandView.hs" [(12, tval)]
     rejects "ViewAlteredMetadata.hs" [(6, "Memorist.Base.Thunk.Th"), (9, "Memorist.Base.Thunk.Th")]
