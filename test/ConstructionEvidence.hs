@@ -117,7 +117,7 @@ collectEvidence rt qc homes program support checked sites = do
 checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [Site] -> [String]
 checkEvidence rt homes demands sites = concatMap check sites
   where
-    rules = MethodRules
+    checkSelected = checkUse MethodRules
         { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites] }
@@ -126,7 +126,7 @@ checkEvidence rt homes demands sites = concatMap check sites
     check (FieldBody _) = []
     check (DefaultFacts _) = []
     check (MissingCertificate why) = [why]
-    check (Site location field u) = map ((location ++ ": ") ++) (checkUse rules [] field u)
+    check (Site location field u) = map ((location ++ ": ") ++) (checkSelected [] field u)
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
@@ -137,128 +137,130 @@ data MethodRules = MethodRules
 data Active = Active Name Evidence Evidence
 
 checkUse :: MethodRules -> [Active] -> Maybe Name -> Use -> [String]
-checkUse rules stack field use@(Use name expectedClass family types dictionaries) =
-    ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
-        " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
+checkUse rules = check
   where
     rt = auditedRuntime rules
     homes = homeRepresentations rules
-    verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
-            | isDataDefault rules use = Nothing
-            | family == UnknownMethod = Just "unknown executable method/default dependency"
-            | otherwise = case (types, dictionaries) of
-        (ty : _, evidence : _) -> case family of
-            Computation | memorist ty evidence -> Nothing
-                | otherwise -> Just "requires the concrete audited Memorist instance; generic dictionaries confer no permission"
-            RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
-                | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
-            ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
-                | demandOperand ty -> Just "demand-data methods have no observation exemption"
-                | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
-                | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
-                    selectedPredicate ty evidence && ordinary evidence -> Nothing
-                | otherwise -> Just "unknown concrete scalar instance"
-            ForbiddenMethod -> Just "runtime observation/accounting methods have no construction permission"
-            UnknownMethod -> Just "unknown executable method/default dependency"
-        _ -> Just "unsaturated selector has no selected instance evidence"
-    root (Super _ _ parent) = root parent
-    root evidence = evidence
-    selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
-        Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty
-        _ -> False
-    -- Only closed, exact standard instance heads registered by Runtime qualify.
-    -- A given dictionary or a package/unit match is not a method certificate.
-    ordinary evidence = case projected homes evidence of
-        Just actualEvidence@(Instance owner predicate _ []) | resolvedProjection evidence actualEvidence, not (runtimeOwns rt (getName owner)),
-                Just (cls, arguments) <- boundInstance rt (getName owner),
-                Just (actual, selected) <- getClassPredTys_maybe predicate ->
-            cls == getName actual && length arguments == length selected && and (zipWith eqType arguments selected)
-        _ -> False
-    demandOperand ty = case splitTyConApp_maybe ty of
-        Just (tc, arguments) -> tc `elem` demandTypes rules || getName tc `elem`
-            ([runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["Dem", "ThD", "MaybeD", "PairD"]] ++
-             [runtimeName rt "Memorist.Data.List" "ListD"]) || any demandOperand arguments
-        _ -> False
-    -- Only the actual reprM field’s lambda-bound carrier (or its superclass
-    -- projection) is instantiated by the concrete carrier checked at calls.
-    conditional ty evidence = case root evidence of
-        Given binder predicate | methodCarrier homes binder, Just (_, [_, carrier]) <- getClassPredTys_maybe predicate -> eqType ty carrier
-        _ -> False
-    auditedCarrier ty evidence = isMemoristType rt ty && case root evidence of
-        Instance owner predicate _ children' | runtimeOwns rt (getName owner),
-                Just (cls, _) <- boundInstance rt (getName owner),
-                Just (actual, arguments) <- getClassPredTys_maybe predicate ->
-            cls == getName actual && not (null arguments) && eqType (last arguments) ty && all ordinary children'
-        _ -> False
-    memorist ty evidence = selectedPredicate ty evidence && (conditional ty evidence || auditedCarrier ty evidence)
-    -- Neither a home nor an audited runtime reprM grants its abstract field.
-    concreteRepr ty evidence = case evidence of
-        _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
-            getName cls == reprClass && eqType argument ty
-        Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
-        Instance owner predicate instantiation dependencies | Just (method, context) <- selectedHome homes field (getName owner) instantiation ty,
-                Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
-            getName cls == reprClass && eqType argument ty && length context == length dependencies &&
-                and (zipWith contextChild context dependencies) && replay method instantiation dependencies evidence
-        Instance owner predicate _ dependencies | runtimeOwns rt (getName owner),
-                Just (cls, _) <- boundInstance rt (getName owner),
-                cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr",
-                Just (actual, [argument]) <- getClassPredTys_maybe predicate,
-                getName actual == cls, eqType argument ty -> case splitTyConApp_maybe ty of
-            _ | scalarType ty -> null dependencies
-            Just (tc, arguments) | tc `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2] ->
-                length dependencies == length arguments && and (zipWith concreteRepr arguments dependencies)
+    check stack field use@(Use name expectedClass family types dictionaries) =
+        ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
+            " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
+      where
+        verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
+                | isDataDefault rules use = Nothing
+                | family == UnknownMethod = Just "unknown executable method/default dependency"
+                | otherwise = case (types, dictionaries) of
+            (ty : _, evidence : _) -> case family of
+                Computation | memorist ty evidence -> Nothing
+                    | otherwise -> Just "requires the concrete audited Memorist instance; generic dictionaries confer no permission"
+                RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
+                    | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
+                ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
+                    | demandOperand ty -> Just "demand-data methods have no observation exemption"
+                    | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
+                    | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
+                        selectedPredicate ty evidence && ordinary evidence -> Nothing
+                    | otherwise -> Just "unknown concrete scalar instance"
+                ForbiddenMethod -> Just "runtime observation/accounting methods have no construction permission"
+                UnknownMethod -> Just "unknown executable method/default dependency"
+            _ -> Just "unsaturated selector has no selected instance evidence"
+        root (Super _ _ parent) = root parent
+        root evidence = evidence
+        selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
+            Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty
             _ -> False
-        _ -> False
-    reprClass = runtimeName rt "Memorist.Data.Interface.Data" "Repr"
-    -- Contexts are arguments, not method calls. Check their exact predicates
-    -- and provenance here; replay decides which fields are executed.
-    contextChild predicate child = case predicateOf child of
-        Just actual -> eqType actual predicate && resolved child
-        _ -> False
-    -- Replay even inside an uncalled method: substitute the supplied values,
-    -- keeping only the enclosing definition's own slots conditional.
-    replay method args ds ev = case dictionaries of
-        [_, carrier] | Just apply <- instantiateUse method args ds carrier,
-                Just obligations <- Map.lookup (getName (carrierBinder method)) (fieldBodies rules) ->
-            let active = Active (implementation method) ev carrier
-            in any (identical active) stack || (all (progress active) stack &&
-                all (null . checkUse rules (active : stack) field . apply) obligations)
-        _ -> False
-    identical (Active method ev carrier) (Active other previous oldCarrier) =
-        method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
-    progress (Active _ ev@(Instance owner _ args ds) carrier) (Active _ ancestor@(Instance previous _ oldArgs oldDs) oldCarrier) =
-        owner /= previous || descendant ev ancestor ||
-            (sameEvidence carrier oldCarrier && permutation eqType args oldArgs && permutation sameEvidence ds oldDs) ||
-            (sameEvidence ev ancestor && specializes (root oldCarrier) (root carrier))
-    progress _ _ = False
-    -- Reordering existing arguments and context dictionaries gives a finite
-    -- set of obligations for this DFun and carrier. It permits another replay;
-    -- only identical (ordered) evidence above can actually close the edge.
-    permutation eq xs ys = length xs == length ys && null (deleteFirstsBy eq xs ys)
-    -- The DFun is unchanged, but switching from the method parameter to the
-    -- audited concrete carrier opens a new obligation; it is not a back-edge.
-    specializes Given{} Instance{} = True
-    specializes _ _ = False
-    -- An inert dictionary confers no method permission, even at a source
-    -- site erased from Core. It must still have a fully selected origin.
-    resolved (Instance _ _ _ children') = all resolved children'
-    resolved ev@Super{}
-        | fieldSlot (root ev) = True
-        | Just actual@Instance{} <- projected homes ev = resolvedProjection ev actual
-        | otherwise = False
-    resolved evidence = fieldSlot evidence
-    resolvedProjection (Super _ _ parent) actual = resolved parent && resolved actual
-    resolvedProjection _ actual = resolved actual
-    fieldSlot (Given binder _) = methodContext homes field binder
-    fieldSlot _ = False
-    representationCarrier = case (types, dictionaries) of
-        ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
-            Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->
-                -- The second dictionary belongs to reprM's carrier, not Repr.
-                conditional carrier evidence || auditedCarrier carrier evidence
+        -- Only closed, exact standard instance heads registered by Runtime qualify.
+        -- A given dictionary or a package/unit match is not a method certificate.
+        ordinary evidence = case projected homes evidence of
+            Just actualEvidence@(Instance owner predicate _ []) | resolvedProjection evidence actualEvidence, not (runtimeOwns rt (getName owner)),
+                    Just (cls, arguments) <- boundInstance rt (getName owner),
+                    Just (actual, selected) <- getClassPredTys_maybe predicate ->
+                cls == getName actual && length arguments == length selected && and (zipWith eqType arguments selected)
             _ -> False
-        _ -> False
+        demandOperand ty = case splitTyConApp_maybe ty of
+            Just (tc, arguments) -> tc `elem` demandTypes rules || getName tc `elem`
+                ([runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["Dem", "ThD", "MaybeD", "PairD"]] ++
+                 [runtimeName rt "Memorist.Data.List" "ListD"]) || any demandOperand arguments
+            _ -> False
+        -- Only the actual reprM field’s lambda-bound carrier (or its superclass
+        -- projection) is instantiated by the concrete carrier checked at calls.
+        conditional ty evidence = case root evidence of
+            Given binder predicate | methodCarrier homes binder, Just (_, [_, carrier]) <- getClassPredTys_maybe predicate -> eqType ty carrier
+            _ -> False
+        auditedCarrier ty evidence = isMemoristType rt ty && case root evidence of
+            Instance owner predicate _ children' | runtimeOwns rt (getName owner),
+                    Just (cls, _) <- boundInstance rt (getName owner),
+                    Just (actual, arguments) <- getClassPredTys_maybe predicate ->
+                cls == getName actual && not (null arguments) && eqType (last arguments) ty && all ordinary children'
+            _ -> False
+        memorist ty evidence = selectedPredicate ty evidence && (conditional ty evidence || auditedCarrier ty evidence)
+        -- Neither a home nor an audited runtime reprM grants its abstract field.
+        concreteRepr ty evidence = case evidence of
+            _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
+                getName cls == reprClass && eqType argument ty
+            Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
+            Instance owner predicate instantiation dependencies | Just (method, context) <- selectedHome homes field (getName owner) instantiation ty,
+                    Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
+                getName cls == reprClass && eqType argument ty && length context == length dependencies &&
+                    and (zipWith contextChild context dependencies) && replay method instantiation dependencies evidence
+            Instance owner predicate _ dependencies | runtimeOwns rt (getName owner),
+                    Just (cls, _) <- boundInstance rt (getName owner),
+                    cls == runtimeName rt "Memorist.Data.Interface.Data" "Repr",
+                    Just (actual, [argument]) <- getClassPredTys_maybe predicate,
+                    getName actual == cls, eqType argument ty -> case splitTyConApp_maybe ty of
+                _ | scalarType ty -> null dependencies
+                Just (tc, arguments) | tc `elem` [maybeTyCon, listTyCon, tupleTyCon Boxed 2] ->
+                    length dependencies == length arguments && and (zipWith concreteRepr arguments dependencies)
+                _ -> False
+            _ -> False
+        reprClass = runtimeName rt "Memorist.Data.Interface.Data" "Repr"
+        -- Contexts are arguments, not method calls. Check their exact predicates
+        -- and provenance here; replay decides which fields are executed.
+        contextChild predicate child = case predicateOf child of
+            Just actual -> eqType actual predicate && resolved child
+            _ -> False
+        -- Replay even inside an uncalled method: substitute the supplied values,
+        -- keeping only the enclosing definition's own slots conditional.
+        replay method args ds ev = case dictionaries of
+            [_, carrier] | Just apply <- instantiateUse method args ds carrier,
+                    Just obligations <- Map.lookup (getName (carrierBinder method)) (fieldBodies rules) ->
+                let active = Active (implementation method) ev carrier
+                in any (identical active) stack || (all (progress active) stack &&
+                    all (null . check (active : stack) field . apply) obligations)
+            _ -> False
+        identical (Active method ev carrier) (Active other previous oldCarrier) =
+            method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
+        progress (Active _ ev@(Instance owner _ args ds) carrier) (Active _ ancestor@(Instance previous _ oldArgs oldDs) oldCarrier) =
+            owner /= previous || descendant ev ancestor ||
+                (sameEvidence carrier oldCarrier && permutation eqType args oldArgs && permutation sameEvidence ds oldDs) ||
+                (sameEvidence ev ancestor && specializes (root oldCarrier) (root carrier))
+        progress _ _ = False
+        -- Reordering existing arguments and context dictionaries gives a finite
+        -- set of obligations for this DFun and carrier. It permits another replay;
+        -- only identical (ordered) evidence above can actually close the edge.
+        permutation eq xs ys = length xs == length ys && null (deleteFirstsBy eq xs ys)
+        -- The DFun is unchanged, but switching from the method parameter to the
+        -- audited concrete carrier opens a new obligation; it is not a back-edge.
+        specializes Given{} Instance{} = True
+        specializes _ _ = False
+        -- An inert dictionary confers no method permission, even at a source
+        -- site erased from Core. It must still have a fully selected origin.
+        resolved (Instance _ _ _ children') = all resolved children'
+        resolved ev@Super{}
+            | fieldSlot (root ev) = True
+            | Just actual@Instance{} <- projected homes ev = resolvedProjection ev actual
+            | otherwise = False
+        resolved evidence = fieldSlot evidence
+        resolvedProjection (Super _ _ parent) actual = resolved parent && resolved actual
+        resolvedProjection _ actual = resolved actual
+        fieldSlot (Given binder _) = methodContext homes field binder
+        fieldSlot _ = False
+        representationCarrier = case (types, dictionaries) of
+            ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
+                Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->
+                    -- The second dictionary belongs to reprM's carrier, not Repr.
+                    conditional carrier evidence || auditedCarrier carrier evidence
+                _ -> False
+            _ -> False
 
 uses :: QuickCheck -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
 uses qc selected = walk
