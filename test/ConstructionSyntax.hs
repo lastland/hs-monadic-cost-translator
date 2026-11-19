@@ -7,6 +7,7 @@ import ConstructionRuntime
 import Data.Data (Data, cast)
 import Data.Maybe (fromMaybe)
 import GHC
+import GHC.Types.Id.Make (rightSectionName)
 import GHC.Types.Name (isDataConName, isVarName, isFieldName, nameModule_maybe)
 
 -- Source and selected-evidence certificates require ordinary, successful GHC
@@ -49,8 +50,12 @@ checkParsedSyntax parsed =
     patternTH _ = False
 
 checkSyntax :: Runtime -> [Module] -> [Name] -> [Name] -> [(SrcSpan, Name)] -> [SrcSpan] -> HsGroup GhcRn -> ([String], [(SrcSpan, Name)])
-checkSyntax rt homes methods restricted support viewCalls = walk noSrcSpan
+checkSyntax rt homes methods restricted support viewCalls group = (expansionProblems, []) `plus` walk noSrcSpan group
   where
+    -- Inspect expansions even inside declaration/call certificates. Looking only
+    -- at OrigExpr would hide an implicit external hook such as ifThenElse.
+    expansionProblems = [pretty (getLocA expression) ++ ": unsupported executable expansion"
+        | expression@(L _ (XExpr expansion)) <- collectAst group :: [LHsExpr GhcRn], not (sectionExpansion expansion)]
     walk :: Data a => SrcSpan -> a -> ([String], [(SrcSpan, Name)])
     walk location value
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
@@ -109,6 +114,23 @@ checkSyntax rt homes methods restricted support viewCalls = walk noSrcSpan
             Just DemandData -> True
             Just ReprMethod -> True
             _ -> False
+
+-- These are the pinned compiler's finite section templates, not general
+-- permission to discard an expansion. The operator is the same resolved Name;
+-- the operand retains its checked source site. Right sections use the exact
+-- wired-in compiler identity, never a same-spelled home or imported helper.
+sectionExpansion :: XXExprGhcRn -> Bool
+sectionExpansion (ExpandedThingRn (OrigExpr (SectionL _ operand operator)) (HsApp _ actualOperator actualOperand)) =
+    sameOperator operator actualOperator && getLocA operand == getLocA actualOperand
+sectionExpansion (ExpandedThingRn (OrigExpr (SectionR _ operator operand))
+        (HsApp _ (L _ (HsApp _ (L _ (HsVar _ helper)) actualOperator)) actualOperand)) =
+    unLoc helper == rightSectionName && sameOperator operator actualOperator && getLocA operand == getLocA actualOperand
+sectionExpansion _ = False
+
+sameOperator :: LHsExpr GhcRn -> LHsExpr GhcRn -> Bool
+sameOperator expected actual = case (variable expected, variable actual) of
+    (Just a, Just b) -> a == b
+    _ -> False
 
 expressionForm :: HsExpr GhcRn -> Bool
 expressionForm expression = case expression of
