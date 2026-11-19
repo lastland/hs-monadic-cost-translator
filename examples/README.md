@@ -44,10 +44,10 @@ stack build
 
 ### Translating All Examples
 
-Run this command from the repository root:
+From `examples/`, run:
 
 ```sh
-make examples
+make
 ```
 
 Make builds the translator and runtime with Stack, then translates every
