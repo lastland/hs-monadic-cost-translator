@@ -68,6 +68,8 @@ checkSyntax rt qc homes methods restricted views viewCalls updates checked = cas
         -- GHC caches a declaration's free variables on its renamed node. The
         -- actual uses are inside the method bodies, where their roles are known.
         | Just (_ :: NameSet) <- cast value = ([], [])
+        -- A declared field introduces a selector; no value is selected here.
+        | Just (_ :: ConDeclField GhcRn) <- cast value = ([], [])
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
