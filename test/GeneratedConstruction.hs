@@ -220,6 +220,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
     rejectsAt "SumTagEscape.hs" [(8, selected "GHC.Magic.dataToTag#: unknown executable method/default dependency")]
+    accepts "DefaultLabels.hs"
     rejectsAt "ExplicitMethodWrongCarrier.hs" [(5, carrier "pure")]
     rejectsAt "UnusedExplicitMethod.hs" [(8, carrier "pure")]
     rejectsAt "ErasedHomeMethod.hs" [(10, selected "QuickCheckRoles.make: unknown executable method/default dependency")]
