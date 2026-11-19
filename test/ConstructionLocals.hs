@@ -24,11 +24,23 @@ data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan
 -- shrinker, not a use by the generator that encloses both of them.
 parts :: Data a => a -> ([HsBind GhcRn], [Name])
 parts node
+    -- A bang-wildcard has no independently usable name. Evaluating the
+    -- enclosing expression enters this RHS even with no variable occurrence.
+    | Just b@PatBind{pat_lhs = pat} <- cast node, forcedWildcard pat = bodyParts b
     | Just binding <- cast node = ([binding], [])
     | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [unLoc n])
     | Just (_ :: NameSet) <- cast node = mempty
     | Just (_ :: Name) <- cast node = mempty
     | otherwise = mconcat (children parts node)
+
+forcedWildcard :: LPat GhcRn -> Bool
+forcedWildcard (L _ (ParPat _ pat)) = forcedWildcard pat
+forcedWildcard (L _ (BangPat _ pat)) = wildcard (unLoc pat)
+  where
+    wildcard WildPat{} = True
+    wildcard (ParPat _ p) = wildcard (unLoc p)
+    wildcard _ = False
+forcedWildcard _ = False
 
 bodyParts :: HsBind GhcRn -> ([HsBind GhcRn], [Name])
 bodyParts = mconcat . children parts

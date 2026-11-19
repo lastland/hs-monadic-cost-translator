@@ -93,6 +93,7 @@ checkGeneratedConstruction output = do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "NestedPatternConsumption.hs"
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
