@@ -36,3 +36,6 @@ data SamplesRecord = SamplesRecord { choices :: Draw Bool, statement :: Verdict 
 
 recordLaw :: SamplesRecord -> Verdict
 recordLaw r = Random.forAll (choices r) (\_ -> statement r)
+
+ignoreChoices :: SamplesRecord -> Bool
+ignoreChoices SamplesRecord{choices = _} = True
