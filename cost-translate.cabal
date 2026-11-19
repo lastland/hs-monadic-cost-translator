@@ -36,6 +36,7 @@ extra-source-files:
     docs/source-policy.md
     patches/README.md
     patches/memorist-private-allocator.patch
+    .scratch/translator-poc/scanl-demand-fix.patch
     examples/VALIDATION.md
     scripts/stack-compiler.yaml
     scripts/*.sh
