@@ -12,7 +12,7 @@ import qualified Data.Set as Set
 import GHC hiding (exprType)
 import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon)
 import qualified GHC.Core as C
-import GHC.Core.Class (classSCSelIds, classOpItems, classMethods)
+import GHC.Core.Class (classSCSelIds, classOpItems)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
