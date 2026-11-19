@@ -71,9 +71,9 @@ collectEvidence rt homes program support checked sites = do
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        bindingProblems env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses selected env given rhs) |
+        bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses selected env given rhs) |
             (binder, rhs) <- bs, getName binder `notElem` support]
-        rootProblems = bindingProblems environment givens (C.flattenBinds program)
+        rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
@@ -84,21 +84,21 @@ collectEvidence rt homes program support checked sites = do
         expressions <- mapM (\site -> mapM dsLExpr
             [expression | expression <- typed, typedMethodHead expression == Just site]) sites
         pure (dictionaries, raw, expressions)
-    let siteProblems = case result of
+    let retainedSites = case result of
             Just (dictionaries, raw, expressions) ->
                 let rawBindings = allBindings (C.Rec raw : dictionaries)
                     env = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]) environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawProblems = bindingProblems env allGivens raw
-                 in rawProblems ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
+                    rawSites = bindingSites env allGivens raw
+                 in rawSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates
                     | ((location, name), candidates) <- zip sites expressions]
             Nothing -> [MissingCertificate "cannot desugar the retained source method certificates"]
-    pure (rootProblems ++ siteProblems)
+    pure (rootSites ++ retainedSites)
   where
     record location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner) us
       where owner = contextSite homes site
@@ -157,7 +157,7 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
     -- Only closed, exact standard instance heads registered by Runtime qualify.
     -- A given dictionary or a package/unit match is not a method certificate.
     ordinary evidence = case projected homes evidence of
-        Just (Instance owner predicate _ []) | resolved evidence, not (runtimeOwns rt (getName owner)),
+        Just actualEvidence@(Instance owner predicate _ []) | resolvedProjection evidence actualEvidence, not (runtimeOwns rt (getName owner)),
                 Just (cls, arguments) <- boundInstance rt (getName owner),
                 Just (actual, selected) <- getClassPredTys_maybe predicate ->
             cls == getName actual && length arguments == length selected && and (zipWith eqType arguments selected)
@@ -216,11 +216,13 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
     -- An inert dictionary confers no method permission, even at a source
     -- site erased from Core. It must still have a fully selected origin.
     resolved (Instance _ _ _ children') = all resolved children'
-    resolved ev@(Super _ _ parent)
+    resolved ev@Super{}
         | fieldSlot (root ev) = True
-        | Just actual@Instance{} <- projected homes ev = resolved parent && resolved actual
+        | Just actual@Instance{} <- projected homes ev = resolvedProjection ev actual
         | otherwise = False
     resolved evidence = fieldSlot evidence
+    resolvedProjection (Super _ _ parent) actual = resolved parent && resolved actual
+    resolvedProjection _ actual = resolved actual
     fieldSlot (Given binder _) = methodContext homes field binder
     fieldSlot _ = False
     caller = case dictionaries of
