@@ -5,7 +5,7 @@ import Control.Monad (forM, unless)
 import Cost.Translate (translateFile)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
-import ConstructionAst (pretty)
+import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
@@ -16,7 +16,7 @@ import ConstructionViews (viewSupport)
 import GeneratedFunctions (parseHaskellModule)
 import GHC
     ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
-    , HsModule(..), HsType(..), InstDecl(ClsInstD)
+    , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind
     , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
     , backend, getLocA, getLogger
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
@@ -244,6 +244,9 @@ checkGeneratedConstructionSpecimens = do
           "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs", "TypeOnlyControl.hs",
           "ExplicitMethodControl.hs", "ForallClosureControl.hs"]
     mixed "NestedOrdinaryWhere.hs" [TopBinding "claim"] "NestedOrdinaryWhere.hs" [(9, forbidden tval)]
+    accepts "NestedQuickCheckControl.hs"
+    mixed "NestedOrdinaryLet.hs" [LocalBinding "claim" "draw", LocalBinding "claim" "check"] "NestedOrdinaryLet.hs"
+        [(11, carrier "pure"), (12, carrier "pure"), (14, forbidden tval), (15, forbidden tval), (20, forbidden tval)]
     putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
@@ -395,13 +398,14 @@ checkGeneratedConstructionSpecimens = do
              "-outputdir", objects, "-package", "MemoristANT", "-package", quickCheckPackage, output] ""
         unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))
 
-data SpecimenDefinition = TopBinding String | InstanceMethod String [String] String deriving Eq
+data SpecimenDefinition = TopBinding String | LocalBinding String String | InstanceMethod String [String] String deriving Eq
 
 type BindingSpans = [(SpecimenDefinition, SrcSpan, SrcSpan)] -- whole definition, then binder
 type SiteReport = (RealSrcSpan, String)
 
 instance Show SpecimenDefinition where
     show (TopBinding name) = name
+    show (LocalBinding owner name) = name ++ " (in " ++ owner ++ ")"
     show (InstanceMethod cls args name) = name ++ " (instance " ++ cls ++ " " ++ ty ++ ")"
       where ty = case args of [one] -> one; _ -> "(" ++ unwords args ++ ")"
 
@@ -433,6 +437,9 @@ definitionSpans :: HsModule GhcPs -> BindingSpans
 definitionSpans parsed =
     [(TopBinding (occ name), getLocA decl, getLocA name)
     | decl@(L _ (ValD _ (FunBind _ name _))) <- hsmodDecls parsed] ++
+    [(LocalBinding (occ owner) (occ name), getLocA binding, getLocA name)
+    | L _ (ValD _ (FunBind _ owner matches)) <- hsmodDecls parsed,
+      binding@(L _ (FunBind _ name _)) <- collectAst matches :: [LHsBind GhcPs]] ++
     [(InstanceMethod (occ cls) tys (occ name), getLocA binding, getLocA name)
     | L _ (InstD _ (ClsInstD _ inst)) <- hsmodDecls parsed,
       HsAppTy _ lhs rhs <- [unLoc (ignoreParens (getLHsInstDeclHead (cid_poly_ty inst)))],
