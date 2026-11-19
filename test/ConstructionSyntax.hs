@@ -3,9 +3,9 @@
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
 import ConstructionAst
-import ConstructionLocals (Locals, SourceSite(..), nestedSource)
+import ConstructionLocals (Locals, SourceSite(..), nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
-import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
+import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
 import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
@@ -66,11 +66,12 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> QuickCheck -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
-checkSyntax rt qc locals uses homes methods support checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
+checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> walk noSrcSpan group
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
+    qc = quickCheckBindings locals
     exempt = quickCheckBody qc checked
     qcUses = uses checked
     (views, isViewCall) = moduleViews support checked

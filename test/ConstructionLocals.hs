@@ -1,6 +1,6 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
-module ConstructionLocals (Locals, SourceSite(..), localBindings, nestedSource, ordinaryCoreBindings) where
+module ConstructionLocals (Locals, quickCheckBindings, SourceSite(..), localBindings, nestedSource, ordinaryCoreBindings) where
 
 import ConstructionAst (bindingName, children, collectAst, nestedBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -16,7 +16,7 @@ import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Tc.Utils.TcType (tcSplitNestedSigmaTys)
 import GHC.Types.Name.Set (NameSet)
 
-data Locals = Locals { expressionValues :: Set.Set Name, independentIds :: Set.Set Name }
+data Locals = Locals { quickCheckBindings :: QuickCheck, expressionValues :: Set.Set Name, independentIds :: Set.Set Name }
 
 data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan
 
@@ -37,7 +37,7 @@ names :: HsBind GhcRn -> [Name]
 names = collectHsBindBinders CollNoDictBinders
 
 localBindings :: QuickCheck -> [TypecheckedModule] -> Locals
-localBindings qc modules = Locals values (reachable aliases independent)
+localBindings qc modules = Locals qc values (reachable aliases independent)
   where
     roots = [bodyParts b | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m], b <- fst (parts group)]
     local b = (b, refs) : concatMap local nested where (nested, refs) = bodyParts b
@@ -90,9 +90,10 @@ nestedSource locals = concatMap boundary . fst . bodyParts
 -- The ordinary passes already traverse ordinary RHSs, stopping at QuickCheck
 -- binders. Add just the independent source bodies encountered below those
 -- stops. Desugaring's administrative lets inherit their expression's role.
-ordinaryCoreBindings :: Locals -> QuickCheck -> [(Id, C.CoreExpr)] -> [(Id, C.CoreExpr)]
-ordinaryCoreBindings locals qc bs = filter (not . isQuickCheckBinding qc . fst) bs ++ concatMap (inside False) bs
+ordinaryCoreBindings :: Locals -> [(Id, C.CoreExpr)] -> [(Id, C.CoreExpr)]
+ordinaryCoreBindings locals bs = filter (not . isQuickCheckBinding qc . fst) bs ++ concatMap (inside False) bs
   where
+    qc = quickCheckBindings locals
     inside testing pair@(v, rhs) =
         let exempt = isQuickCheckBinding qc v
             resume = testing && not exempt && Set.member (getName v) (independentIds locals)

@@ -6,7 +6,7 @@ import ConstructionDictionary
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings)
+import ConstructionLocals (Locals, SourceSite(..), ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -73,15 +73,15 @@ methodNames rt modules = do
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
 
-collectEvidence :: Runtime -> QuickCheck -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
-collectEvidence rt qc locals homes program support checked sourceSites = do
+collectEvidence :: Runtime -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
+collectEvidence rt locals homes program support checked sourceSites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
         bindingSites env given bs = concat [record (nameSrcSpan (getName binder)) (Left (getName binder)) (uses qc selected env given rhs) |
-            (binder, rhs) <- ordinaryCoreBindings locals qc bs, getName binder `notElem` support]
+            (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
     let global = fst (tm_internals_ checked)
@@ -127,6 +127,7 @@ collectEvidence rt qc locals homes program support checked sourceSites = do
             Nothing -> [MissingCertificate "cannot desugar the retained source method certificates"]
     pure (rootSites ++ retainedSites)
   where
+    qc = quickCheckBindings locals
     record location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner) us
       where owner = contextSite homes site
 

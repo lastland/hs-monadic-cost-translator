@@ -4,7 +4,7 @@
 module ConstructionViews (ViewSupport, viewSupport, restrictedViews, moduleViews, coreViewNames) where
 
 import ConstructionAst
-import ConstructionLocals (Locals, ordinaryCoreBindings)
+import ConstructionLocals (Locals, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, supportCoreNames)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -67,8 +67,8 @@ moduleViews support checked = (definitions, isCall)
 coreViewNames :: ViewSupport -> TypecheckedModule -> [Name]
 coreViewNames support checked = supportCoreNames (fst (moduleViews support checked)) checked
 
-viewSupport :: Runtime -> QuickCheck -> Locals -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ViewSupport
-viewSupport runtime' qc locals homes checkedPrograms = do
+viewSupport :: Runtime -> Locals -> [Module] -> [(TypecheckedModule, [C.CoreBind])] -> Ghc ViewSupport
+viewSupport runtime' locals homes checkedPrograms = do
     rt <- resolveViews runtime'
     let (checked, programs) = unzip checkedPrograms
         definitions = concatMap allBindings programs
@@ -102,8 +102,8 @@ viewSupport runtime' qc locals homes checkedPrograms = do
                     any (validRoot policy . typeLambdaBody . administrative) expressions,
                     Strict.Just bytes <- [getBufSpan (getLocA candidate)]]
             pure (owner, (support, calls))
-    let problems = concat [walkBinding qc policy (C.NonRec v rhs) | program <- programs,
-            (v, rhs) <- ordinaryCoreBindings locals qc (C.flattenBinds program)]
+    let problems = concat [walkBinding (quickCheckBindings locals) policy (C.NonRec v rhs) | program <- programs,
+            (v, rhs) <- ordinaryCoreBindings locals (C.flattenBinds program)]
     unlessNull problems
     pure (ViewSupport helpers (Map.fromList sites))
   where

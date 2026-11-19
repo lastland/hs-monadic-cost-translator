@@ -81,10 +81,10 @@ checkGeneratedConstruction output = do
         qc <- quickCheckRoles qcResult checkedModules
         let uses = quickCheckUses qcResult
             locals = localBindings qc checkedModules
-        views <- viewSupport rt qc locals homes checkedPrograms
+        views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt qc locals uses homes methods views checked
-            evidence <- collectEvidence rt qc locals representations program (coreViewNames views checked) checked sites
+            let (syntaxProblems, sites) = checkSyntax rt locals uses homes methods views checked
+            evidence <- collectEvidence rt locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
