@@ -35,7 +35,7 @@ quickCheckRoles modules = do
         -- and their exports identify its implementations, and also name local
         -- generators. Do not grant a role to an arbitrary intermediate Core
         -- expression just because its type happens to be Gen.
-        locals m = [unLoc n | FunBind _ n _ <- collectAst (tm_typechecked_source m) :: [HsBind GhcTc]] ++
+        locals m = map unLoc (functionBinders m) ++
             [v | ABE poly mono _ _ <- collectAst (tm_typechecked_source m), v <- [poly, mono]]
     things <- mapM lookupName (filter isExternalName (Set.toList declared))
     let ids = [v | Just (AnId v) <- things] ++ concatMap locals modules
@@ -50,13 +50,16 @@ quickCheckBody qc checked = exempt
   where
     typed = Map.fromListWith (&&)
         [((offset, getOccName v), isQuickCheckBinding qc v)
-        | FunBind _ n _ <- collectAst (tm_typechecked_source checked) :: [HsBind GhcTc],
-          Strict.Just offset <- [getBufSpan (getLocA n)], let v = unLoc n]
+        | n <- functionBinders checked, let v = unLoc n,
+          Strict.Just offset <- [getBufSpan (getLocA n)]]
     exempt binding
         | Just n <- bindingName binding, isQuickCheckBinding qc n = True
         | FunBind _ n _ <- binding, Strict.Just offset <- getBufSpan (getLocA n) =
             Map.findWithDefault False (offset, getOccName (unLoc n)) typed
         | otherwise = False
+
+functionBinders :: TypecheckedModule -> [LocatedN Id]
+functionBinders checked = [n | FunBind _ n _ <- collectAst (tm_typechecked_source checked) :: [HsBind GhcTc]]
 
 -- These facts only reject executable Eq/Show/etc. uses on demand data. An
 -- actual associated type equation is not authority to observe a thunk.
@@ -72,8 +75,7 @@ homeDemandTypes rt checked = nub
 supportCoreNames :: [(SrcSpan, Name)] -> TypecheckedModule -> [Name]
 supportCoreNames support checked = close initial
   where
-    initial = [getName (unLoc name) | FunBind _ name _ <- collectAst (tm_typechecked_source checked) :: [HsBind GhcTc],
-        getLocA name `elem` map fst support]
+    initial = [getName (unLoc name) | name <- functionBinders checked, getLocA name `elem` map fst support]
     exports = [(getName poly, getName mono) | ABE poly mono _ _ <- collectAst (tm_typechecked_source checked) :: [ABExport]]
     close names = let more = names ++ mapMaybe (\(poly, mono) -> if mono `elem` names && poly `notElem` names then Just poly else Nothing) exports
                   in if length more == length names then names else close more
