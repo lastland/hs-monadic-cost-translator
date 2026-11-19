@@ -82,7 +82,7 @@ checkGeneratedConstruction output = do
         qcResult <- quickCheckResult
         qc <- quickCheckRoles qcResult checkedModules
         let uses = quickCheckUses qcResult programs
-            locals = localBindings qc checkedModules
+            locals = localBindings rt qc checkedModules
         (views, viewNames, viewCalls) <- viewSupport rt qc locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
             let (syntaxProblems, sites) = checkSyntax rt qc locals uses homes methods viewNames views viewCalls checked
@@ -257,7 +257,8 @@ checkGeneratedConstructionSpecimens = do
          (23, carrier "pure"), (24, carrier "pure"), (28, forbidden tval)]
     accepts "LexicalValueControl.hs"
     mixed "IndependentTypedLocals.hs" [TopBinding "run", TopBinding "lawful"] "IndependentTypedLocals.hs"
-        [(9, forbidden tval), (14, forbidden tval), (23, forbidden tval)]
+        [(9, forbidden tval), (14, selected "GHC.Internal.Enum.maxBound: unknown executable method/default dependency [given Bounded"),
+         (15, forbidden tval), (24, forbidden tval), (36, forbidden tval)]
     mixed "NestedOrdinaryView.hs" [TopBinding "control"] "NestedOrdinaryView.hs" [(11, view "preserve")]
     mixed "NestedOrdinaryPattern.hs" [TopBinding "law"] "NestedOrdinaryPattern.hs"
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]

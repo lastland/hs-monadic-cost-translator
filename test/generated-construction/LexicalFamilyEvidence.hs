@@ -8,3 +8,6 @@ type family Opaque a
 -- condition on this function, not an unconditional fact about Result ().
 conditional :: Result () ~ (Int -> Int) => Result () -> Int
 conditional f = f 3
+
+conditionalData :: Opaque () ~ Bool => Opaque () -> Bool
+conditionalData x = x
