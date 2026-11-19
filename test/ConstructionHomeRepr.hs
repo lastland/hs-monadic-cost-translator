@@ -1,7 +1,7 @@
 -- | Link a home Repr dictionary to its actual reprM implementation.
 -- These are conditional certificates: every module body and retained source
 -- site is checked, and every caller must supply the audited carrier.
-module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, homeDictionary, Field(..)) where
+module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, dictionaryBindings, Field(..)) where
 
 import ConstructionAst (collectAst)
 import ConstructionRuntime
@@ -32,7 +32,9 @@ data HomeReprs = HomeReprs (Map.Map Name (Scheme, Field)) (Map.Map Name Scope) (
 homeReprs :: Runtime -> [(TypecheckedModule, [C.CoreBind])] -> HomeReprs
 homeReprs rt programs = HomeReprs (Map.fromList (map fst entries)) (Map.fromList (map snd entries)) dictionaries
   where
-    dictionaries = Map.fromList [(getName df, rhs) | (_, program) <- programs, (df, rhs) <- C.flattenBinds program, isDFunId df]
+    -- A packed superclass may name a floated dictionary instead of its DFun.
+    dictionaries = Map.fromList [(getName v, rhs) | (_, program) <- programs, (v, rhs) <- C.flattenBinds program,
+        isDFunId v || isPredTy (idType v)]
     entries = [((getName owner, (scheme, field)), (getName carrier, Scope field span')) |
         (checked, program) <- programs, let bindings = C.flattenBinds program, let sources = sourceFields rt checked,
         (owner, dictionary) <- bindings, Just (scheme, method) <- [homeField rt owner dictionary],
@@ -108,14 +110,14 @@ sourceFields rt checked = [(poly, abs_ev_vars ab, carrier, span') | ab <- collec
 -- receives those from the same concrete DFun application. Local polymorphism
 -- and other given dictionaries cannot supply such a substitution.
 selectedHome :: HomeReprs -> Maybe Name -> Name -> [Type] -> Type -> Maybe (Field, [Type])
-selectedHome (HomeReprs heads scopes _) caller owner arguments ty = do
+selectedHome (HomeReprs heads scopes _) lexicalField owner arguments ty = do
     (Scheme variables context headTy, field) <- Map.lookup owner heads
     guard (length variables == length arguments && all inScope arguments)
     let instantiate = substTyWith variables arguments
     guard (eqType (instantiate headTy) ty)
     pure (field, map instantiate context)
   where
-    scope = case caller >>= (`Map.lookup` scopes) of
+    scope = case lexicalField >>= (`Map.lookup` scopes) of
         Just (Scope field _) -> mkVarSet (parameters field)
         Nothing -> emptyVarSet
     inScope t = tyCoVarsOfType t `subVarSet` scope
@@ -134,5 +136,5 @@ methodContext (HomeReprs _ scopes _) caller ev = case caller >>= (`Map.lookup` s
     Just (Scope field _) -> any (ev `elem`) (slots field)
     Nothing -> False
 
-homeDictionary :: HomeReprs -> Id -> Maybe C.CoreExpr
-homeDictionary (HomeReprs _ _ dictionaries) df = Map.lookup (getName df) dictionaries
+dictionaryBindings :: HomeReprs -> Map.Map Name C.CoreExpr
+dictionaryBindings (HomeReprs _ _ dictionaries) = dictionaries

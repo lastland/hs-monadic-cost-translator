@@ -128,7 +128,11 @@ typedMethodHead expression = at (getLocA expression) (unLoc expression)
     at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
     at _ _ = Nothing
 
-checkUse :: Runtime -> HomeReprs -> [TyCon] -> Map.Map Name [Use] -> [Evidence] -> Maybe Name -> Use -> [String]
+-- A back-edge closes only this instantiated method obligation, not the
+-- enclosing list of field uses. Dictionary provenance was checked on entry.
+data Active = Active Name Evidence Evidence
+
+checkUse :: Runtime -> HomeReprs -> [TyCon] -> Map.Map Name [Use] -> [Active] -> Maybe Name -> Use -> [String]
 checkUse rt homes demands bodies stack field (Use name expectedClass family types dictionaries) =
     ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
         " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
@@ -139,7 +143,7 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
         (ty : _, evidence : _) -> case family of
             Computation | memorist ty evidence -> Nothing
                 | otherwise -> Just "requires the concrete audited Memorist instance; generic dictionaries confer no permission"
-            RepresentationMethod | concreteRepr ty evidence && representationCarrier -> Nothing
+            RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
                 | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
             ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                 | demandOperand ty -> Just "demand-data methods have no observation exemption"
@@ -184,7 +188,7 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
         _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
             getName cls == reprClass && eqType argument ty
         Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
-        Instance owner predicate instantiation dependencies | Just (method, context) <- selectedHome homes caller (getName owner) instantiation ty,
+        Instance owner predicate instantiation dependencies | Just (method, context) <- selectedHome homes field (getName owner) instantiation ty,
                 Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
             getName cls == reprClass && eqType argument ty && length context == length dependencies &&
                 and (zipWith contextChild context dependencies) && replay method instantiation dependencies evidence
@@ -207,12 +211,22 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
     -- Replay even inside an uncalled method: substitute the supplied values,
     -- keeping only the enclosing definition's own slots conditional.
     replay method args ds ev = case dictionaries of
-        [_, carrier] | all (progress ev) stack, Just apply <- instantiateUse method args ds carrier,
-            Just obligations <- Map.lookup (getName (carrierBinder method)) bodies ->
-            all (null . checkUse rt homes demands bodies (ev : stack) field . apply) obligations
+        [_, carrier] | Just apply <- instantiateUse method args ds carrier,
+                Just obligations <- Map.lookup (getName (carrierBinder method)) bodies ->
+            let active = Active (implementation method) ev carrier
+            in any (identical active) stack || (all (progress active) stack &&
+                all (null . checkUse rt homes demands bodies (active : stack) field . apply) obligations)
         _ -> False
-    progress ev@(Instance owner _ _ _) ancestor@(Instance previous _ _ _) = owner /= previous || descendant ev ancestor
+    identical (Active method ev carrier) (Active other previous oldCarrier) =
+        method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
+    progress (Active _ ev@(Instance owner _ _ _) carrier) (Active _ ancestor@(Instance previous _ _ _) oldCarrier) =
+        owner /= previous || descendant ev ancestor ||
+            (sameEvidence ev ancestor && specializes (root oldCarrier) (root carrier))
     progress _ _ = False
+    -- The DFun is unchanged, but switching from the method parameter to the
+    -- audited concrete carrier opens a new obligation; it is not a back-edge.
+    specializes Given{} Instance{} = True
+    specializes _ _ = False
     -- An inert dictionary confers no method permission, even at a source
     -- site erased from Core. It must still have a fully selected origin.
     resolved (Instance _ _ _ children') = all resolved children'
@@ -225,9 +239,6 @@ checkUse rt homes demands bodies stack field (Use name expectedClass family type
     resolvedProjection _ actual = resolved actual
     fieldSlot (Given binder _) = methodContext homes field binder
     fieldSlot _ = False
-    caller = case dictionaries of
-        [_, evidence] | Given binder _ <- root evidence -> Just binder
-        _ -> Nothing
     representationCarrier = case (types, dictionaries) of
         ([_, _, carrier], [_, evidence]) -> case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, _) | getName cls == runtimeName rt "Memorist.Base.Core" "Memorist" ->

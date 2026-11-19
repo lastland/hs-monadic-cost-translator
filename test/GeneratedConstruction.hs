@@ -120,8 +120,9 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "FieldHidden.hs" [(9, reprFailure)]
     rejectsAt "FieldGrowth.hs" [(12, reprFailure)]
     mapM_ accepts ["RecurNat.hs", "NewtypeLabel.hs", "ScopeCarrier.hs"]
-    rejectsAt "RecurOtherUse.hs" [(13, reprFailure)]
+    rejectsAt "RecurOtherUse.hs" [(6, reprFailure)]
     rejectsAt "NewtypeLabelBad.hs" [(6, reprFailure)]
+    rejectsAt "LabelFamilyCast.hs" [(17, reprFailure)]
     rejectsAt "ScopeCarrierBad.hs" [(11, reprFailure)]
     accepts "ContextReprUse.hs"
     rejectsAt "ContextReprCycle.hs" [(12, reprFailure)]

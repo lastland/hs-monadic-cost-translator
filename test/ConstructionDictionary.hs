@@ -1,20 +1,23 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
-    instantiateUse, predicateOf, projected, descendant, sameUse) where
+    instantiateUse, predicateOf, projected, descendant, sameEvidence, sameUse) where
 
 import ConstructionAst (pretty)
-import ConstructionHomeRepr (Field(..), HomeReprs, homeDictionary)
+import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
 import ConstructionRuntime (Family, describeName)
 import Control.Monad (guard)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType)
 import qualified GHC.Core as C
-import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon)
+import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
+import GHC.Core.Coercion (coercionLKind, coercionRKind)
+import GHC.Core.Coercion.Axiom (toBranchedAxiom)
+import GHC.Core.TyCo.Rep (Coercion(..), MCoercion(..))
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.TyCon (tyConSingleDataCon)
+import GHC.Core.TyCon (newTyConCo_maybe, tyConSingleDataCon)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, substTyWith)
 import GHC.Core.Utils (exprType)
 import GHC.Types.Id (isDFunId, realIdUnfolding)
@@ -27,6 +30,9 @@ type Environment = Map.Map Name C.CoreExpr
 trace :: Environment -> Set.Set Name -> Set.Set Name -> C.CoreExpr -> Evidence
 trace env given seen expression = case expression of
     C.Tick _ body -> trace env given seen body
+    C.Cast body co | Just (_, sel) <- superclassAxiom Unpack co,
+            let source = trace env given seen body, Just predicate <- predicateOf source, eqType predicate (coercionLKind co) ->
+        Super sel (coercionRKind co) source
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
@@ -74,6 +80,36 @@ instantiateUse field args ds carrier = do
     guard (cls == formalClass)
     pure (\(Use n c f ts es) -> Use n c f (map ty ts) (map (substitute ty env) es))
 
+data Direction = Pack | Unpack deriving (Eq)
+
+-- A class with a single superclass and no methods may have a newtype
+-- dictionary. Its own newtype axiom (possibly eta-reduced and applied) is
+-- the constructor in reverse and the selector forward. Endpoint equality
+-- alone is not a certificate for casts, compositions or arbitrary coercions.
+superclassAxiom :: Direction -> Coercion -> Maybe (Class, Id)
+superclassAxiom direction co = do
+    let (parent, child) = case direction of
+            Pack -> (coercionRKind co, coercionLKind co)
+            Unpack -> (coercionLKind co, coercionRKind co)
+    (cls, arguments) <- getClassPredTys_maybe parent
+    [sel] <- pure (classAllSelIds cls)
+    [super] <- pure (classSCTheta cls)
+    guard (classSCSelIds cls == [sel] && eqType child (substTyWith (classTyVars cls) arguments super))
+    axiom <- newTyConCo_maybe (classTyCon cls)
+    let match want (SymCo inner) args | want == Pack = match Unpack inner args
+        match want (AppCo f x) args = do
+            t <- reflexive x
+            match want f (t : args)
+        match Unpack (AxiomInstCo actual 0 xs) args = do
+            ts <- mapM reflexive xs
+            guard (actual == toBranchedAxiom axiom && sameList eqType arguments (ts ++ args))
+        match _ _ _ = Nothing
+        reflexive (Refl t) = Just t
+        reflexive (GRefl _ t MRefl) = Just t
+        reflexive _ = Nothing
+    match direction co []
+    pure (cls, sel)
+
 -- Follow the selected superclass field of the actual DFun. Never certify a
 -- superclass method merely because the parent instance was registered.
 projected :: HomeReprs -> Evidence -> Maybe Evidence
@@ -84,23 +120,31 @@ projected homes ev@Super{} = normalize [] ev
         (cls, _) <- getClassPredTys_maybe p
         guard (sel `elem` classSCSelIds cls && all (progress sel df origin) path)
         let constructor = tyConSingleDataCon (classTyCon cls)
-        (binders, args) <- case homeDictionary homes df of
-            Just rhs -> do
+            fromBody rhs = do
                 let (bs, body) = C.collectBinders rhs
-                (C.Var worker, args) <- pure (C.collectArgs body)
-                guard (worker == dataConWorkId constructor)
-                pure (bs, args)
-            Nothing -> do
-                C.DFunUnfolding bs con args <- pure (realIdUnfolding df)
-                guard (con == constructor)
-                pure (bs, args)
+                    typeBinders = filter isTyVar bs
+                guard (length typeBinders == length ts && eqType (substTyWith typeBinders ts (exprType body)) p)
+                case body of
+                    C.Cast payload co | Just (owner, selected) <- superclassAxiom Pack co,
+                        owner == cls && selected == sel && eqType (exprType payload) (coercionLKind co) ->
+                            pure (bs, [payload])
+                    _ -> do
+                        (C.Var worker, args) <- pure (C.collectArgs body)
+                        guard (worker == dataConWorkId constructor)
+                        pure (bs, args)
+        (binders, args) <- case Map.lookup (getName df) (dictionaryBindings homes) of
+            Just rhs -> fromBody rhs
+            Nothing -> case realIdUnfolding df of
+                C.DFunUnfolding bs con args | con == constructor -> pure (bs, args)
+                C.CoreUnfolding{C.uf_tmpl = rhs} | isNewTyCon (classTyCon cls) -> fromBody rhs
+                _ -> Nothing
         let variables = filter isTyVar binders
             formals = filter isId binders
             fields = filter (not . C.isTyCoArg) args
         guard (length variables == length ts && length formals == length ds && length fields == length (classAllSelIds cls))
         field <- lookup sel (zip (classAllSelIds cls) fields)
         let names = map getName formals
-            template = trace Map.empty (Set.fromList names) Set.empty field
+            template = trace (dictionaryBindings homes) (Set.fromList names) Set.empty field
         result <- normalize ((sel, df, origin) : path) (substitute (substTyWith variables ts) (zip names ds) template)
         actual <- predicateOf result
         guard (eqType predicate actual)
