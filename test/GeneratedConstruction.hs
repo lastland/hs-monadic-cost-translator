@@ -103,6 +103,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckUnusedArgument.hs"
     mixed "QuickCheckFieldUse.hs" [TopBinding "ignoreItem", TopBinding "readBool"] "QuickCheckFieldUse.hs"
         [(9, qcValue "QuickCheckFieldUse.item")]
+    accepts "QuickCheckMappedLines.hs"
     mixed "QuickCheckStrictArgument.hs" [TopBinding "strict", TopBinding "prop_specialized"] "QuickCheckStrictArgument.hs"
         [(11, qcValue "QuickCheckStrictArgument.strict"), (14, qcValue "GHC.Prim.seq"),
          (17, "strict pattern forces a QuickCheck value outside a generator or property")]
