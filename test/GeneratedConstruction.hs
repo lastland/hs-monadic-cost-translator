@@ -113,10 +113,12 @@ checkGeneratedConstructionSpecimens = do
     rejectsCompleteBox
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
+    accepts "ContextReprUse.hs"
+    rejectsAt "ContextReprBad.hs" [(8, reprFailure), (11, reprFailure), (14, reprFailure), (19, functorWrapper), (20, forbidden tval)]
     accepts "ParamReprUse.hs"
     rejectsAt "ParamReprBad.hs"
         [(8, reprFailure), (11, reprFailure), (16, functorWrapper), (17, forbidden tval),
-         (29, reprFailure), (35, reprFailure)]
+         (35, reprFailure)]
     rejectsAt "HomeReprUnsafe.hs" [(10, functorWrapper), (11, forbidden tval)]
     rejectsAt "HomeReprGiven.hs" [(8, reprFailure)]
     rejectsAt "HomeReprDelegation.hs" [(9, carrier "pure")]
