@@ -65,9 +65,6 @@ constructorPayload ::
     Match GhcRn (LHsExpr GhcRn) ->
     Maybe ([TyVar], Payload)
 constructorPayload env name ty match = do
-    case nativeSharing (plannedNativeSchemas (namePlan env)) Map.empty ty of
-        Right Nothing -> pure ()
-        _ -> Nothing
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
         rhs = m_grhss match
@@ -79,6 +76,10 @@ constructorPayload env name ty match = do
             scoped <- originalScope env name ty variables
             plan OriginalPayload scoped
         checked = do
+            let schemas = plannedNativeSchemas (namePlan env)
+            case nativeSharing schemas Map.empty ty of
+                Right Nothing -> pure ()
+                _ -> Nothing
             scoped <- payloadScope env name ty
             _ <-
                 either
