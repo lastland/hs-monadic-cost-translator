@@ -117,8 +117,12 @@ checkGeneratedConstructionLifecycle :: ReferenceEnvironment -> IO ()
 checkGeneratedConstructionLifecycle environment = do
     checkPublicationGuard environment "construction" ("generated-construction" </> "ReasoningPublication.hs")
         ["Generated.hs:8:", "unapproved runtime operation Memorist.Base.Core.value",
-         "unapproved runtime operation Memorist.Base.Core.eval1", "is forbidden in generated code"]
-    putStrLn "PASS: generated-construction / ordinary fixture lifecycle rejects behavior-preserving reasoning operations before caller compilation"
+          "unapproved runtime operation Memorist.Base.Core.eval1", "is forbidden in generated code"]
+    checkPublicationGuard environment "construction-unused" ("generated-construction" </> "UnusedNamingPublication.hs")
+        ["Generated.hs:9:", "unapproved runtime operation Memorist.Base.Thunk.nnext", "is forbidden in generated code"]
+    checkPublicationGuard environment "construction-carrier" ("generated-construction" </> "UnusedCarrierPublication.hs")
+        ["Generated.hs:9:", "unapproved selected method GHC.Internal.Base.pure", "audited Memorist instance"]
+    putStrLn "PASS: generated-construction / ordinary fixture lifecycle rejects reasoning operations, unused naming helpers and a wrong selected carrier before caller compilation"
 
 checkPublicationGuard :: ReferenceEnvironment -> String -> FilePath -> [String] -> IO ()
 checkPublicationGuard environment label specimen expected = do

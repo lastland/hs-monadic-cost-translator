@@ -1,33 +1,44 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, displayException, try)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, (>=>))
 import Data.Data (Data, cast, gmapQ)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Maybe (isJust, maybeToList)
+import ConstructionAst (pretty)
+import ConstructionEvidence (checkEvidence, methodNames)
+import ConstructionDemand (demandSupport)
+import ConstructionRoles (supportBindings, supportCoreNames)
+import ConstructionRuntime (runtime, runtimeOwns, roleOf, roleNames, Role(..), describeName, standardNames)
+import ConstructionSyntax (checkSyntax)
 import GHC
-    ( AmbiguousFieldOcc(..), FieldOcc(..), GhcRn, GhcTc, HsExpr(..), HsFieldBind(..)
-    , HsMatchContext(..), Id, LIdP, LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan, Type
-    , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..), TyThing(..)
-    , backend, findModule, getLocA, getLogger, getModuleInfo
-    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, mkModuleName
-    , load, lookupName, ml_hs_file, modInfoExports, ms_location, noBackend, parseDynamicFlags, parseModule, depanal
+    ( AmbiguousFieldOcc(..), GhcTc, HsExpr(..), HsFieldBind(..)
+    , HsMatchContext(..), Id, LHsRecUpdFields(..), Match(..), MatchGroup(..), Name, Pat(..), SrcSpan, Type
+    , GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..)
+    , backend, getLocA, getLogger
+    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
+    , load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, tm_renamed_source, tm_typechecked_source, typecheckModule
+    , tm_internals_
     , unLoc, ghcLink
     )
 import GHC.Core.ConLike (ConLike, conLikeName)
+import GHC.Core.TyCon (isAlgTyCon, isClassTyCon, tyConDataCons)
 import GHC.Hs.Expr (HsRecUpdParent(..), HsThingRn(..), HsWrap(..), XXExprGhcTc(..))
 import GHC.Paths (libdir)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
+import GHC.Tc.Types (tcg_tcs)
+import GHC.Types.Name (getName, isDataConName)
 import GHC.Types.GREInfo (conLikeName_Name)
-import GHC.Types.Name (getName, getOccString, nameModule_maybe)
 import GHC.Types.Name.Reader (greName)
 import GHC.Types.SrcLoc (noLoc)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
-import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import Paths_cost_translate (getDataFileName)
 import System.FilePath ((</>), takeDirectory)
+import System.Exit (ExitCode(..))
+import System.IO.Temp (withSystemTempDirectory)
+import System.Process (readProcessWithExitCode)
 
 -- Resolve actual runtime definitions, not an import's spelling or qualifier.
 -- The renamed tree retains references in unused local/top-level helpers.
@@ -41,49 +52,35 @@ checkGeneratedConstruction output = do
         unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
         _ <- setSessionDynFlags configured
             { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
-        forbidden <- concat <$> forM runtimeModuleOperations (\(definingModule, permitted) -> do
-            actualModule <- findModule (mkModuleName definingModule) Nothing
-            info <- getModuleInfo actualModule >>= maybe
-                (fail ("cannot inspect runtime operations in " ++ definingModule)) pure
-            definitions <- mapM lookupName
-                [name | name <- modInfoExports info, nameModule_maybe name == Just actualModule]
-            -- Inspect value identities, not the same-spelled type constructor.
-            let values = [getName value | Just value@AnId{} <- definitions] ++
-                    [getName value | Just value@AConLike{} <- definitions]
-            forM_ permitted $ \occurrence -> case
-                    [name | name <- values, getOccString name == occurrence] of
-                [_] -> pure ()
-                _ -> fail ("cannot resolve permitted runtime operation " ++ definingModule ++ "." ++ occurrence)
-            pure [(name, definingModule ++ "." ++ getOccString name)
-                 | name <- values, getOccString name `notElem` permitted])
+        rt <- runtime
+        methods <- methodNames rt
         target <- guessTarget output Nothing Nothing
         setTargets [target]
         graph <- depanal [] False
-        -- Load home imports as GHC normally would (e.g. source conversion types
-        -- or a re-export), but inspect only this generated artifact's tree.
+        -- A home import is not an opaque dependency certificate. Inspect every
+        -- body in the complete loaded home graph, even an unused imported wrapper.
         loaded <- load LoadAllTargets
         case loaded of
             Failed -> fail (output ++ ": cannot load generated module for name resolution")
             Succeeded -> pure ()
-        checked <- case [summary | summary <- mgModSummaries graph,
-                ml_hs_file (ms_location summary) == Just output] of
-            [summary] -> parseModule summary >>= typecheckModule
-            _ -> fail (output ++ ": expected one generated module")
-        case tm_renamed_source checked of
+        let summaries = mgModSummaries graph
+            homes = map ms_mod summaries
+        checkedModules <- mapM (parseModule >=> typecheckModule) summaries
+        let constructors = concatMap (roleNames rt) [Representation, DemandData] ++
+                [name | (_, name) <- standardNames rt, isDataConName name] ++
+                [getName constructor | checked <- checkedModules, tycon <- tcg_tcs (fst (tm_internals_ checked)),
+                    isAlgTyCon tycon, not (isClassTyCon tycon), constructor <- tyConDataCons tycon]
+        (demand, restricted) <- demandSupport rt constructors checkedModules
+        fmap concat $ forM checkedModules $ \checked -> do
+          case tm_renamed_source checked of
             Just (group, _, _, _, _) -> do
-                let references =
-                        [(getLocA reference, unLoc reference) | reference <- collectAst group :: [LIdP GhcRn]] ++
-                        [(getLocA label, name) | FieldOcc name label <- collectAst group :: [FieldOcc GhcRn]] ++
-                         [(getLocA label, name) | Unambiguous name label <- collectAst group :: [AmbiguousFieldOcc GhcRn]] ++
-                         [(getLocA constructor, unLoc constructor) | ConPat _ constructor _ <- collectAst group :: [Pat GhcRn]] ++
-                         ambiguousUpdateReferences (tm_typechecked_source checked)
-                    violations =
-                        [(location, operation) | (location, name) <- references, Just operation <- [lookup name forbidden]]
-                pure
-                    [ showSDocUnsafe (ppr location) ++ ": unapproved runtime operation " ++
-                      operation ++ " is forbidden in generated code (" ++ output ++ ")"
-                    | (location, operation) <- violations
-                    ]
+                let support = supportBindings rt constructors group ++ demand
+                    (syntaxProblems, sites) = checkSyntax rt homes methods restricted support group
+                    updates = [pretty location ++ ": unapproved runtime operation " ++ describeName name ++
+                        " is forbidden in generated code" | (location, name) <- ambiguousUpdateReferences (tm_typechecked_source checked),
+                        runtimeOwns rt name, roleOf rt name `notElem` [Just Primitive, Just Representation, Just DemandData]]
+                evidenceProblems <- checkEvidence rt homes (supportCoreNames support checked) checked sites
+                pure (syntaxProblems ++ updates ++ evidenceProblems)
             Nothing -> fail (output ++ ": GHC did not retain renamed source")
     unless (null problems) (fail (unlines problems))
 
@@ -112,12 +109,6 @@ updateConstructors _ = []
 
 -- The construction interface is closed: a newly exported value is not permitted
 -- merely because the old evaluator blacklist did not anticipate it.
-runtimeModuleOperations :: [(String, [String])]
-runtimeModuleOperations =
-    [("Memorist.Base.Core", ["lazy", "force", "tick"])
-    ,("Memorist.Base.ANT", [])
-    ,("Memorist.Infer.Infer", [])]
-
 collectAst :: (Data a, Data b) => b -> [a]
 collectAst value
     -- Typechecked syntax contains semantic graphs, which are not source uses.
@@ -131,6 +122,7 @@ collectAst value
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejects "ManualNaming.hs" [(6, "Memorist.Base.Thunk.nnext")]
+    rejects "PayloadComputation.hs" [(6, "Memorist.Base.Thunk.tval")]
     rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
     rejects "AnnotatedConstruction.hs" [(6, "Memorist.Base.Core.Annotated")]
     rejects "QualifiedAlias.hs" [(4, "Memorist.Base.Core.value")]
@@ -154,15 +146,28 @@ checkGeneratedConstructionSpecimens = do
     rejects "AnnotatedPattern.hs" [(6, "Memorist.Base.Core.Annotated"), (11, "Memorist.Base.Core.Annotated")]
     rejects "AnnotatedRecordPatterns.hs"
         [(7, "Memorist.Base.Core.Annotated"), (10, "Memorist.Base.Core.Annotated")
-        ,(13, "Memorist.Base.Core.Annotated"), (16, "Memorist.Base.Core.Annotated")]
+         ,(13, "Memorist.Base.Core.Annotated"), (16, "Memorist.Base.Core.Annotated")]
+    rejects "InstancePayload.hs" [(10, "Memorist.Base.Thunk.tval")]
+    rejectsBecause "PureCarrier.hs" ["PureCarrier.hs:7:", "PureCarrier.hs:10:", "unapproved selected method", "GHC.Internal.Base.pure", "audited Memorist instance"]
+    rejectsBecause "BindCarrier.hs" ["unapproved selected method", "GHC.Internal.Base.>>=", "audited Memorist instance"]
+    rejectsBecause "ApplicativeCarrier.hs" ["unapproved selected method", "GHC.Internal.Base.<*>", "audited Memorist instance"]
+    rejectsBecause "ProtectedEq.hs" ["ProtectedEq.hs:6:", "ProtectedEq.hs:10:", "unapproved selected method", "protected thunk/annotation/accounting operand"]
+    rejectsBecause "PatternPayload.hs" ["unsupported executable form: pattern synonym"]
+    rejectsBecause "UnknownExternal.hs" ["unapproved external operation GHC.Internal.Data.Typeable.Internal.someTypeRep"]
+    rejectsBecause "UnknownRuntime.hs" ["unapproved runtime operation Memorist.Base.Extension.composeTM"]
+    rejectsBecause "ImportedWrapper.hs" ["HiddenConstruction.hs:6:", "unapproved runtime operation Memorist.Base.Thunk.tval"]
+    rejectsBecause "DemandComputation.hs" ["unapproved external operation DemandControl.shrinkView"]
+    rejectsBecause "AlteredDemandView.hs" ["unapproved runtime operation Memorist.Base.Thunk.tval"]
     mapM_ accepts
-        ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs"]
-    putStrLn "PASS: generated-construction / closed Core construction operations, reasoning references, record updates and Annotated patterns rejected, including unused helpers / user identities, type mentions, permitted construction and thunk conversions accepted"
+        ["ImportAliasControl.hs", "LocalShadowing.hs", "Construction.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
+         "MethodControl.hs", "DemandControl.hs"]
+    putStrLn "PASS: generated-construction / closed construction grammar, selected method evidence, complete home dependencies and checked observation roles / negative specimens typecheck independently / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
-    accepts name = specimen name >>= checkGeneratedConstruction
+    accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = do
         output <- specimen name
+        typechecks output
         result <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
         case result of
             Left problem -> forM_ expected $ \(line, operation) ->
@@ -171,3 +176,15 @@ checkGeneratedConstructionSpecimens = do
                          "is forbidden in generated code"]) (lines (displayException problem))) $
                     fail (output ++ ": expected forbidden " ++ operation ++ ", got " ++ displayException problem)
             Right () -> fail (output ++ ": expected forbidden runtime operation, got Right ()")
+    rejectsBecause name expected = do
+        output <- specimen name
+        typechecks output
+        result <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
+        case result of
+            Left problem | all (`isInfixOf` displayException problem) expected -> pure ()
+            _ -> fail (output ++ ": expected " ++ show expected ++ ", got " ++ show result)
+    typechecks output = withSystemTempDirectory "construction-specimen-" $ \objects -> do
+        (status, out, err) <- readProcessWithExitCode "ghc"
+            ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
+             "-outputdir", objects, "-package", "MemoristANT", "-package", "QuickCheck", output] ""
+        unless (status == ExitSuccess) (fail (output ++ ": specimen must typecheck independently before its verdict\n" ++ out ++ err))

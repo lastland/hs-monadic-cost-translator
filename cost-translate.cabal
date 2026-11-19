@@ -156,6 +156,12 @@ test-suite cost-translate-test
     other-modules:    FixturePolicy
                      GeneratedChecks
                      GeneratedConstruction
+                     ConstructionAst
+                     ConstructionDemand
+                     ConstructionRuntime
+                     ConstructionEvidence
+                     ConstructionRoles
+                     ConstructionSyntax
                      GeneratedFunctions
                      ReferencePolicy
                      ReferenceRunner
@@ -165,6 +171,7 @@ test-suite cost-translate-test
     build-depends:
         base,
         cost-translate,
+        containers,
         directory,
         filepath,
         ghc ==9.10.3,
