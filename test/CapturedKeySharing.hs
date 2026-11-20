@@ -1,5 +1,5 @@
 -- Local sharing evidence is deliberately separate from the whole-publication
--- construction gate. Open quot and common support still block that gate.
+-- construction gate. Common support is checked separately at that gate.
 module CapturedKeySharing (checkCapturedKeySharing) where
 
 import ConstructionAst (collectAst, pretty)
@@ -48,7 +48,7 @@ checkCapturedKeySharing environment = forM_ ["inferred-key-captured", "captured-
         fail "captured producer must use the inferred native root and structural views, not the legacy evaluator"
     blocked <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
     case blocked of
-        Left diagnostic | all (`isInfixOf` show diagnostic) ["quot", "tval"] ->
+        Left diagnostic | all (`isInfixOf` show diagnostic) ["liftShrink", "tval"] ->
             writeFile (root </> "whole-publication-blocked.log") (show diagnostic)
         _ -> fail ("whole-publication construction guard must retain its independent blockers: " ++ show blocked)
     copyFile (fixtures </> "Reference.hs") (reference </> "Generated.hs")
