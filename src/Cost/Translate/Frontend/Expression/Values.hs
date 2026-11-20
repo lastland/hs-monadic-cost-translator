@@ -5,6 +5,7 @@ module Cost.Translate.Frontend.Expression.Values
     , returningScalar
     , withScalar
     , withBoolOperand
+    , returnBoolOperand
     ) where
 
 import Control.Applicative ((<|>))
@@ -28,23 +29,21 @@ type Expression = LHsExpr GhcRn
 type Prepare = Env -> String -> Expression -> Either String ([O.Stmt], O.Expr)
 type Branch = Env -> O.Expr -> Either String O.Expr
 
-data Consumer = Returning | Continuing Branch
 data ScalarValue
     = Ready [O.Stmt] Env O.Expr
     | Action [O.Stmt] O.Expr (O.Expr -> Env)
 
-consume :: Consumer -> String -> ScalarValue -> Either String O.Expr
-consume Returning _ (Ready before _ value) = Right (O.doE before (O.ret value))
-consume Returning _ (Action before action _) = Right (O.doE before action)
-consume (Continuing branch) _ (Ready before env value) =
+consume :: Branch -> String -> ScalarValue -> Either String O.Expr
+consume branch _ (Ready before env value) =
     O.doE before <$> branch env value
-consume (Continuing branch) name (Action before action scope) =
+consume branch name (Action before action scope) =
     O.doE (before ++ [O.bind name action]) <$> branch (scope value) value
     where
         value = O.v name
 
 returningScalar :: Prepare -> Env -> Expression -> Maybe (Either String O.Expr)
-returningScalar prep env expr = emitStrictPrimitive env prep expr Returning
+returningScalar prep env expr =
+    emitStrictPrimitive env prep expr (\_ value -> Right (O.ret value))
 
 withScalar ::
     Prepare ->
@@ -54,7 +53,7 @@ withScalar ::
     Maybe (Either String O.Expr)
 withScalar prepare env expr branch =
     emitBoolCondition env prepare expr branch
-        <|> emitStrictPrimitive env prepare expr (Continuing branch)
+        <|> emitStrictPrimitive env prepare expr branch
 
 emitBoolCondition ::
     Env ->
@@ -83,7 +82,15 @@ withBoolOperand prepare env thunkName valueName expr branch = do
     let scoped = case value of
             Ready {} -> value
             Action before act scope -> Action [] (O.doE before act) scope
-    consume (Continuing branch) valueName scoped
+    consume branch valueName scoped
+
+returnBoolOperand ::
+    Prepare -> Env -> String -> Expression -> Either String O.Expr
+returnBoolOperand prepare env thunkName expr = do
+    value <- operand prepare env boolTy thunkName expr
+    pure $ case value of
+        Ready before _ rhs -> O.doE before (O.ret rhs)
+        Action before act _ -> O.doE before act
 
 reference :: Env -> Expression -> Maybe (Name, Type)
 reference env expression = case unLoc expression of
@@ -161,10 +168,11 @@ emitStrictPrimitive ::
     Env ->
     Prepare ->
     Expression ->
-    Consumer ->
+    Branch ->
     Maybe (Either String O.Expr)
-emitStrictPrimitive env prepare expression consumer = do
+emitStrictPrimitive env prepare expression branch = do
     call <- scalarCall env expression
+    StrictOperator op <- pure (scalarOperation call)
     let site = argumentKey (scalarSite call)
         ty = scalarOperandType call
         values = Map.lookup site (plannedOperands (namePlan env))
@@ -173,22 +181,10 @@ emitStrictPrimitive env prepare expression consumer = do
             left <- operand prepare env ty x (scalarLeft call)
             let next scope lhs = do
                     right <- operand prepare scope ty y (scalarRight call)
-                    let short choose = do
-                            rhs <- consume Returning b right
-                            let action = Action [] (choose rhs) (const scope)
-                            consume consumer b action
-                        strict op inner rhs =
-                            let value = O.op op lhs rhs
-                             in consume consumer b (Ready [] inner value)
-                    case scalarOperation call of
-                        StrictOperator op ->
-                            consume (Continuing (strict op)) b right
-                        Conjunction -> short (\r -> O.ifE lhs r (bool False))
-                        Disjunction -> short (O.ifE lhs (bool True))
-            consume (Continuing next) a left
+                    let finish inner rhs = branch inner (O.op op lhs rhs)
+                    consume finish b right
+            consume next a left
         _ -> Left "strict scalar argument layout mismatch"
-    where
-        bool = O.ret . O.v . show
 
 pureScalar :: Env -> Expression -> Maybe O.Expr
 pureScalar env = fmap snd . typedValue env

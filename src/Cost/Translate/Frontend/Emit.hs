@@ -80,16 +80,16 @@ emitGuardStatements ::
 emitGuardStatements scope body [] _
     | probingMatchExit scope = Right (O.tuple [])
     | otherwise = emitExpr scope body
-emitGuardStatements env body ((L _ (BodyStmt _ expr _ _), later) : gs) next
-    | constantCondition env expr == Just True = yes next env
-    | otherwise =
-        underCondition emitThunk emitExpr env expr $ \common choose ->
-            if later
-                then next common $ \miss ->
-                    let joined _ build = build miss
-                     in choose (yes joined) (const (Right miss))
-                else choose (yes next) (`next` Right)
+emitGuardStatements env body ((L _ (BodyStmt _ expr _ _), later) : gs) next =
+    underCondition emitThunk emitExpr env expr continue
     where
+        continue common choose
+            | constantCondition env expr == Just True =
+                choose (yes next) (const (Right (O.tuple [])))
+            | later = next common $ \miss ->
+                let joined _ build = build miss
+                 in choose (yes joined) (const (Right miss))
+            | otherwise = choose (yes next) (`next` Right)
         yes end scope = emitGuardStatements scope body gs end
 emitGuardStatements scope body ((s@(L _ (BindStmt _ pat expr)), _) : gs) next =
     withMatchThunk scope (actionName scope "guardThunk" site) expr $ \ref ->
@@ -268,6 +268,7 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitExpr env located
+    | Just act <- returningCondition emitThunk emitExpr env located = act
     | Just act <- returningScalar emitThunk env located = act
 emitExpr env located = case unLoc located of
     HsOverLit _ literal -> Right (emitLiteral env located literal)

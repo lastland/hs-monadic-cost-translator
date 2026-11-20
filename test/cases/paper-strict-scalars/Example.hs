@@ -22,6 +22,17 @@ afterAnd flag x = if flag && x > 0 then x + 1 else 0
 afterOr flag x = if flag || x > 0 then 0 else x - 1
 nestedAnd flag x = if flag && (x > 0 && x < 8) then x + 2 else 0
 
+-- Keep the constant operands: their position decides whether x is entered.
+{- HLINT ignore constantAnd "Evaluate" -}
+{- HLINT ignore constantOr "Evaluate" -}
+constantAnd, constantOr, knownAnd, knownOr :: Int -> Int
+constantAnd x = if True && x > 0 then 0 else x - 1
+constantOr x = if False || x > 0 then x + 1 else 0
+knownAnd x = if x > 0 && False then 1 else 0
+-- Also exercise the guarded-equation path for a known successful result.
+knownOr x | x > 0 || True = 1
+          | otherwise = 0
+
 bangNext :: Int -> Int
 bangNext x = let !y = work x in y + 1
 
