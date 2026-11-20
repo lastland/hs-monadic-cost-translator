@@ -233,6 +233,20 @@ shortCircuitProbes = concat
         , ("nested-and", True, Source.nestedAnd, nestedAndM) ]
     ]
 
+constantOperandProbes :: [Probe]
+constantOperandProbes = concat
+    [ [ scalarSource (label ++ "/" ++ show n) (const (source n)) $ \s ->
+            M.lazy (priced (repeats s) n) >>= translated
+      | n <- [-2, 0, 3] ] ++
+      [ failure (label ++ "/demands-x") $ \_ -> M.lazy (bad "comparison operand") >>= translated ]
+    | (label, source, translated) <-
+        [ ("and/left-true", Source.constantAnd, constantAndM)
+        , ("or/left-false", Source.constantOr, constantOrM)
+        , ("and/right-false", Source.knownAnd, knownAndM)
+        , ("or/right-true", Source.knownOr, knownOrM)
+        ]
+    ]
+
 patternProbes :: [Probe]
 patternProbes = concat
     [ [ scalarSource (label ++ "/" ++ show input) (const (source input)) $ \s ->
@@ -326,4 +340,4 @@ probes =
         M.lazy (priced (repeats s) (number s)) >>= nestedM
     , failure "nested/comparison-demands-input" $ \_ -> M.lazy (bad "input") >>= nestedM
     ] ++ patternProbes ++ shortCircuitProbes ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
-    guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes ++ rowProbes ++ payloadProbes
+    guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes ++ rowProbes ++ payloadProbes ++ constantOperandProbes

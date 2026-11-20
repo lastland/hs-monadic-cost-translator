@@ -75,6 +75,10 @@ shapes =
     , ("boxNextM", ["input"], box)
     , ("boxPrefixM", ["input"], box)
     , ("workM", ["input"], entry "input" (ret (Call "+" [value, value])))
+    , ("constantAndM", ["input"], entry "input" $ If (Call ">" [value, Number 0])
+        (ret (Number 0)) (ret (Call "-" [value, Number 1])))
+    , ("constantOrM", ["input"], entry "input" $ If (Call ">" [value, Number 0])
+        (ret (Call "+" [value, Number 1])) (ret (Number 0)))
     , ("nestedM", ["input"], entry "input" $
         If (Call ">" [Call "+" [value, Number 1], Number 0])
             (ret (Call "+" [value, Number 2])) (ret value))

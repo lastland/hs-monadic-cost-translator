@@ -32,6 +32,16 @@ afterAndM = whenFlag True (\n -> if n > 0 then n + 1 else 0)
 afterOrM = whenFlag False (\n -> if n <= 0 then n - 1 else 0)
 nestedAndM = whenFlag True (\n -> if n `elem` [1..7] then n + 2 else 0)
 
+constantAndM, constantOrM, knownAndM, knownOrM :: M.Th Int -> M.MemoristM Int
+constantAndM x = M.tick >> ((\n -> if n <= 0 then pred n else 0) <$> M.force x)
+constantOrM x = M.tick >> ((\n -> if n <= 0 then 0 else n + 1) <$> M.force x)
+knownAndM = afterComparison 0
+knownOrM = afterComparison 1
+
+-- Knowing the result does not discharge evaluation of the left operand.
+afterComparison :: Int -> M.Th Int -> M.MemoristM Int
+afterComparison result x = M.tick >> M.force x >>= \n -> n `seq` pure result
+
 whenFlag :: Bool -> (Int -> Int) -> M.Th Bool -> M.Th Int -> M.MemoristM Int
 whenFlag entered result flag x = do
     M.tick
