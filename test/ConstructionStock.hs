@@ -16,10 +16,12 @@ import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
+import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, substTyWith)
 import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Core.Utils (exprType)
 import GHC.Types.Var (isId, isTyVar)
+import GHC.Types.Var.Set (isEmptyVarSet)
 
 stockUse :: Runtime -> HomeReprs -> [StockMethods] -> MethodSite -> (Use -> Bool) -> Use -> Bool
 stockUse rt homes programs origin tag use =
@@ -90,7 +92,7 @@ stockUse rt homes programs origin tag use =
                                 _ -> False
                         | otherwise ->
                             any (\(m, previous) -> m == getName implementation && sameEvidence previous evidence) active ||
-                            (all (progress evidence) active &&
+                            (all (progress own evidence) active &&
                             let ty = substTyWith variables args
                                 bindings = zip (map getName context) ds
                                 apply (Use n c f ts es) = Use n c f (map ty ts) (map (substitute ty bindings) es)
@@ -102,10 +104,61 @@ stockUse rt homes programs origin tag use =
         (label, target) <- [("/=", "=="), ("show", "showsPrec"), ("showList", "showsPrec")],
         Just selector <- [lookup ("Prelude." ++ label) (standardNames rt)],
         Just dependency <- [lookup ("Prelude." ++ target) (standardNames rt)]]
-    progress evidence@(Instance df _ args ds) (_, previous@(Instance ancestor _ oldArgs oldDs)) =
+    progress own evidence@(Instance df _ args ds) (_, previous@(Instance ancestor _ oldArgs oldDs)) =
         df /= ancestor || descendant evidence previous ||
-        (permutation eqType args oldArgs && permutation sameEvidence ds oldDs)
-    progress _ _ = False
+        (permutation eqType args oldArgs && permutation sameEvidence ds oldDs) ||
+        bounded own evidence
+    progress _ _ _ = False
+    -- Fixed resets and mixed reset/permutation steps stay in an immutable
+    -- vocabulary: initial argument subterms plus ground subterms of ORIGINAL
+    -- stock obligations. Never add a type obtained by replay substitution.
+    -- Thus a -> ThD a cannot enlarge the vocabulary on each recursive visit.
+    fixedTypes = [ty | Stock _ _ _ _ methods <- stocks,
+        StockMethod _ _ _ _ _ obligations _ <- methods, obligation <- obligations,
+        root <- useTypes obligation, ty <- subterms root, isEmptyVarSet (tyCoVarsOfType ty)]
+    initial own = concatMap evidenceTree (useEvidence use ++
+        [Given (getName v) (idType v) | v <- own])
+    vocabulary own = fixedTypes ++ concatMap subterms
+        (useTypes use ++ concatMap evidenceTypes (initial own))
+    bounded own = finite []
+      where
+        inherited = initial own
+        allowed = vocabulary own
+        -- Type arguments alone do not bound dictionary growth. New evidence
+        -- paths may not repeat a fully instantiated node; inherited finite
+        -- evidence subtrees are opaque leaves. With finite raw DFun/selector
+        -- templates and the fixed type vocabulary this bounds evidence trees,
+        -- without fuel or an ever-growing cache. This is only a progress check:
+        -- exact heads, context predicates and ALL field uses still prove below.
+        finite path ev
+            | any (sameEvidence ev) inherited = True
+            | any (sameNode ev) path = False
+            | otherwise = case ev of
+                Instance _ _ ts children -> all (\ty -> any (eqType ty) allowed) ts &&
+                    all (finite (ev : path)) children
+                Super _ _ parent -> finite (ev : path) parent
+                Transport _ parent -> finite (ev : path) parent
+                _ -> False
+    sameNode (Instance a p ts _) (Instance b q us _) =
+        a == b && eqType p q && sameTypes ts us
+    sameNode (Super a p _) (Super b q _) = a == b && eqType p q
+    sameNode (Transport p _) (Transport q _) = eqType p q
+    sameNode _ _ = False
+    useEvidence (Use _ _ _ _ es) = es
+    useTypes (Use _ _ _ ts es) = ts ++ concatMap evidenceTypes es
+    evidenceTypes ev = maybe [] pure (predicateOf ev) ++ case ev of
+        Instance _ _ ts children -> ts ++ concatMap evidenceTypes children
+        Super _ _ parent -> evidenceTypes parent
+        Transport _ parent -> evidenceTypes parent
+        _ -> []
+    evidenceTree ev = ev : case ev of
+        Instance _ _ _ children -> concatMap evidenceTree children
+        Super _ _ parent -> evidenceTree parent
+        Transport _ parent -> evidenceTree parent
+        _ -> []
+    subterms ty = ty : case splitTyConApp_maybe ty of
+        Just (_, ts) -> concatMap subterms ts
+        Nothing -> []
     permutation eq xs ys = length xs == length ys && null (deleteFirstsBy eq xs ys)
     sameTypes xs ys = length xs == length ys && and (zipWith eqType xs ys)
     validSuper sel predicate parent = case predicateOf parent >>= getClassPredTys_maybe of

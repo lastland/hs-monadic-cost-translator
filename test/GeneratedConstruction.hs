@@ -122,6 +122,11 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "StockSimple.hs"
+    accepts "StockReset.hs"
+    accepts "StockResetCompound.hs"
+    rejectsAt "StockResetUnsafe.hs"
+        [(7, forbidden tval), (9, forbidden tval),
+         (15, selected "GHC.Classes.=="), (17, selected "GHC.Internal.Show.show")]
     accepts "StockBox.hs"
     accepts "StockRecursive.hs"
     accepts "StockRenamed.hs"
@@ -146,7 +151,8 @@ checkGeneratedConstructionSpecimens = do
     mixed "StockContext.hs" [TopBinding "concrete"] "StockContext.hs"
         [(11, selected "GHC.Classes.==")]
     rejectsAt "StockGrowth.hs"
-        [(9, selected "GHC.Classes.=="), (11, selected "GHC.Internal.Show.show")]
+        [(9, selected "GHC.Classes.=="), (11, selected "GHC.Internal.Show.show"),
+         (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show")]
     rejectsAt "StockSpecialized.hs"
         [(7, selected "GHC.Classes.=="), (10, selected "GHC.Classes.==")]
     accepts "CallerArithmetic.hs"

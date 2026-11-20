@@ -9,3 +9,10 @@ same :: GrowthD Int -> GrowthD Int -> Bool
 same = (==)
 render :: GrowthD Bool -> String
 render = show
+
+data ClosedGrowthD a = ClosedGrowthD (M.ThD (ClosedGrowthD (M.ThD a))) (M.ThD a) (M.ThD (M.ThD Bool))
+    deriving (Eq, Show)
+closedSame :: ClosedGrowthD Bool -> ClosedGrowthD Bool -> Bool
+closedSame = (==)
+closedRender :: ClosedGrowthD Bool -> String
+closedRender = show
