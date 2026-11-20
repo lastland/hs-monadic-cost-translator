@@ -1115,9 +1115,12 @@ checkReferencePolicyTests = do
             [ReferenceCase "paired" "test/cases/paired/Shadowed.hs"
             ,ReferenceCase "paired" "test/cases/paired/Renamed.hs"]
         record = KnownFailure "paired:test/cases/paired/Shadowed.hs" "strict cost mismatch"
-            ".scratch/reference-failures/issues/01-paired.md"
+            ".scratch/reference-failures/issues/01-source-global-sharing.md"
     expectKnownFailures variants [] []
     expectKnownFailures variants [record] []
+    expectKnownFailures variants
+        [record {failureIssue = ".scratch/reference-failures/issues/missing-target.md"}]
+        ["missing known-failure issue target"]
     expectKnownFailures variants [record, record] ["duplicate known-failure key"]
     expectKnownFailures (variants ++ variants) [] ["duplicate reference case key"]
     expectKnownFailures (drop 1 variants) [record] ["unknown known-failure key"]

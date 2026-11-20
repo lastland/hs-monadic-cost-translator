@@ -6,11 +6,13 @@ module ReferenceSelection
     , ReferenceMode(..), selectReferences, listReference
     ) where
 
-import Control.Monad (unless)
+import Control.Monad (filterM, unless)
 import Data.Char (isSpace)
 import Data.List (nub)
 import Data.Maybe (isJust, isNothing)
 import System.FilePath (takeDirectory, takeExtension)
+import System.Directory (doesFileExist)
+import Paths_cost_translate (getDataFileName)
 
 data ReferenceCase = ReferenceCase
     { caseLabel :: String
@@ -165,6 +167,8 @@ listReference item = classification ++ "\t" ++ caseKey item ++ "\t" ++ reason ++
 
 validateKnownFailures :: [ReferenceCase] -> [KnownFailure] -> IO ()
 validateKnownFailures inventory records = do
+    missing <- filterM (\record -> not <$> (getDataFileName (failureIssue record) >>= doesFileExist))
+        (filter localIssue records)
     let keys = map caseKey inventory
         failures = map failureKey records
         problems =
@@ -173,6 +177,10 @@ validateKnownFailures inventory records = do
             ["unknown known-failure key: " ++ key | key <- failures, key `notElem` keys] ++
             ["known failure requires a reason and local issue: " ++ failureKey record
             | record <- records, all isSpace (failureReason record) ||
-                takeDirectory (failureIssue record) /= ".scratch/reference-failures/issues" ||
-                takeExtension (failureIssue record) /= ".md"]
+                not (localIssue record)] ++
+            ["missing known-failure issue target: " ++ failureIssue record | record <- missing]
     unless (null problems) (fail (unlines problems))
+  where
+    localIssue record =
+        takeDirectory (failureIssue record) == ".scratch/reference-failures/issues" &&
+        takeExtension (failureIssue record) == ".md"

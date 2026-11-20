@@ -9,6 +9,7 @@ license-file:       LICENSE
 -- unsupported; build-depends below enforces this independently of the script.
 tested-with:        GHC ==9.10.3
 data-files:
+    .scratch/reference-failures/issues/*.md
     cost-translate.cabal
     examples/README.md
     examples/ThunkArguments.hs
