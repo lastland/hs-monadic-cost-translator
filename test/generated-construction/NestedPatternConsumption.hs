@@ -31,3 +31,13 @@ forcedAlias t =
     let observed = M.tval t
         !seen = observed
     in Q.property True
+
+withFunction :: M.Th Bool -> Q.Property
+withFunction t =
+    let (seen, f) = (M.tval t, id :: Bool -> Bool)
+    in Q.property seen
+
+withAction :: M.Th Bool -> Q.Property
+withAction t =
+    let (seen, act) = (M.tval t, pure True :: M.MemoristM Bool)
+    in Q.property seen

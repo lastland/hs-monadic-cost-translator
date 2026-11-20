@@ -98,26 +98,28 @@ localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionar
     ips = [parts rhs | group <- groups, rhs <- implicitBodies group]
     local b = concat [(b, ns, refs) : concatMap local nested | (ns, (nested, refs)) <- regions]
       where
-        regions | value b, Just fields <- components b =
-                    [(collectPatBinders CollNoDictBinders p, parts e) | (p, e) <- fields]
-                | otherwise = [(names b, bodyParts b)]
+        regions = case components b of
+            Just fields -> [(collectPatBinders CollNoDictBinders p, parts e) | (p, e) <- fields]
+            Nothing -> [(names b, bodyParts b)]
     locals = concatMap (concatMap local . fst) (roots ++ ips)
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
     valueIds = dataBinders rt aliases typed
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
-    value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
-    value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
-    deps = Map.fromList [(n, refs) | (b, ns, refs) <- locals, value b, n <- ns]
+    -- A matched field has its own binders. Only an indivisible RHS must
+    -- qualify all its binders together.
+    value FunBind{fun_matches = matches} _ | matchGroupArity matches > 0 = False
+    value b ns = not (null ns) && all (`Set.member` valueIds) ns && not (generator b)
+    deps = Map.fromList [(n, refs) | (b, ns, refs) <- locals, value b ns, n <- ns]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
     live = reachable deps (Set.fromList (concatMap snd roots ++ concat [refs | (b, _, refs) <- locals, generator b]))
     consumed ns = not (null ns) && all (`Set.member` live) ns
     ordinary = reachable deps (Set.fromList (concatMap snd ips ++ [ref | (b, ns, refs) <- locals, not (generator b),
-        not (value b && consumed ns), ref <- refs]))
-    values = Set.fromList [n | (b, ns, _) <- locals, value b, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
+        not (value b ns && consumed ns), ref <- refs]))
+    values = Set.fromList [n | (b, ns, _) <- locals, value b ns, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
     independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
     dictionaries = Map.fromList [(getName v, getLocA label) | m <- typed, IPBind v label _ <- collectAst m :: [IPBind GhcTc]]
 
