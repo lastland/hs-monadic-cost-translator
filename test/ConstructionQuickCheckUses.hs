@@ -8,6 +8,7 @@ import ConstructionRuntime (resolveType)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
+import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.DataCon (dataConImplBangs, isBanged)
 import GHC.Core.TyCon (isDataTyCon)
 import GHC.Core.TyCo.Rep (scaledThing)
@@ -15,6 +16,8 @@ import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
+import GHC.Types.Basic (Boxity(Boxed))
+import GHC.Types.FieldLabel (flSelector)
 import GHC.Types.Id.Make (seqId)
 import GHC.Types.Name (isInternalName)
 import GHC.Types.SrcLoc (getBufSpan)
@@ -47,8 +50,7 @@ quickCheckUses result = inModule
         sites = Set.fromList (mapMaybe site expressions)
         -- Passing a local value unchanged into a lazy field does not force it.
         -- The field's expression and every later consumer are still checked.
-        forwarded = Set.fromList [key | L _ e <- expressions, Just (con, args) <- [appliedDataCon e],
-            isDataTyCon (dataConTyCon con), (bang, x) <- zip (dataConImplBangs con) args, not (isBanged bang),
+        forwarded = Set.fromList [key | L _ e <- expressions, x <- lazyFields e,
             Just key@(_, n) <- [variableSite x], isInternalName n, null (fst (splitPiTys (lhsExprType x)))]
         bangs = Set.fromList [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
             result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]]
@@ -73,3 +75,16 @@ quickCheckUses result = inModule
     inputSpan location = case getBufSpan location of
         Strict.Just bytes -> Just bytes
         Strict.Nothing -> Nothing
+
+lazyFields :: HsExpr GhcTc -> [LHsExpr GhcTc]
+lazyFields (ExplicitList _ xs) = xs
+lazyFields (ExplicitTuple _ fields Boxed) = [x | Present _ x <- fields]
+lazyFields RecordCon{rcon_con = L _ (RealDataCon con), rcon_flds = fields}
+    | isDataTyCon (dataConTyCon con) =
+        [hfbRHS field | L _ field <- rec_flds fields,
+            let name = getName (foExt (unLoc (hfbLHS field))),
+            Just bang <- [lookup name (zip (map flSelector (dataConFieldLabels con)) (dataConImplBangs con))],
+            not (isBanged bang)]
+lazyFields e | Just (con, args) <- appliedDataCon e, isDataTyCon (dataConTyCon con) =
+    [x | (bang, x) <- zip (dataConImplBangs con) args, not (isBanged bang)]
+lazyFields _ = []
