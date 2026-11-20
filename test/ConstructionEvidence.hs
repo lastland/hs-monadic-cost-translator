@@ -209,7 +209,7 @@ checkEvidence rt homes demands sites = concatMap check sites
         { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
-         , stockFacts = [facts | StockFacts facts <- sites]
+        , stockFacts = [facts | StockFacts facts <- sites]
         , methodFacts = [retainedMethods [(origin, u) | Site _ origin _ _ u <- sites] facts |
             MethodFacts facts <- sites]
         , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
@@ -226,7 +226,7 @@ checkEvidence rt homes demands sites = concatMap check sites
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
     , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
-     , stockFacts :: [StockMethods], tagFacts :: [(Platform, [TyCon])]
+    , stockFacts :: [StockMethods], tagFacts :: [(Platform, [TyCon])]
     , methodFacts :: [Methods] }
 
 -- A back-edge closes only this instantiated method obligation, not the
@@ -256,7 +256,7 @@ checkUse rules origin utility = check
                 RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
                     | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
-                     | stockUse rt homes (stockFacts rules) origin tagUse use -> Nothing
+                    | stockUse rt homes (stockFacts rules) origin tagUse use -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
                     | callerArithmetic rt use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing

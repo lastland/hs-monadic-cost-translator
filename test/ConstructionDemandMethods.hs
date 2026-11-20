@@ -19,6 +19,8 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (isPredTy, mkTyVarTy, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
 import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (isTvOcc)
 import GHC.Types.Var (isId, isTyVar, varType)
 import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_insts)
@@ -160,6 +162,6 @@ stockMethods rt checked env collect = StockMethods env stocks
     typeApps (L _ (HsAppTy _ f x)) = do (n, xs) <- typeApps f; pure (n, xs ++ [x])
     typeApps (L _ (HsParTy _ t)) = typeApps t
     typeApps _ = Nothing
-    typeVariable (L _ (HsTyVar _ _ n)) = Just (unLoc n)
+    typeVariable (L _ (HsTyVar _ _ n)) | isTvOcc (nameOccName (unLoc n)) = Just (unLoc n)
     typeVariable (L _ (HsParTy _ t)) = typeVariable t
     typeVariable _ = Nothing
