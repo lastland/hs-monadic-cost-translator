@@ -1113,6 +1113,7 @@ sourceSpecimens =
     ,(CaseFile, "valid/ConcatCase.hs", [])
     ,(CaseFile, "valid/CombinatorsCase.hs", [])
     ,(CaseFile, "valid/DemandCase.hs", [])
+    ,(CaseFile, "public-constructor/Case.hs", [])
     ,(ReferenceFile, "valid/Reference.hs", [])
     ,(CaseFile, "custom-main/Case.hs", ["must declare module Case", "name main"])
     ,(CaseFile, "trial-knobs/Case.hs", ["name maxSuccess", "name quickCheckWith"])
