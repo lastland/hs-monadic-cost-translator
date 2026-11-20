@@ -4,7 +4,7 @@ module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 
 import ConstructionActionFields (missingActions, sourceActions)
 import ConstructionAst
-import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitBodies, nestedSource, quickCheckBindings)
+import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitSource, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -70,8 +70,10 @@ checkParsedSyntax parsed =
 checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
 checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> ([pretty at ++ ": no retained action operand" | at <- missingActions actions], []) `plus`
-        foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group ++ sourceActions actions)
-    Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
+        foldr (plus . walk noSrcSpan)
+            (foldr (plus . nested noSrcSpan) (walk noSrcSpan group) (implicitSource locals checked group))
+            (sourceActions actions)
+    Nothing -> ([pretty (checkedModule checked) ++ ": GHC did not retain renamed source"], [])
   where
     qc = quickCheckBindings locals
     actions = checkedActions locals checked
@@ -156,6 +158,7 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
         ([], [ComponentAt (getLocA pat) (getLocA rhs)])
+    nested location (Implicit rhs) = walk location rhs `plus` ([], [ImplicitAt (getLocA rhs)])
     plus (a, b) (c, d) = (a ++ c, b ++ d)
     valueUse here name
         | permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name =

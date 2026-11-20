@@ -7,7 +7,7 @@ import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, ordinaryCoreBindings, quickCheckBindings)
+import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -19,6 +19,7 @@ import GHC hiding (exprType)
 import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon)
 import qualified GHC.Core as C
 import GHC.Core.Class (classSCSelIds, classOpItems)
+import GHC.Core.FamInstEnv (FamInstEnvs)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (isPredTy, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
@@ -76,6 +77,12 @@ methodNames rt modules = do
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
 
+data RetainedEvidence = RetainedEvidence
+    { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
+    , retainedBindings :: [(Id, C.CoreExpr)], methodCandidates :: [[C.CoreExpr]]
+    , patternBindings :: [Maybe [(Id, C.CoreExpr)]], componentBodies :: [Maybe C.CoreExpr]
+    , retainedActions :: [C.CoreExpr] }
+
 collectEvidence :: Runtime -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
 collectEvidence rt locals homes program support checked sourceSites = do
     selected <- methodFamilies rt
@@ -100,6 +107,9 @@ collectEvidence rt locals homes program support checked sourceSites = do
         typedPatterns = atSourceSpan bindingsByPattern
         typedFields = Map.fromListWith (++) [(key, [e]) | (_, L _ b) <- bindingsByPattern,
             Just pairs <- [components b], (p, e) <- pairs, Just key <- [componentKey (getLocA p) (getLocA e)]]
+        typedIP = implicitBindingAt locals checked
+        requestedIPs = [(at, typedIP at) | ImplicitAt at <- sourceSites]
+        missingIPs = [MissingCertificate (pretty at ++ ": no unique retained implicit parameter binding") | (at, Nothing) <- requestedIPs]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
@@ -116,36 +126,43 @@ collectEvidence rt locals homes program support checked sourceSites = do
             Just [e] -> Just <$> dsLExpr e
             _ -> pure Nothing
         actionBodies <- mapM dsLExpr actions
+        -- Match the physical RHS in this module; the typed IPBind owns both
+        -- the dictionary Id and its wrapped expression even in an erased equation.
+        ips <- forM [pair | (_, Just pair) <- requestedIPs] $ \(v, rhs) -> (v,) <$> dsLExpr rhs
         fams <- dsGetFamInstEnvs
-        pure (dictionaries, (fams, raw), expressions, groups, fieldBodies, actionBodies)
+        pure RetainedEvidence
+            { retainedDictionaries = dictionaries, retainedFamilies = fams, retainedBindings = raw ++ ips
+            , methodCandidates = expressions, patternBindings = groups, componentBodies = fieldBodies
+            , retainedActions = actionBodies }
     let retainedSites = case result of
-            Just (dictionaries, (fams, raw), expressions, groups, fieldBodies, actionBodies) ->
-                let rawBindings = allBindings (C.Rec raw : dictionaries)
+            Just retained ->
+                let raw = retainedBindings retained
+                    rawBindings = allBindings (C.Rec raw : retainedDictionaries retained)
                     rawEnv = Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]
                     env = Map.union rawEnv environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawSites = DefaultFacts (homeDefaults checked program fams rawEnv raw) : bindingSites env allGivens raw
+                    rawSites = DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
                             let localEnv = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- allBindings [C.Rec bs]]) env
                             in record at (Right at) (concat [uses qc selected localEnv allGivens rhs | (_, rhs) <- bs])
-                        | (at, group) <- zip patterns groups]
+                        | (at, group) <- zip patterns (patternBindings retained)]
                     fieldSites = concat [case field of
                         Nothing -> [MissingCertificate (pretty rhs ++ ": no retained local pattern component")]
                         Just e -> record rhs (Right rhs) (uses qc selected env allGivens e)
-                        | ((_, rhs), field) <- zip fields fieldBodies]
+                        | ((_, rhs), field) <- zip fields (componentBodies retained)]
                     actionSites = concat [record at (Right at) (uses qc selected env allGivens body) |
-                        (e, body) <- zip actions actionBodies, let at = getLocA e]
+                        (e, body) <- zip actions (retainedActions retained), let at = getLocA e]
                 in rawSites ++ patternSites ++ fieldSites ++ actionSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates
-                    | ((location, name), candidates) <- zip sites expressions]
+                    | ((location, name), candidates) <- zip sites (methodCandidates retained)]
             Nothing -> [MissingCertificate "cannot desugar the retained source method certificates"]
-    pure (rootSites ++ retainedSites)
+    pure (rootSites ++ missingIPs ++ retainedSites)
   where
     qc = quickCheckBindings locals
     componentKey a b = case (getBufSpan a, getBufSpan b) of

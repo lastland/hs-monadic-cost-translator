@@ -1,6 +1,6 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
 module ConstructionAst
-    ( collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
+    ( collectAst, children, checkedModule, reachable, firstOrderCall, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
     , appliedDataCon, strictConstructorOperands, updateAlternatives, call, bindingName, strictNullaryRhs
     , plainPattern, constructorPattern, oneRhs, equations
     ) where
@@ -8,7 +8,9 @@ module ConstructionAst
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, maybeToList)
+import qualified Data.Set as Set
 import GHC
+import GHC.Builtin.Names (dollarName)
 import qualified GHC.Core as C
 import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.DataCon (dataConImplBangs, isBanged)
@@ -33,6 +35,9 @@ children walk value
     | isJust (cast value :: Maybe TcEvBinds) = []
     | otherwise = gmapQ walk value
 
+checkedModule :: TypecheckedModule -> Module
+checkedModule = ms_mod . pm_mod_summary . tm_parsed_module
+
 -- Index one module once. Keep every candidate in source order: GHC can
 -- retain several typed expressions at one token, with different wrappers.
 atSourceSpan :: [(SrcSpan, a)] -> SrcSpan -> [a]
@@ -40,6 +45,13 @@ atSourceSpan entries = \at -> [value | (location, value) <- Map.findWithDefault 
   where
     key at = (srcSpanToRealSrcSpan at, getBufSpan at)
     index = Map.fromListWith (++) [(key at, [entry]) | entry@(at, _) <- reverse entries]
+
+reachable :: Map.Map Name [Name] -> Set.Set Name -> Set.Set Name
+reachable edges initial = go initial (Set.toList initial)
+  where
+    go seen [] = seen
+    go seen (n:rest) = let next = Set.fromList (Map.findWithDefault [] n edges) `Set.difference` seen
+                       in go (Set.union seen next) (Set.toList next ++ rest)
 
 -- Visit each binding immediately before the let bindings in its RHS.
 allBindings :: C.CoreProgram -> [(Id, C.CoreExpr)]
@@ -73,6 +85,16 @@ variable :: LHsExpr GhcRn -> Maybe Name
 variable expression = case spine expression of
     (L _ (HsVar _ name), []) -> Just (unLoc name)
     _ -> Nothing
+
+-- The wired-in ($) supplies an argument to its left operand. A different
+-- infix function receives both operands itself.
+firstOrderCall :: LHsExpr GhcRn -> (LHsExpr GhcRn, [LHsExpr GhcRn])
+firstOrderCall e = case spine e of
+    (L _ (OpApp _ f op x), rest) | variable op == Just dollarName -> apply f (x : rest)
+                                 | otherwise -> (op, f : x : rest)
+    (op, f : x : rest) | variable op == Just dollarName -> apply f (x : rest)
+    callSite -> callSite
+  where apply f xs = let (h, args) = firstOrderCall f in (h, args ++ xs)
 
 -- A type application or compiler wrapper can carry the instantiation. Keep
 -- the source variable's site; never borrow the type of a surrounding term call.
