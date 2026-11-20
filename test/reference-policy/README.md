@@ -16,14 +16,14 @@ without evaluating program callbacks or executing Haskell. Labels must resolve
 to unique, nonempty static strings. Sample callbacks remain opaque; they cannot
 select the catalog or its labels. Unknown or unbounded catalog builders fail.
 
-Successful costed callbacks must reach an actual imported Generated term through
-their local definitions and table arguments. Imports, type annotations,
-constructors, unrelated snapshots, and failure probes alone do not satisfy that
-rule. Generated datatype conversions also exercise generated instances, so those
-callbacks may instead use the runtime's `reprM` with a generated datatype type.
-Generated-demand probes may reach generated generator/shrinker functions. Every
-catalog must still contain a successful probe that reaches a generated function;
-failure-only, source-only and constructor-only catalogs fail.
+Successful costed callbacks must reach an exported `Generated` function, an
+exported `Generated` constructor (applied as a value or record construction), or
+the runtime's `reprM` with an exported `Generated` datatype type through their
+local definitions and table arguments. Generated-demand probes may reach
+generated generator/shrinker functions. Imports, type annotations, pattern-only
+constructors, private or non-`Generated` constructors, unrelated snapshots, and
+failure probes alone do not satisfy that rule; failure-only, snapshot-only, and
+source-only catalogs fail.
 
 The reachability check does not prove that arbitrary Haskell uses its arguments
 or takes a particular branch. The isolated compiler and shared observer remain

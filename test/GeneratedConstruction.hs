@@ -123,6 +123,16 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
+    accepts "ConcreteFoldableClosure.hs"
+    accepts "ConcreteFoldableHomeInstance.hs"
+    accepts "ConcreteFoldableCollision.hs"
+    checksFoldableCollisionDead
+    checksFoldableSelf
+    rejectsAt "ConcreteFoldableDeadHelper.hs"
+        [(9, selected "ConcreteFoldableDeadHelper.run: unknown executable method/default dependency")]
+    rejectsAt "ConcreteFoldableOverride.hs" [(11, forbidden tval)]
+    rejectsIn "ConcreteFoldableImported.hs" "ConcreteFoldableHidden.hs"
+        [(10, forbidden tval), (14, forbidden tval)]
     rejectsAt "CallerArithmeticUnsafe.hs"
         [(7, forbidden tval), (10, selected "GHC.Classes.==: unknown concrete scalar instance"),
          (13, selected "GHC.Classes.<: unknown concrete scalar instance"),
@@ -556,10 +566,10 @@ checkGeneratedConstructionSpecimens = do
         diagnostics <- constructionReports output
         writeFile (directory </> "construction-reports.txt") (unlines diagnostics)
         -- These are actual generated dictionaries, not a model of the emitter.
-        -- Neither observers nor standalone shrinkers are computations. Unrelated
-        -- selected-method blockers are still inspected in this complete output.
-        unless (not (null diagnostics) && any (isInfixOf "Generated.foldrT") diagnostics) $
-            fail ("anf-demand must retain unrelated construction rejections:\n" ++ unlines diagnostics)
+        -- Concrete inherited Foldable defaults close against their actual
+        -- selected fields. Inspect the complete graph, including support bodies.
+        unless (null diagnostics) $
+            fail ("anf-demand must satisfy construction:\n" ++ unlines diagnostics)
         when (any (isInfixOf "liftShrink") diagnostics) $
             fail ("anf-demand shrinker helpers must have support roles:\n" ++ unlines diagnostics)
         let pureMethod report = any (`isInfixOf` report)
@@ -655,7 +665,7 @@ checkGeneratedConstructionSpecimens = do
         parseHaskellModule shiftedOutput >>= checkBox shiftedOutput . definitionSpans
     checkBox output definitions = do
         typechecks output
-        reports <- rejection output >>= siteReports output
+        reports <- constructionReports output >>= siteReports output . unlines
         let check = checkDefinition output definitions reports
         mapM_ check
             [(InstanceMethod "Repr" ["Box"] "abstract", []),
@@ -668,6 +678,23 @@ checkGeneratedConstructionSpecimens = do
               InstanceMethod "DemandArb" ["BoxT"] "arbDemandFrom", TopBinding "shrinkBoxDemand",
               InstanceMethod "GeneratedDemand" ["BoxT"] "shrinkDemandCompatible"]
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
+    checksFoldableSelf = do
+        output <- specimen "ConcreteFoldableOpen.hs"
+        typechecks output
+        diagnostics <- rejection output
+        requireAt diagnostics output
+            [(8, selected "ConcreteFoldableClosure.foldrT: unknown executable method/default dependency"),
+             (16, selected "ConcreteFoldableOpen.own: unknown executable method/default dependency"),
+             (21, selected "ConcreteFoldableClosure.inherited: unknown executable method/default dependency")]
+        reports <- siteReports output diagnostics
+        when (any ((== 15) . srcSpanStartLine . fst) reports) $
+            fail ("a default's exact self must be conditional, unlike its unrelated given:\n" ++ diagnostics)
+    checksFoldableCollisionDead = do
+        output <- specimen "ConcreteFoldableCollisionDead.hs"
+        typechecks output
+        diagnostics <- rejection output
+        requireAt diagnostics "SharedFoldable.hs"
+            [(24, selected "ConcreteFoldableCollisionDead.stepD: unknown executable method/default dependency")]
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
     rejectsIn name = mixed name []
