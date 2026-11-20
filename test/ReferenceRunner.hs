@@ -435,5 +435,16 @@ checkReferenceHarness environment = do
     check root shouldPass label actual expected = do
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (root </> "mutation.log") (label ++ "\n" ++ out ++ err)
-        unless ((status == ExitSuccess) == shouldPass) $
+        checkProcessCrash status (out ++ err)
+        unless (if shouldPass then status == ExitSuccess
+                else status == ExitFailure 1 && rejection label `isInfixOf` (out ++ err)) $
             fail ("reference harness did not detect " ++ label ++ "\n" ++ out ++ err)
+    rejection label = case label of
+        "PrematureForce.hs" -> "unused-bottom: unexpected computation failure"
+        "EmptyCase.hs" -> "case has no costed reference comparison"
+        "SnapshotsOnly.hs" -> "case has no costed reference comparison"
+        "FailuresOnly.hs" -> "case has no costed reference comparison"
+        "BrokenProjection.hs" -> "broken shared projector: unexpected computation failure"
+        "malformed-response" -> "observer timed out or returned an invalid response"
+        "wrong-executable" -> "usage: compare GENERATED_OBSERVER REFERENCE_OBSERVER"
+        _ -> "boundary sample:"
