@@ -102,6 +102,7 @@ checkGeneratedConstructionSpecimens = do
     checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
     checkIntegralContext "InferredOwner" ("inferred-owner-residual" </> "Example.hs")
+    checkIntegralContext "UnrelatedShadow" ("inferred-owner-residual" </> "UnrelatedShadow.hs")
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
