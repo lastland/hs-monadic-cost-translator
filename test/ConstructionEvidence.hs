@@ -166,8 +166,8 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
                         (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
                     rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
-                         StockFacts stockFacts : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
-                         DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
+                        StockFacts stockFacts : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
+                        DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
@@ -206,8 +206,8 @@ checkEvidence rt homes demands sites = concatMap check sites
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
         , stockFacts = concat [facts | StockFacts facts <- sites]
-        , methodFacts = map (retainedMethods [(origin, u) | Site _ origin _ _ u <- sites])
-            [facts | MethodFacts facts <- sites]
+        , methodFacts = [retainedMethods [(origin, u) | Site _ origin _ _ u <- sites] facts |
+            MethodFacts facts <- sites]
         , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
     observed = Map.fromListWith (++) [(field, [u]) | Site _ _ (Just field) _ u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
@@ -242,9 +242,9 @@ checkUse rules origin utility = check
                 | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
                 | isDataDefault rules use = Nothing
                 | tagUse use = Nothing
-                 | family == UnknownMethod && conditionalMethod rt (methodFacts rules) origin use = Nothing
-                 | family == UnknownMethod && concreteMethod [] use = Nothing
-                 | family == UnknownMethod = Just "unknown executable method/default dependency"
+                | family == UnknownMethod && conditionalMethod rt (methodFacts rules) origin use = Nothing
+                | family == UnknownMethod && concreteMethod [] use = Nothing
+                | family == UnknownMethod = Just "unknown executable method/default dependency"
                 | otherwise = case (types, dictionaries) of
             (ty : _, evidence : _) -> case family of
                 Computation | memorist ty evidence -> Nothing

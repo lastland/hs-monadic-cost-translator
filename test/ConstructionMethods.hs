@@ -20,6 +20,7 @@ import GHC.Core.Type (isPredTy, splitAppTy_maybe, splitForAllTyCoVar_maybe, spli
 import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_tcs)
+import GHC.Types.Basic (DefMethSpec(VanillaDM))
 import GHC.Types.Var (isId, isTyVar)
 import GHC.Types.SrcLoc (isRealSubspanOf)
 
@@ -37,10 +38,10 @@ homeMethods rt checked env raw collect = Methods env bodies defaults
         binding@(L _ (FunBind _ n _)) <- toList methods]
     defaults = [Default dm (getName cls) (Field dm methodVars [] self) at (collect rhs) |
         tc <- tcg_tcs (fst (tm_internals_ checked)), Just cls <- [tyConClass_maybe tc],
-        (selector, Just (dm, _)) <- classOpItems cls, computation rt (idType selector),
+        (selector, Just (dm, VanillaDM)) <- classOpItems cls, computation rt (idType selector),
         Just at <- [lookup (getName selector) equations], Just rhs <- [Map.lookup dm env],
         let binders = fst (C.collectBinders rhs),
-        [self] <- [filter (\v -> isId v && isPredTy (idType v)) binders],
+        self : _ <- [filter (\v -> isId v && isPredTy (idType v)) binders],
         Just (actual, _) <- [getClassPredTys_maybe (idType self)], actual == cls,
         let methodVars = drop (length (classTyVars cls)) (filter isTyVar binders)]
 
@@ -124,7 +125,7 @@ selectedMethod rt modules (Use selected expected family types [evidence@(Instanc
         instantiated <- instantiateTypes (filter isTyVar methodBinders) actualTypes obligations
         pure (getName method, instantiated)
     else do
-        (defaultName, _) <- dm
+        (defaultName, VanillaDM) <- dm
         -- A direct default use must really be the selected inherited field,
         -- not a sibling or an explicit override that happens to call it.
         (C.Var actual, callArgs) <- pure (C.collectArgs (stripEvidence (snd (C.collectBinders rhs))))
@@ -133,8 +134,11 @@ selectedMethod rt modules (Use selected expected family types [evidence@(Instanc
             actualEvidence = [trace environment givens Set.empty e | e <- callArgs,
                 not (C.isTyCoArg e), isPredTy (exprType e)]
         templateEvidence <- instantiateTypes (filter isTyVar methodBinders) actualTypes
-            [Use selected expected family [] actualEvidence]
-        guard (case templateEvidence of [Use _ _ _ _ [ev]] -> sameEvidence ev evidence; _ -> False)
+            [Use selected expected family [t | C.Type t <- callArgs] actualEvidence]
+        guard (case templateEvidence of
+            [Use _ _ _ ts [ev]] -> length ts == length types && and (zipWith eqType ts types) &&
+                sameEvidence ev evidence
+            _ -> False)
         Default _ _ scope _ obligations <- unique [d | Methods _ _ ds <- modules,
             d@(Default name owner _ _ _) <- ds, name == defaultName, owner == expected]
         apply <- instantiateUse scope methodTypes [] evidence
