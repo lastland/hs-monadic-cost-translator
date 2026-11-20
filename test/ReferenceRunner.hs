@@ -9,6 +9,7 @@ module ReferenceRunner
     ) where
 
 import Control.Monad (forM, forM_, unless, when, void)
+import AcceptedOptionsChecks (checkAcceptedOptions)
 import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
@@ -207,6 +208,7 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
 
 checkSourceScopeLifecycle :: ReferenceEnvironment -> IO ()
 checkSourceScopeLifecycle environment = do
+    checkAcceptedOptions
     checkPackageEnvironmentLifecycle environment
     artifacts <- runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"])
     forM_ artifacts $ \artifact -> do

@@ -179,6 +179,7 @@ test-suite cost-translate-test
     other-modules:    ConstructionEvidenceTypes
                      ConstructionConstraintAliases
                      ConditionChecks
+                     AcceptedOptionsChecks
                      GeneratedSyntax
                      PaperScalarChecks
                      FixturePolicy
