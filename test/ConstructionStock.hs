@@ -71,11 +71,14 @@ stockUse rt homes programs origin tag use =
             (Just (cls, args), Just (actual, selected')) -> cls == getName actual && sameTypes args selected'
             _ -> False
     ordinary _ = False
-    runtime active own method (Instance df predicate args [child])
-        | Just p <- predicateOf child,
-          Just (childMethod, childType) <- runtimeDemandMethod rt method df predicate args [p],
+    runtime active own method (Instance df predicate args children)
+        | Just predicates <- mapM predicateOf children,
+          Just obligations <- runtimeDemandMethod rt method df predicate args predicates,
+          length obligations == length children,
           Just (cls, _) <- getClassPredTys_maybe predicate =
-            prove active own (Use childMethod (getName cls) ScalarMethod [childType] [child])
+            and (zipWith (\(childMethod, childType) child ->
+                prove active own (Use childMethod (getName cls) ScalarMethod [childType] [child]))
+                obligations children)
     runtime _ _ _ _ = False
     selected active own method evidence@(Instance df predicate args ds) =
         case [s | s@(Stock actual _ _ _ _) <- stocks, actual == df] of
