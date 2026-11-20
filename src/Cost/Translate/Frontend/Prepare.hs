@@ -1,6 +1,7 @@
 module Cost.Translate.Frontend.Prepare (generate) where
 
 import Control.Monad.IO.Class (liftIO)
+import Cost.AcceptedSource (AcceptedSource, acceptedSummary)
 import Cost.Translate.Callable (expressions)
 import Cost.Translate.Datatypes (checkConversionExports)
 import Cost.Translate.Diagnostic (Diagnostic (..))
@@ -26,7 +27,10 @@ import GHC.Types.Var (isId, varName)
 import GHC.Unit.Module.ModGuts (mg_binds)
 import System.FilePath (takeDirectory)
 
-generate :: FilePath -> String -> IO (Either Diagnostic String, String)
+generate ::
+    FilePath ->
+    String ->
+    IO (Either Diagnostic (String, AcceptedSource), String)
 generate file targetModule = runGhc (Just libdir) $ do
     flags <- getSessionDynFlags
     _ <-
@@ -40,8 +44,15 @@ generate file targetModule = runGhc (Just libdir) $ do
     setTargets [target]
     graph <- depanal [] False
     case mgModSummaries graph of
-        [summary] -> generateChecked file targetModule flags summary
-        _ -> pure (sourceFailure file ": expected one source module")
+        [summary] -> do
+            (accepted, receipt) <- liftIO (acceptedSummary summary)
+            (result, logs) <- generateChecked file targetModule flags accepted
+            pure (fmap (,receipt) result, logs)
+        _ ->
+            pure
+                ( Left (UnsupportedSource (file ++ ": expected one module"))
+                , ""
+                )
 
 generateChecked ::
     FilePath ->

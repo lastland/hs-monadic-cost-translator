@@ -1,8 +1,11 @@
-module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
+module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (forM, unless, void, when)
 import Cost.Translate (translateFile)
+import Cost.Publication (Publication, verifyOrigin)
+import Control.Monad.IO.Class (liftIO)
+import ConstructionOrigin (originReferences)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAllocation (checkPhantomAllocation)
@@ -59,8 +62,16 @@ checkGeneratedConstruction output = do
     problems <- constructionReports output
     unless (null problems) (fail (unlines problems))
 
+checkGeneratedConstructionWithOrigin :: Publication -> FilePath -> IO ()
+checkGeneratedConstructionWithOrigin publication output = do
+    problems <- constructionReportsWithOrigin (Just publication) output
+    unless (null problems) (fail (unlines problems))
+
 constructionReports :: FilePath -> IO [String]
-constructionReports output =
+constructionReports = constructionReportsWithOrigin Nothing
+
+constructionReportsWithOrigin :: Maybe Publication -> FilePath -> IO [String]
+constructionReportsWithOrigin publication output =
     runGhc (Just libdir) $ do
         configureArtifact output
         rt <- runtime
@@ -71,6 +82,7 @@ constructionReports output =
             homes = map ms_mod summaries
             optionProblems = concatMap checkCompilerOptions summaries
         unless (null optionProblems) (fail (unlines optionProblems))
+        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output summaries) publication
         parsedModules <- mapM parseModule summaries
         let parsedProblems = concatMap checkParsedSyntax parsedModules
         unless (null parsedProblems) (fail (unlines parsedProblems))
@@ -94,10 +106,12 @@ constructionReports output =
             locals = localBindings rt qc roles checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt utilities locals uses homes methods views checked
-            evidence <- collectEvidence rt utilities locals representations program (coreViewNames views checked) checked sites
+            let original = checkedHome checked `elem` origins
+                (syntaxProblems, sites) = checkSyntax original rt utilities locals uses homes methods views checked
+            evidence <- collectEvidence original rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
-        pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
+        pure (originReferences origins checkedModules ++ concatMap fst reports ++ ordinaryOperandTransfers qcResult qc
+                (filter ((`notElem` origins) . checkedHome) checkedModules) ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules)
                 (scalarComparisonFacts output checkedModules) (concatMap snd reports))
 

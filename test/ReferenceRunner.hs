@@ -8,10 +8,10 @@ module ReferenceRunner
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Cost.Translate (translateFile)
+import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
-import GeneratedConstruction (checkGeneratedConstruction)
+import GeneratedConstruction (checkGeneratedConstructionWithOrigin)
 import GeneratedFunctions (checkTopLevelFunctions)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
@@ -57,12 +57,13 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
         reference = root </> "reference"
     forM_ [generated, reference] $ \sandbox -> do
         createDirectoryIfMissing True sandbox
-        stageSource fixture sandbox
+        when (sandbox == reference) (stageSource fixture sandbox)
         copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
-    result <- translateFile (generated </> "Example.hs") (generated </> "Generated.hs")
-    either (fail . ((label ++ ": translation failed: ") ++)) pure result
+    source <- getDataFileName fixture
+    result <- stageAndTranslate source (generated </> "Generated.hs")
+    publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
     checkTopLevelFunctions (generated </> "Example.hs") (generated </> "Generated.hs")
-    checkGeneratedConstruction (generated </> "Generated.hs")
+    checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
     copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
     actual <- buildObserver environment generated
     expected <- buildObserver environment reference
