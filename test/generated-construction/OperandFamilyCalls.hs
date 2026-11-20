@@ -25,3 +25,9 @@ prop_strip = Q.property (strip [True] (Q.property True))
 
 prop_routed :: Q.Property
 prop_routed = Q.property (routed (0 :: Int) draw)
+
+prop_payload :: Q.Property
+prop_payload = payloadLaw True (Payload (Q.property True))
+
+prop_recursive :: Q.Property
+prop_recursive = recursiveLaw True (Payload (Q.property True) :: Payload Bool)

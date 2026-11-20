@@ -357,9 +357,11 @@ checkGeneratedConstructionSpecimens = do
         reports <- rejection output
         requireAt reports output [(13, qcValue "OperandFamilies.h"), (14, qcValue "OperandFamilies.law"),
             (15, qcValue "OperandFamilies.forceOpen"), (23, qcValue "OperandFamilies.generic"),
-            (24, qcValue "OperandFamilies.strip"), (27, qcValue "OperandFamilies.routed")]
+            (24, qcValue "OperandFamilies.strip"), (27, qcValue "OperandFamilies.routed"),
+            (30, payloadForce "payloadLaw"), (33, payloadForce "recursiveLaw")]
         requireAt reports upstream [(24, forbidden tval)]
         cleanDefinitions reports output (map TopBinding ["draw", "prop_scalar", "local"])
+      where payloadForce wrapper = qcValue ("OperandFamilies." ++ wrapper) ++ " (operand in ordinary callee OperandFamilies.forcePayload at this instantiation)"
     checksNestedInstanceRoles = do
         output <- specimen "NestedInstanceRoles.hs"
         typechecks output

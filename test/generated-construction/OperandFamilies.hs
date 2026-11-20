@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables, TypeApplications, TypeFamilies, UndecidableInstances #-}
 module OperandFamilies where
 
 import qualified Memorist.Memorist as M
@@ -52,3 +52,16 @@ routed _ x = seq x True
 -- This cast depends on a local assumption; it cannot certify upstream.
 conditional :: (Open Bool ~ Q.Property) => Open Bool -> Q.Property
 conditional x = x
+
+data Payload a = Payload (Strip a)
+
+forcePayload :: Payload a -> Bool
+forcePayload (Payload x) = seq x True
+
+-- The wrapper's signature and calls mention Payload, not its family field.
+payloadLaw :: a -> Payload [a] -> Q.Property
+payloadLaw _ p = Q.property (forcePayload p)
+
+recursiveLaw :: forall a. Bool -> Payload a -> Q.Property
+recursiveLaw False p = Q.property (forcePayload p)
+recursiveLaw True (Payload x) = recursiveLaw @[a] False (Payload x)
