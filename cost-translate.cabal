@@ -174,7 +174,8 @@ test-suite cost-translate-test
                      ConstructionViews
                      GeneratedFunctions
                      ReferencePolicy
-                     ReferenceRunner
+                      ReferenceRunner
+                      ProducerSharing
                      RuntimeAllocator
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate
