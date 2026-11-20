@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BangPatterns, FlexibleContexts #-}
 -- shadowForward and shadowPlus test shadowing; givenAdd tests a closed
 -- constraint at an expression whose caller supplies the standard dictionary.
 {-# OPTIONS_GHC -Wno-name-shadowing -Wno-simplifiable-class-constraints #-}
@@ -16,6 +16,24 @@ take n xs =
 
 work :: Int -> Int
 work z = z + z
+
+afterAnd, afterOr, nestedAnd :: Bool -> Int -> Int
+afterAnd flag x = if flag && x > 0 then x + 1 else 0
+afterOr flag x = if flag || x > 0 then 0 else x - 1
+nestedAnd flag x = if flag && (x > 0 && x < 8) then x + 2 else 0
+
+bangNext :: Int -> Int
+bangNext x = let !y = work x in y + 1
+
+literal :: Int -> Int
+literal x@0 = x + 1
+literal y@1 = y + 2
+literal _ = 0
+
+inspect :: Int -> Int
+inspect x = case x of
+    0 -> x + 1
+    _ -> x - 1
 
 boxNext :: Int -> Maybe Int
 boxNext x = if x > 0 then Just (work (x + 1)) else Nothing

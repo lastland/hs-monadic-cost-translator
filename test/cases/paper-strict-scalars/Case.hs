@@ -197,9 +197,35 @@ evidenceProbes =
         M.lazy (bad "boxed summand") >>= givenAddM >>= fieldValue
     ]
 
+shortCircuitProbes :: [Probe]
+shortCircuitProbes = concat
+    [ [ scalar (label ++ "/skipped") $ \_ ->
+            call2 translated (priced 1 (not entered)) (bad "skipped RHS")
+      , failure (label ++ "/entered-bad") $ \_ ->
+            call2 translated (priced 1 entered) (bad "demanded RHS")
+      , scalarSource (label ++ "/entered") (source entered . number) $ \s ->
+            call2 translated (priced 1 entered) (priced 3 (number s))
+      ]
+    | (label, entered, source, translated) <-
+        [ ("and", True, Source.afterAnd, afterAndM), ("or", False, Source.afterOr, afterOrM)
+        , ("nested-and", True, Source.nestedAnd, nestedAndM) ]
+    ]
+
+patternProbes :: [Probe]
+patternProbes = concat
+    [ [ scalarSource (label ++ "/" ++ show input) (const (source input)) $ \s ->
+            M.lazy (priced (repeats s) input) >>= translated
+      | input <- [0, 1, -3] ] ++
+      [ failure (label ++ "/failed-scrutinee") $ \_ -> M.lazy (bad "scrutinee") >>= translated ]
+    | (label, source, translated) <- [("literal", Source.literal, literalM), ("case", Source.inspect, inspectM)]
+    ]
+
 probes :: [Probe]
 probes =
     [ scalarSource "work/ticked-input" (Source.work . number) $ \s ->
         M.lazy (priced (repeats s) (number s)) >>= workM
-    ] ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
+    , scalarSource "bang/work-then-add" (Source.bangNext . number) $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= bangNextM
+    , failure "bang/failed-work" $ \_ -> M.lazy (bad "work input") >>= bangNextM
+    ] ++ patternProbes ++ shortCircuitProbes ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
     guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes

@@ -31,6 +31,29 @@ checkPaperScalarOutput binding = do
             Left reason -> Left (name ++ ": " ++ reason)
             Right () -> Right ()
     unless (null (lefts results)) (fail (unlines (lefts results)))
+    counts <- forM ["afterAndM", "afterOrM", "nestedAndM", "bangNextM", "literalM", "inspectM"] $ \name -> do
+        equation <- binding name
+        pure $ case (m_pats equation, oneRhs equation) of
+            ([_, p], Just body) | Just x <- patternVariable p ->
+                -- Count just the RHS scalar, regardless of the control-flow
+                -- encoding. Skipped-path demand is checked by the cost oracle.
+                let sites = [() | HsApp _ op arg <- collectAst body,
+                                 maybe False (named "M.force") (expressionVariable op),
+                                 expressionVariable arg == Just x]
+                in countError name "one RHS input force" (== 1) sites
+            ([_], Just body) ->
+                -- Count forces through aliases as well as the original thunk.
+                let sites = [() | HsVar _ op <- collectAst body :: [HsExpr GhcPs],
+                                 named "M.force" (unLoc op)]
+                in if name == "bangNextM"
+                   then countError name "at most one force for the bang" (<= 1) sites
+                   else countError name "one scrutinee force across all rows" (== 1) sites
+            _ -> Left (name ++ ": unexpected equation")
+    unless (null (lefts counts)) (fail (unlines (lefts counts)))
+  where
+    countError name wanted ok sites
+        | ok (length sites) = Right ()
+        | otherwise = Left (name ++ ": expected " ++ wanted ++ ", got " ++ show (length sites))
 
 shapes :: [(String, [String], Shape)]
 shapes =

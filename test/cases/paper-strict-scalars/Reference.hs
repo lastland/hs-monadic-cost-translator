@@ -24,6 +24,26 @@ workM z = M.tick >> (double <$> M.force z)
 double :: Int -> Int
 double = (2 *)
 
+-- The flag selects whether to pay for x. Once entered, the path uses
+-- that value for both its predicate(s) and result.
+afterAndM, afterOrM, nestedAndM :: M.Th Bool -> M.Th Int -> M.MemoristM Int
+afterAndM = whenFlag True (\n -> if n > 0 then n + 1 else 0)
+afterOrM = whenFlag False (\n -> if n <= 0 then n - 1 else 0)
+nestedAndM = whenFlag True (\n -> if n `elem` [1..7] then n + 2 else 0)
+
+whenFlag :: Bool -> (Int -> Int) -> M.Th Bool -> M.Th Int -> M.MemoristM Int
+whenFlag entered result flag x = do
+    M.tick
+    actual <- M.force flag
+    if actual == entered then result <$> M.force x else pure 0
+
+bangNextM :: M.Th Int -> M.MemoristM Int
+bangNextM x = M.tick >> M.tick >> ((\n -> double n + 1) <$> M.force x)
+
+literalM, inspectM :: M.Th Int -> M.MemoristM Int
+literalM x = M.tick >> ((\n -> maybe 0 id (lookup n [(0,1), (1,3)])) <$> M.force x)
+inspectM x = M.tick >> ((\n -> if n == 0 then 1 else n - 1) <$> M.force x)
+
 -- The field's single tick is the source call to work. With input 3 the
 -- projection is Just 8, costing 1 tick for the tag and 2 for the full value.
 boxNextM, boxPrefixM :: M.Th Int -> M.MemoristM (M.MaybeT Int)
