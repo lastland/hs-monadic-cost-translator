@@ -1,6 +1,5 @@
 module Cost.Translate.Sharing.Residual
-    ( AllocationScope (..)
-    , Specialization (..)
+    ( Specialization (..)
     , planSpecializations
     ) where
 
@@ -16,6 +15,7 @@ import Cost.Translate.Sharing.Specialization
     , scopedGivenClasses
     , specializedSharing
     )
+import Cost.Translate.Typed (AllocationScope (..))
 import Data.Either (fromRight)
 import Data.List (nubBy)
 import Data.Map.Strict qualified as Map
@@ -50,12 +50,6 @@ data Specialization = Specialization
     { allocationType :: Type
     , useTypes :: [Type]
     , inferKeyFromUses :: Bool
-    }
-
-data AllocationScope = AllocationScope
-    { ownerVariables :: [TyVar]
-    , checkedPredicates :: [Type]
-    , namedContext :: Maybe [Type]
     }
 
 planSpecializations ::
@@ -103,7 +97,7 @@ residualSharing datatypes evidence ty uses = do
         inferKey [[key]]
             | [formal] <- constrained
             , Just owner <- getTyVar_maybe key =
-                isNothing (namedContext evidence)
+                isNothing (nameableDeclaredGivens evidence)
                     && isEmptyVarSet (tyCoVarsOfType ty)
                     && owner `elem` ownerVariables evidence
                     && visibleIn formal result
@@ -172,8 +166,8 @@ predicateAvailable evidence infer p = case splitTyConApp_maybe p of
             supplied (getName constructor) actual
     _ -> False
     where
-        given = any (eqType p) (checkedPredicates evidence)
-        context = namedContext evidence
+        given = any (eqType p) (checkedGivens evidence)
+        context = nameableDeclaredGivens evidence
         supplied cls ty
             | cls == numClassName = True
             | cls `elem` scopedGivenClasses = infer || isJust context

@@ -5,6 +5,7 @@ module Cost.Translate.Typed
     , expressionTypeAt
     , FunctionType (..)
     , functionTypes
+    , AllocationScope (..)
     , functionGivens
     , scopedVariables
     , hasFreeVariables
@@ -203,21 +204,29 @@ functionTypes checked =
                 (mg_res_ty matches)
                 (mg_arg_tys matches)
 
-functionGivens :: FunctionType -> ([Type], Maybe [Type])
-functionGivens info = case tcMatchTy body (functionBodyType info) of
+data AllocationScope = AllocationScope
+    { ownerVariables :: [TyVar]
+    , checkedGivens :: [Type]
+    , nameableDeclaredGivens :: Maybe [Type]
+    }
+
+functionGivens :: (Type -> Type) -> FunctionType -> AllocationScope
+functionGivens adjust info = case tcMatchTy body (functionBodyType info) of
     Just substitution ->
         let instantiate = substTy substitution
-            givens = map instantiate predicates
-            owned = functionVariables info
+            declared = map (adjust . instantiate) predicates
             actual = map (getTyVar_maybe . instantiate . mkTyVarTy) formal
             named =
                 actual == map Just owned
                     && map getOccString owned == map getOccString formal
-         in ( givens ++ checkedPredicates (functionEvidence info)
-            , if named then Just givens else Nothing
-            )
-    Nothing -> ([], Nothing)
+            checked = map adjust (checkedPredicates (functionEvidence info))
+         in AllocationScope
+                owned
+                (declared ++ checked)
+                (if named then Just declared else Nothing)
+    Nothing -> AllocationScope owned [] Nothing
     where
+        owned = functionVariables info
         (formal, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
 
 wrapperEvidence :: HsWrapper -> ([Id], [EvBind])

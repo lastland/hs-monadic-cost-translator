@@ -16,11 +16,11 @@ import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing
-    ( AllocationScope (..)
-    , Specialization
+    ( Specialization
     , constrainedVariables
     , planSpecializations
     )
+import Cost.Translate.Typed (AllocationScope (..))
 import Cost.Translate.Typed qualified as Typed
 import Data.Data (Data, cast, gmapQ)
 import Data.Map.Strict qualified as Map
@@ -147,10 +147,10 @@ specializedLocals datatypes types hints checkedScopes topNames group =
         signatures = Set.union topNames (Set.fromList signed)
         signed =
             [unLoc n | TypeSig _ ns _ <- collect group :: [Sig GhcRn], n <- ns]
-        named owner scope
-            | null (ownerVariables scope) = scope {namedContext = Just []}
-            | owner `Set.member` signatures = scope
-            | otherwise = scope {namedContext = Nothing}
+        named owner s
+            | null (ownerVariables s) = s {nameableDeclaredGivens = Just []}
+            | owner `Set.member` signatures = s
+            | otherwise = s {nameableDeclaredGivens = Nothing}
 
 allocationScopes ::
     (Data a) =>
