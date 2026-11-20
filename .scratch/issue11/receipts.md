@@ -70,9 +70,10 @@ This replay compiled the **full** published module; it did not remove support
 declarations. It is separate semantic evidence, not a bypass of the normal
 fixture lifecycle's construction gate.
 
-To recreate the replay from this checkout, build the translator with Cabal
-without exporting `GHC_PACKAGE_PATH`. Then load the explicitly granted runtime
-environment, copy `test/generated-construction/CallerArithmeticSource.hs` to
+To repeat the replay today, build the translator with Cabal without exporting
+`GHC_PACKAGE_PATH`. Set up the [pinned `hs-pbt/` runtime](../../patches/README.md)
+and run the translator and GHC under `stack exec --`. Copy
+`test/generated-construction/CallerArithmeticSource.hs` to
 `semantic/Example.hs`, translate it to `semantic/Generated.hs`, and compile
 `semantic/Main.hs` with `-i` pointing at `semantic`, `-package MemoristANT`,
 `-package QuickCheck`, and each optimization setting. Keep separate output

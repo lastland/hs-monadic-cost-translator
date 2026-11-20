@@ -247,10 +247,9 @@ documentation before editing workflow configuration.
 Skipping a local hook must not suppress the CI checks. Changing GitHub repository
 settings or required-check rules is not authorized by this specification.
 
-The existing CI runs runtime-free tests, not the complete handwritten-reference
-suite. Adding the full suite to CI requires separately provisioning the external
-runtime and agreeing that infrastructure expansion with the user. Do not imply
-that current CI supplies semantic coverage it does not run.
+This specification covered runtime-free CI only. The [current CI workflow](../../.github/workflows/ci.yml)
+also runs the handwritten-reference and integration suites against the patched
+`hs-pbt/` submodule.
 
 ### Agent workflow
 

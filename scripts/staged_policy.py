@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run shared checks against a disposable, complete copy of the Git index."""
+"""Run shared checks on a disposable copy of the superproject's staged files."""
 
 from __future__ import annotations
 
@@ -160,6 +160,9 @@ def staged_files(root: Path, index: FrozenIndex) -> list[StagedFile]:
         name = path.decode("utf-8")
         if stage != b"0":
             raise RuntimeError("unmerged staged path: " + name)
+        if mode == b"160000" and name == "hs-pbt":
+            # This external dependency has no superproject blobs to check.
+            continue
         if mode == b"120000":
             raise RuntimeError("staged symlink is unsupported: " + name)
         if mode not in (b"100644", b"100755"):

@@ -449,20 +449,24 @@ class StagedPolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("unmerged staged path: src/Good.hs", result.stderr)
 
+    def stage_uninitialized_gitlink(self, path: str) -> None:
+        # Generate an object ID without storing it or creating a submodule worktree.
+        object_id: str = self.git("hash-object", "--stdin", input=path.encode()).decode().strip()
+        self.git("update-index", "--add", "--cacheinfo", "160000", object_id, path)
+
+    def test_staged_checks_accept_uninitialized_hs_pbt(self) -> None:
+        self.stage_uninitialized_gitlink("hs-pbt")
+        self.assertFalse((self.root / "hs-pbt").exists())
+        result: subprocess.CompletedProcess[str] = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("HLint: checked", result.stdout)
+
     def test_gitlink_is_rejected_instead_of_omitting_its_tree(self) -> None:
-        tree = self.git("write-tree").strip()
-        identity: dict[str, str] = dict(
-            self.env, GIT_AUTHOR_NAME="Policy test", GIT_AUTHOR_EMAIL="test@example.invalid",
-            GIT_COMMITTER_NAME="Policy test", GIT_COMMITTER_EMAIL="test@example.invalid",
-        )
-        commit = subprocess.run(
-            ["git", "commit-tree", tree.decode(), "-m", "fixture"], cwd=self.root,
-            env=identity, capture_output=True, check=True,
-        ).stdout.strip()
-        self.git("update-index", "--add", "--cacheinfo", "160000," + commit.decode() + ",vendor tree")
-        result = self.run_check()
+        self.stage_uninitialized_gitlink("hs-pbt")
+        self.stage_uninitialized_gitlink("vendor tree/hs-pbt")
+        result: subprocess.CompletedProcess[str] = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("unsupported staged mode 160000: vendor tree", result.stderr)
+        self.assertIn("unsupported staged mode 160000: vendor tree/hs-pbt", result.stderr)
 
     def test_hook_uses_staged_drivers_even_when_working_drivers_are_broken(self) -> None:
         (self.root / "src" / "linked source.hs").symlink_to("Good.hs")

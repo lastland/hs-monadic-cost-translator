@@ -31,17 +31,17 @@ The root test suite (`cost-translate-test`) translates and tests these five file
 | [`ConstructorEquations.hs`](ConstructorEquations.hs) | `manual-constructor-equations` | Shared constructor inspections across equations and source-ordered guard fallthrough |
 | [`TerminalDo.hs`](TerminalDo.hs) | `manual-terminal-do` | Flat ordinary `do` blocks for function entry ticks and conditionals vs. scoped annotations |
 
-Run all five automated reference comparisons together with:
+From the repository root, run all five automated reference comparisons together:
 
 ```sh
-stack test cost-translate:test:cost-translate-test --test-arguments='manual-thunk-arguments manual-thunk-matching manual-scoped-annotations manual-constructor-equations manual-terminal-do'
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments='manual-thunk-arguments manual-thunk-matching manual-scoped-annotations manual-constructor-equations manual-terminal-do'
 ```
 
 ## Setup and Usage
 
 ### Building the Translator
 
-Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `QuickCheck`. The root Stack configuration provides both when `hs-pbt/` is present (see the [root README](../README.md) for prerequisites):
+Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `QuickCheck`. The root Stack configuration provides both when the `hs-pbt/` submodule is initialized and patched (see the [root README](../README.md) for prerequisites and setup):
 
 ```sh
 stack build
@@ -60,8 +60,10 @@ copy from its source. After changing a source or the translator, rerun this comm
 and include any changed translations in the same commit. Git ignores the companion
 diagnostic logs (such as `BasicM.hs.log`).
 
-On every push and pull request, CI regenerates the text without `hs-pbt/` and
-shows a Git diff if the checked-in copies are out of date.
+On every push and pull request, the runtime-free CI job regenerates the text
+without `hs-pbt/` and shows a Git diff if the checked-in copies are out of date,
+while the Stack CI job runs the reference comparisons against the patched
+`hs-pbt/` submodule.
 
 ### Translating and Inspecting an Example
 
