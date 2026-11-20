@@ -6,7 +6,7 @@ module Cost.Publication
     , verifyOrigin
     ) where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (IOException, SomeException, displayException, try)
 import Control.Monad (void)
 import Cost.AcceptedSource
 import Cost.Translate.Diagnostic (renderDiagnostic)
@@ -60,8 +60,13 @@ verifyOrigin :: Publication -> FilePath -> [GHC.ModSummary] -> IO [GHC.Module]
 verifyOrigin (Publication published paths accepted) output summaries = do
     actual <- canonicalizePath output
     if actual /= published
-        then fail "origin publication path mismatch"
-        else verifyAccepted paths accepted summaries
+        then fail (output ++ ": origin publication path mismatch")
+        else do
+            result <- try (verifyAccepted paths accepted summaries)
+            case result of
+                Left (err :: IOException) ->
+                    fail (output ++ ": " ++ displayException err)
+                Right origins -> pure origins
 
 publishCandidate ::
     FilePath -> FilePath -> String -> FilePath -> IO (Either String ())

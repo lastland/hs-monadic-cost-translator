@@ -21,6 +21,13 @@ for argument do
                     mv "$sandbox/Example.hs" "$sandbox/Unregistered.hs"
                     ln -s Unregistered.hs "$sandbox/Example.hs"
                     ;;
+                helper)
+                    cp "$ORIGIN_SPECIMEN_HELPER" "$sandbox/OriginHelper.hs"
+                    cp "$FUNCTION_SPECIMEN_OUTPUT" "$argument"
+                    ;;
+                include)
+                    printf '#define IDENTITY(x) 0\n' > "$ORIGIN_SPECIMEN_INCLUDE"
+                    ;;
                 *) exit 1 ;;
             esac
             printf '%s\n' "$argument" >> "$FUNCTION_SPECIMEN_LOG"

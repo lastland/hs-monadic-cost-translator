@@ -12,8 +12,6 @@ import GHC.Driver.Session (xopt)
 import GHC.LanguageExtensions.Type qualified as Extension
 import System.Directory (canonicalizePath)
 
--- The snapshot is installed in the summary consumed by parseModule itself.
--- It is not a second parse or a hash of a file read after translation.
 data AcceptedSource = AcceptedSource Module String [Bool] [Int]
 
 acceptedSummary :: ModSummary -> IO (ModSummary, AcceptedSource)

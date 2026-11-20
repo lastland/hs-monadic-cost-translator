@@ -41,3 +41,12 @@ class ConcreteDead a where
 
 instance ConcreteDead Bool where
     concreteDead x = if x then 0 else if True then 1 else CallerDatatype.keep 0
+
+selector :: CallerDatatype.Box -> Int
+selector x = CallerDatatype.payload x
+
+valueEscape :: Int
+valueEscape = CallerDatatype.zero
+
+patternLabel :: CallerDatatype.Box -> Int
+patternLabel CallerDatatype.Box { CallerDatatype.payload = x } = x

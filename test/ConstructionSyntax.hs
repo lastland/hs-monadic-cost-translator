@@ -68,7 +68,7 @@ checkParsedSyntax parsed =
     patternTH _ = False
 
 checkSyntax :: Bool -> Runtime -> Support -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
-checkSyntax original rt utilities locals uses homes methods support checked = case tm_renamed_source checked of
+checkSyntax originModule rt utilities locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> ([pretty at ++ ": no retained action operand" | at <- missingActions actions], []) `plus`
         foldr (plus . walk noSrcSpan)
             (foldr (plus . nested noSrcSpan) (walk noSrcSpan group) (implicitSource locals checked group))
@@ -88,7 +88,7 @@ checkSyntax original rt utilities locals uses homes methods support checked = ca
     unsupported expression = pretty (srcSpanStart (getLocA expression)) ++ ": unsupported executable expansion"
     walk :: Data a => SrcSpan -> a -> ([String], [SourceSite])
     walk location value
-        | original, Just (_ :: HsValBinds GhcRn) <- cast value = ([], [])
+        | originModule, Just (_ :: HsValBinds GhcRn) <- cast value = ([], [])
         -- GHC caches a declaration's free variables on its renamed node. The
         -- actual uses are inside the method bodies, where their roles are known.
         | Just (_ :: NameSet) <- cast value = ([], [])
