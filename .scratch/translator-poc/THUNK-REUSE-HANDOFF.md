@@ -138,15 +138,15 @@ Cover the following cases through the generated-code/runtime interface:
   sharing remain green. Source-function entry ticks stay unchanged.
 
 Use the pinned Stack environment, not an unrelated system GHC. At handoff
-creation the system GHC was 9.14.1; this project pins 9.10.3. The external runtime
-checkout is `hs-pbt/`; keep it external to the translator's build dependencies.
+creation the system GHC was 9.14.1; this project pins 9.10.3. To run these
+checks today, initialize and patch the [`hs-pbt/` submodule](../../patches/README.md).
 
 Run the new focused cases and existing thunk groups first, then:
 
 ```sh
 stack build
-stack test cost-translate:test:cost-translate-test
-stack --stack-yaml integration/stack.yaml test
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test
+sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration
 hlint src app test integration/probes integration/test-integration
 git diff --check
 ```

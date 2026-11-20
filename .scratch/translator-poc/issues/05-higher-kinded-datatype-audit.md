@@ -58,9 +58,9 @@ list conversion has been introduced.
 ## Verification commands
 
 ```sh
-stack --stack-yaml integration/stack.yaml test cost-translate \
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
   --test-arguments='higher-kinded-datatype-field higher-kinded-recursive-field higher-kinded-polykinded-field higher-kinded-demands'
-stack --stack-yaml integration/stack.yaml test cost-translate-integration:test:runtime-higher-kinded
+sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration:test:runtime-higher-kinded
 ```
 
 The independent handwritten gate is `test/RuntimeHigherKindedGate.hs`. It was

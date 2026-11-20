@@ -1,15 +1,16 @@
 resolver:
-  # lts-24.22 ghc-9.10.3 (same snapshot as the external hs-pbt reference)
+  # lts-24.22 ghc-9.10.3 (same snapshot as the hs-pbt submodule)
   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/22.yaml
 
 packages:
-# The translator package itself must not depend on the target runtime
-# (hs-pbt); see docs/adr/0003-external-monadic-interface.md. Registering
-# the external checkout here only provisions GHC's environment so
-# `stack run cost-translate` can typecheck generated candidates.
+# Register the patched submodule for candidate typechecking and reference tests.
+# The translator has no runtime build dependency (see patches/README.md).
 - .
 - hs-pbt
 
 extra-deps:
 # hs-pbt requires this QuickCheck; the snapshot ships a different one.
 - QuickCheck-2.17.1.0
+
+# Apply command-line warning flags to the selected package, not its dependencies.
+apply-ghc-options: targets

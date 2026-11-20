@@ -14,7 +14,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Read shared tool pins
+      - &read-tool-pins
+        name: Read shared tool pins
         id: tools
         run: |
           python3 - <<'PY'
@@ -43,7 +44,8 @@ jobs:
           ghc-version: ${{ steps.tools.outputs.ghc }}
           cabal-version: '3.16.1.0'
           cabal-update: 'false'
-      - name: Set up pinned HLint
+      - &setup-hlint
+        name: Set up pinned HLint
         uses: haskell-actions/hlint-setup@fe9cd1cd1af94a23900c06738e73f6ddb092966a # v2
         with:
           version: ${{ steps.tools.outputs.hlint }}
@@ -97,3 +99,55 @@ jobs:
               in getContents >>= mapM_ emit . lines'
           git add -Af -- ':(glob)examples/*M.hs'
           git diff --cached --exit-code -- ':(glob)examples/*M.hs'
+
+  runtime:
+    name: Stack / ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: reference
+            project: stack.yaml
+            target: cost-translate:test:cost-translate-test
+          - suite: integration
+            project: integration/stack.yaml
+            target: cost-translate-integration
+    env:
+      STACK_YAML: ${{ github.workspace }}/${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Prepare the pinned Memorist runtime
+        run: |
+          if [ "$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')" != 'submodule.hs-pbt.path hs-pbt' ]; then
+            echo 'Expected hs-pbt/ to be the only submodule in .gitmodules.' >&2
+            exit 1
+          fi
+          if [ "$(git -C hs-pbt rev-parse HEAD)" != "$(git rev-parse HEAD:hs-pbt)" ]; then
+            echo 'hs-pbt/ is not checked out at the recorded revision.' >&2
+            exit 1
+          fi
+          git -C hs-pbt apply ../patches/memorist-private-allocator.patch
+      - *read-tool-pins
+      - name: Set up GHC and Stack
+        uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2
+        with:
+          ghc-version: ${{ steps.tools.outputs.ghc }}
+          cabal-version: '3.16.1.0'
+          cabal-update: 'false'
+          enable-stack: true
+          stack-version: '3.11.1'
+      - *setup-hlint
+      # The root suite invokes both the CLI and GHC with -package MemoristANT.
+      # Neither is a build dependency of that test component.
+      - name: Build the CLI and patched runtime for reference tests
+        if: matrix.suite == 'reference'
+        run: stack --system-ghc --no-install-ghc build cost-translate:exe:cost-translate MemoristANT:lib
+      - name: Run the complete suite
+        env:
+          TARGET: ${{ matrix.target }}
+        run: sh scripts/stack-test.sh --system-ghc --no-install-ghc "$TARGET" --ghc-options='-Wall -Werror'

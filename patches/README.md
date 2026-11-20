@@ -1,27 +1,34 @@
 # External Memorist runtime patch
 
 `memorist-private-allocator.patch` keeps the thunk allocator private to the
-external `MemoristANT` runtime. The translator does not bundle that runtime or
-depend on it at build time.
+external `MemoristANT` runtime. Git pins [`hs-pbt/`](../hs-pbt) to a revision of
+[`hzelkatz/memorist-hs-pbt`](https://github.com/hzelkatz/memorist-hs-pbt).
+The translator package does not depend on the runtime at build time.
 
 ## Apply and build
 
-Place a compatible `MemoristANT-0.1.0.0` checkout at `hs-pbt/`. From the
-translator repository root, check and apply the patch once:
+From the translator repository root, initialize the `hs-pbt/` submodule, check
+and apply the patch inside it once, and build the runtime library:
 
 ```sh
-git apply --check --directory=hs-pbt patches/memorist-private-allocator.patch
-git apply --directory=hs-pbt patches/memorist-private-allocator.patch
+git submodule update --init -- hs-pbt
+git -C hs-pbt apply --check ../patches/memorist-private-allocator.patch
+git -C hs-pbt apply ../patches/memorist-private-allocator.patch
 stack build MemoristANT:lib
 ```
 
-The patch targets `src/Memorist/Base/{Core,ANT,Strict}.hs`. If the check fails,
-inspect the checkout before proceeding; do not force an incompatible patch.
-For an already patched checkout, verify it with:
+The patch changes `src/Memorist/Base/{Core,ANT,Strict}.hs` inside the submodule.
+Revision `eea19f1` already includes the `scanl` laziness fix. With the allocator
+patch, all ten audited sources match the fingerprints in
+[`test/ConstructionRuntime.hs`](../test/ConstructionRuntime.hs).
+To check whether the patch is already applied:
 
 ```sh
-git apply --reverse --check --directory=hs-pbt patches/memorist-private-allocator.patch
+git -C hs-pbt apply --reverse --check ../patches/memorist-private-allocator.patch
 ```
+
+If neither the forward nor the reverse check passes, inspect `git -C hs-pbt diff`
+before building.
 
 Rebuild `MemoristANT:lib` after editing the external runtime. A test invocation
 targeting only `cost-translate` can otherwise use the previously registered
@@ -57,5 +64,8 @@ the absent capability or private representation, not from a hidden package.
 The controls execute ordinary State and native thunk computations at O0/O2.
 The three patched runtime modules are warning/lint clean. Other external example
 modules retain their existing unused-import, type-default, and incomplete-pattern
-warnings; this patch does not change or suppress them. Generated-output warning
-checks retain their separately documented scope.
+warnings; this patch does not change or suppress them. Both `stack.yaml` and
+`integration/stack.yaml` set `apply-ghc-options: targets` so
+`--ghc-options='-Wall -Werror'` applies only to the selected test targets while
+leaving external `hs-pbt/` warnings visible. Generated-output warning checks
+retain their separately documented scope.

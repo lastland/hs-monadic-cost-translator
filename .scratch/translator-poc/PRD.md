@@ -78,8 +78,9 @@ code as successful output.
   not blanket approval for containers or other packages.
 - Produce a separate generated module and a log. Output naming and CLI spelling
   remain implementation details, not settled interface syntax.
-- Keep the target runtime external: do not include `hs-pbt` in the repository or
-  declare it as a translator package dependency. Use GHC's existing environment
+- The original plan kept `hs-pbt` outside the repository. The repository now
+  pins the [runtime as a submodule](../../patches/README.md); the translator
+  package still has no runtime build dependency. Use GHC's existing environment
   to check generated imports. Missing target modules are setup errors; there is
   no custom runtime-path mechanism or automatic dependency installation.
 
@@ -238,8 +239,8 @@ cannot explain effectively.
   DOI 10.1145/3473585, is the requested additional interface reference. Its full
   text has not yet been independently reviewed in this session; review it before
   claiming detailed compatibility with that paper.
-- The locally supplied `hs-pbt` tree is an external reference inspected during
-  planning, not material to add to version control or a validated dependency.
+- Planning used a locally supplied `hs-pbt` tree, before the repository pinned
+  the runtime as a submodule.
 - Architecture decisions are recorded in `docs/adr/0001-source-cost-semantics.md`,
   `0002-ghc-api-and-single-module-boundary.md`,
   `0003-external-monadic-interface.md`, and

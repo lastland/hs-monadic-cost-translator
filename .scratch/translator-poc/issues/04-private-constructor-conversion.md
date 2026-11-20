@@ -15,7 +15,7 @@ without publishing output or recording a generated-code type error. The positive
 `Box(..)` example translates, typechecks and returns value 5 at cost 3.
 
 ```sh
-stack --stack-yaml integration/stack.yaml test cost-translate \
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
   --test-arguments='diagnostics explicit-constructor-exports'
 ```
 

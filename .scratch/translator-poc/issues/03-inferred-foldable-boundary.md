@@ -63,7 +63,7 @@ to a list pass the generated-code tests without annotations.
 ## Passing regression
 
 ```sh
-stack --stack-yaml integration/stack.yaml test cost-translate \
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
   --test-arguments=generated-properties
 ```
 

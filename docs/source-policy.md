@@ -99,8 +99,11 @@ modules cannot replace standard modules. `PATH` and the explicit GHC, formatter,
 and linter executable overrides remain available. Git replacement objects are
 disabled: checks read the actual indexed blobs, not their replacement refs.
 
-The staged tree must contain only ordinary files and directories. Symlinks,
-submodules, unresolved index conflicts, non-UTF-8 paths, and paths that cannot be
+The staged tree must contain only ordinary files and directories, except for the
+canonical `hs-pbt` submodule gitlink (`160000`), which is omitted from the
+exported snapshot because external runtime sources are outside the staged
+source, shell, and HLint checks. Symlinks, any other submodule or gitlink path,
+unresolved index conflicts, non-UTF-8 paths, and paths that cannot be
 represented distinctly on the local filesystem are rejected explicitly. The
 export does not apply checkout filters, line-ending conversion, or
 `export-ignore` attributes.
@@ -130,11 +133,15 @@ The staged regressions create disposable repositories and exercise the actual
 hook and shared commands with installed pinned tools. They verify staged versus
 unstaged behavior and check that the index and working files remain unchanged.
 
-CI runs on every push and pull request without path filters. It provisions the
-shared pinned tools and runs compiler preflight and aggregate validation against
-the full checkout. Skipping a local hook does not skip CI enforcement.
+CI runs on every push and pull request without path filters. The runtime-free
+job runs compiler preflight and `sh scripts/validate.sh`, then checks the
+committed `examples/*M.hs` translations against fresh generator output.
 
-Aggregate validation and CI run runtime-free tests, not the complete semantic
-and handwritten-reference suite. Run that suite separately through
-`sh scripts/stack-test.sh`, with the external runtime configured as required by
-the project's setup instructions.
+Two independent Stack runs build the [patched `hs-pbt/` submodule](../patches/README.md).
+One runs the full handwritten-reference suite; the other runs all four integration
+suites. To reproduce them locally after setting up the runtime:
+
+```sh
+sh scripts/stack-test.sh
+sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration
+```
