@@ -183,6 +183,7 @@ checkGeneratedConstructionSpecimens = do
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
     accepts "ShapeStock.hs"
+    accepts "ShapeStockNat.hs"
     accepts "ShapeStockSum.hs"
     accepts "RenamedStock.hs"
     rejectsAt "ShapeStockEscapes.hs"
