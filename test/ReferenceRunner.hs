@@ -80,6 +80,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
         expected <- buildObserver environment reference
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (root </> "comparison.log") (out ++ err)
+        checkProcessCrash status (out ++ err)
         unless (status == ExitSuccess) $
             fail (label ++ ": reference comparison failed\n" ++ out ++ err)
         putStr out
@@ -127,6 +128,7 @@ checkOptimizedReferenceCases label environment artifacts = forM_ artifacts $ \ar
         expected <- buildObserverAt optimization environment (referenceDirectory artifact)
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (generatedDirectory artifact </> ("comparison" ++ optimization ++ ".log")) (out ++ err)
+        checkProcessCrash status (out ++ err)
         unless (status == ExitSuccess) (fail (optimization ++ ": " ++ out ++ err))
         putStrLn ("PASS: " ++ label ++ " / " ++ optimization ++ " / boundary cases and 200 randomized value/cost comparisons")
 
@@ -149,7 +151,13 @@ compileAt options support sandbox entry packages executable = do
           "-outputdir", objects, "-main-is", entry ++ ".main", support </> entry ++ ".hs",
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
+    checkProcessCrash status (out ++ err)
     unless (status == ExitSuccess) (fail ("observer compilation failed in " ++ sandbox ++ "\n" ++ out ++ err))
+
+checkProcessCrash :: ExitCode -> String -> IO ()
+checkProcessCrash (ExitFailure code) output | code < 0 || code >= 128 =
+    fail ("reference setup error: process crashed (" ++ show code ++ ")\n" ++ output)
+checkProcessCrash _ _ = pure ()
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real
 -- GHC, then replaces its successfully checked candidate before publication.

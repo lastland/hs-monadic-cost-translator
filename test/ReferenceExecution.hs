@@ -4,6 +4,7 @@ module ReferenceExecution (runReferences) where
 import Control.Exception (IOException, catch, throwIO)
 import Control.Monad (forM, when)
 import Data.List (isInfixOf)
+import Data.Maybe (isJust)
 import GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources)
 import ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), runReferenceCase, checkOptimizedReferenceCases
@@ -19,6 +20,7 @@ import System.IO.Temp (createTempDirectory)
 runReferences :: ReferenceEnvironment -> [ReferenceCase] -> IO Bool
 runReferences environment cases = do
     results <- forM cases $ \item -> do
+        putStrLn ("Reference case: " ++ caseKey item)
         result <- (run item >> pure True) `catch` reportFailure item
         when result $ do
             putStrLn ("PASS: " ++ caseKey item)
@@ -29,7 +31,13 @@ runReferences environment cases = do
         pure result
     let passed = length (filter id results)
         failed = length results - passed
+        knownFailed = length [() | (item, False) <- zip cases results, isJust (knownFailure item)]
+        recovered = length [() | (item, True) <- zip cases results, isJust (knownFailure item)]
     putStrLn ("Reference summary: " ++ show passed ++ " passed, " ++ show failed ++ " failed")
+    putStrLn ("Reference policy summary: " ++ show (passed - recovered) ++
+        " success cases passed, " ++ show (failed - knownFailed) ++
+        " success case regressions; " ++ show knownFailed ++ " known failures remain, " ++
+        show recovered ++ " recovered (manual promotion required)")
     pure (and results)
   where
     run item = do
@@ -53,7 +61,11 @@ runReferences environment cases = do
         -- including UserInterrupt, untouched.
         | not (isUserError exception) || any (`isInfixOf` show exception)
             ["setup error:", "construction setup:", "cannot satisfy -package",
-             "can't find a package database", "stg_ap_pp_ret", "ghc: panic!"] =
+             "can't find a package database", "ghc: panic!",
+             "hGetLine: end of file", "resource vanished (Broken pipe)",
+             "observer timed out or returned an invalid response"] ||
+            ("translation failed: source error:" `isInfixOf` show exception &&
+             any (`isInfixOf` show exception) ["unknown symbol", "undefined symbol", "Symbol not found", "dlopen"]) =
             throwIO exception
         | otherwise = do
             temporary <- getTemporaryDirectory

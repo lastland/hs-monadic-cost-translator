@@ -4,10 +4,14 @@ module ReferenceSelectionTests (checkReferenceSelection, checkReferenceListing) 
 import Control.Monad (unless)
 import Control.Exception (evaluate)
 import Data.List (isInfixOf, isPrefixOf)
+import Data.Maybe (fromMaybe)
 import ReferencePolicy (discoverReferenceCases)
 import ReferenceSelection (referenceCases, caseKey)
 import System.Environment (getEnvironment, getExecutablePath)
+import System.Directory
+    ( Permissions(..), createDirectoryIfMissing, findExecutable, getPermissions, setPermissions )
 import System.Exit (ExitCode(..))
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO (hGetContents, hGetLine)
 import System.Process
@@ -22,16 +26,16 @@ checkReferenceSelection = do
     (referenceStatus, referenceOut, referenceErr) <- readProcessWithExitCode executable
         ["anf-scoped-renaming", "identity", "anf-scoped-renaming"] ""
     let shadowedKey = "anf-scoped-renaming:test/cases/anf-scoped-renaming/Shadowed.hs"
+        renamedKey = "anf-scoped-renaming:test/cases/anf-scoped-renaming/Renamed.hs"
         identityKey = "identity:test/cases/identity/Example.hs"
         referenceKeys =
-            [shadowedKey
-            ,"anf-scoped-renaming:test/cases/anf-scoped-renaming/Renamed.hs"
+            [renamedKey
+            ,shadowedKey
             ,identityKey]
         reports = filter (\line -> any (`isInfixOf` line) referenceKeys &&
             any (`isPrefixOf` line) ["PASS: ", "FAIL: "]) (lines referenceOut)
     unless (referenceStatus /= ExitSuccess &&
-            map (\key -> length (filter (key `isInfixOf`) reports)) referenceKeys == [1,1,1] &&
-            ("PASS: " ++ identityKey) `elem` reports &&
+            reports == ["FAIL: " ++ renamedKey, "FAIL: " ++ shadowedKey, "PASS: " ++ identityKey] &&
             "Reference summary: 1 passed, 2 failed" `isInfixOf` referenceOut &&
             "Artifacts:" `isInfixOf` (referenceOut ++ referenceErr)) $
         fail ("reference selection must isolate every source, continue after failure and retain strict status\n" ++
@@ -49,10 +53,10 @@ checkReferenceSelection = do
         ["PASS: identity:test/cases/identity/Example.hs"]
     checkAccepted executable ["--known-failures", "identity"] []
     (sourceStatus, sourceOut, sourceErr) <- readProcessWithExitCode executable
-        ["--all-references", shadowedKey, identityKey, shadowedKey] ""
+        ["--all-references", renamedKey, identityKey, renamedKey] ""
     unless (sourceStatus /= ExitSuccess &&
             filter (\line -> any (`isPrefixOf` line) ["PASS: ", "FAIL: "]) (lines sourceOut) ==
-                ["FAIL: " ++ shadowedKey, "PASS: " ++ identityKey] &&
+                ["FAIL: " ++ renamedKey, "PASS: " ++ identityKey] &&
             "Reference summary: 1 passed, 1 failed" `isInfixOf` sourceOut) $
         fail ("source-key selectors must isolate one variant and retain registry order and strict status\n" ++
             childResult sourceStatus sourceOut sourceErr)
@@ -65,7 +69,33 @@ checkReferenceSelection = do
                 not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"])) $
             fail ("setup errors must be fatal, not reported as reference regressions\n" ++ childResult status out err)
     checkInterrupted executable
+    checkCrashedCompiler executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
+
+checkCrashedCompiler :: FilePath -> IO ()
+checkCrashedCompiler executable =
+    withSystemTempDirectory "reference-selection-crash-" $ \root -> do
+        realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
+        environment <- getEnvironment
+        let commands = root </> "commands"
+            wrapper = commands </> "ghc"
+            injected =
+                [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
+                ,("REFERENCE_REAL_GHC", realGhc)]
+            child = (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
+                {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)}
+        createDirectoryIfMissing True commands
+        writeFile wrapper (unlines
+            ["#!/bin/sh", "case \"$*\" in *Generated.hs*) kill -TERM \"$$\" ;; esac"
+            ,"exec \"$REFERENCE_REAL_GHC\" \"$@\""])
+        permissions <- getPermissions wrapper
+        setPermissions wrapper permissions {executable = True}
+        (status, out, err) <- readCreateProcessWithExitCode child ""
+        unless (status /= ExitSuccess &&
+                "setup error: generated module compiler crashed" `isInfixOf` err &&
+                not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
+                length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
+            fail ("compiler crashes must stop the suite, not become deferred failures\n" ++ childResult status out err)
 
 checkInterrupted :: FilePath -> IO ()
 checkInterrupted executable =

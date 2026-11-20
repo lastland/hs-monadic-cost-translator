@@ -7,7 +7,15 @@ module Cost.Publication
     , publicationSyntax
     ) where
 
-import Control.Exception (IOException, SomeException, displayException, try)
+import Control.Exception
+    ( IOException
+    , SomeAsyncException
+    , SomeException
+    , displayException
+    , fromException
+    , throwIO
+    , try
+    )
 import Control.Monad (void)
 import Cost.AcceptedSource
 import Cost.Translate.Diagnostic (renderDiagnostic)
@@ -29,8 +37,9 @@ translateAccepted :: FilePath -> FilePath -> IO (Either String AcceptedSource)
 translateAccepted source output = do
     result <- try (generate source (takeBaseName output))
     case result of
-        Left (e :: SomeException) ->
-            failure ("source error: " ++ displayException e)
+        Left (e :: SomeException)
+            | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
+            | otherwise -> failure ("source error: " ++ displayException e)
         Right (Left diagnostic, logText) ->
             failure (logText ++ renderDiagnostic diagnostic)
         Right (Right (code, accepted), logText) -> do
@@ -104,9 +113,12 @@ publishCandidate source output code temp = do
                 logPath
                 "Generated module typechecked; published output\n"
             pure (Right ())
-        ExitFailure _ -> do
+        ExitFailure exitStatus -> do
             appendFile logPath ("Failed candidate:\n" ++ code)
-            let category = failureCategory (out ++ err)
+            let category =
+                    if exitStatus < 0 || exitStatus >= 128
+                        then "setup error: generated module compiler crashed"
+                        else failureCategory (out ++ err)
             appendFile logPath (category ++ "\n")
             pure (Left (category ++ "; see " ++ logPath))
     where

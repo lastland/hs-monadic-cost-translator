@@ -104,7 +104,9 @@ main = do
         environment <- if not (null references) || any needsReferenceEnvironment requested
             then Just <$> prepareReferenceEnvironment
             else pure Nothing
-        succeeded <- if null references then pure True
+        succeeded <- if null references then do
+                unless (null selectedModes) (putStrLn "Reference summary: 0 passed, 0 failed")
+                pure True
             else requireEnvironment environment >>= \context -> runReferences context references
         mapM_ (runGroup environment) requested
         unless succeeded exitFailure
