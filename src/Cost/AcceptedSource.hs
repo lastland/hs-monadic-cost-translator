@@ -51,13 +51,23 @@ verifyAccepted paths (AcceptedSource owner snapshot exts opts) summaries = do
                                 pure
                                 (ms_hspp_buf summary)
                         let contents = lexemeToString buffer (len buffer)
+                        let changed =
+                                [ label
+                                | (label, different) <-
+                                    [ ("module/unit", ms_mod summary /= owner)
+                                    , ("frontend buffer", contents /= snapshot)
+                                    , ("extensions", extensions summary /= exts)
+                                    , ("general flags", options summary /= opts)
+                                    ]
+                                , different
+                                ]
                         unless
-                            ( ms_mod summary == owner
-                                && contents == snapshot
-                                && extensions summary == exts
-                                && options summary == opts
+                            (null changed)
+                            ( fail
+                                ( "accepted origin snapshot mismatch: "
+                                    ++ unwords changed
+                                )
                             )
-                            (fail "accepted origin snapshot mismatch")
                         pure True
 
 extensions :: ModSummary -> [Bool]

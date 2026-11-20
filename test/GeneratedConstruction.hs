@@ -26,9 +26,9 @@ import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
     , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary(..), SuccessFlag(..), TyThing(AnId)
-    , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
+    , backend, findModule, getLocA, getModSummary, getName, idType, lookupName, mkModuleName
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries
-    , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
+    , coreModule, desugarModule, load, noBackend, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , tm_renamed_source, unLoc, ghcLink
     )
@@ -38,6 +38,7 @@ import GHC.Core.Type (getTyVar_maybe)
 import GHC.Data.FastString (mkFastString)
 import GHC.Data.StringBuffer (hGetStringBuffer)
 import GHC.Driver.Make qualified as Make
+import GHC.Driver.Session (parseDynamicFlagsCmdLine)
 import GHC.Types.Error (mkUnknownDiagnostic)
 import GHC.Unit.Module.Graph (ModuleGraph, mapMG)
 import qualified GHC.Data.Strict as Strict
@@ -122,9 +123,10 @@ constructionReportsWithOrigin publication output =
 configureArtifact :: FilePath -> Ghc ()
 configureArtifact output = do
     flags <- getSessionDynFlags
-    logger <- getLogger
     -- Inspect the imported DFun fields selected by superclass projections.
-    (configured, leftovers, _) <- parseDynamicFlags logger flags
+    -- Like the frontend, use the session's package databases without importing a
+    -- second, ambient package environment during this inspection-only setup.
+    (configured, leftovers, _) <- parseDynamicFlagsCmdLine flags
         (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", quickCheckPackage,
             "-package", "ghc-prim"])
     unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
