@@ -7,7 +7,7 @@ import ConstructionArithmetic (wellFormed)
 import ConstructionAst (collectAst, firstOrderCall, variable, typedVariable)
 import ConstructionDictionary (Environment, Evidence, Use(..), trace, predicateOf, substitute, sameEvidence)
 import ConstructionRuntime (Runtime, scalarType, isMemoristType)
-import Control.Monad (guard)
+import Control.Monad (guard, zipWithM)
 import Data.Foldable (toList)
 import Data.List (nubBy)
 import qualified Data.Set as Set
@@ -81,7 +81,7 @@ localInstances env given groups expressions = concat (fst (foldl collect ([], ex
     collect (facts, remaining) (LocalGroup vars slots exports occurrences saturated) =
         let external = [e | (name, e) <- occurrences, any (\(poly, _, _) -> getName poly == name) exports]
             (actual, rest) = splitAt (length external) remaining
-            contexts = sequence (zipWith (context vars slots exports) external actual)
+            contexts = zipWithM (context vars slots exports) external actual
             fact = case contexts of
                 Just cs | saturated, not (null cs), length actual == length external ->
                     [LocalInstances vars slots (nubBy sameContext cs)]
