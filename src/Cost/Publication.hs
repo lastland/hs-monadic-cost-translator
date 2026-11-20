@@ -21,7 +21,7 @@ import Cost.AcceptedSource
 import Cost.Translate.Diagnostic (renderDiagnostic)
 import Cost.Translate.Frontend (generate)
 import Cost.Translate.Names (generatedName)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import GHC qualified
 import System.Directory (canonicalizePath, copyFile, renameFile)
 import System.Exit (ExitCode (..))
@@ -125,12 +125,14 @@ publishCandidate source output code temp = do
         logPath = output ++ ".log"
 
 failureCategory :: String -> String
-failureCategory diagnostic =
-    if any
+failureCategory diagnostic
+    | any ("ghc: panic!" `isPrefixOf`) (lines diagnostic) =
+        "setup error: generated module compiler crashed"
+    | any
         (`isInfixOf` diagnostic)
         [ "cannot satisfy -package"
         , "Could not find module"
         , "Could not load module"
-        ]
-        then "setup error: target modules are unavailable in GHC's environment"
-        else "generated-code type error"
+        ] =
+        "setup error: target modules are unavailable in GHC's environment"
+    | otherwise = "generated-code type error"
