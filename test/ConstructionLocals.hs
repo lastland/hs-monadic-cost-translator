@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitSource,
     implicitBindingAt, nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, firstOrderCall, nestedBindings, reachable, typedVariable, variable)
+import ConstructionAst (bindingName, checkedModule, children, collectAst, firstOrderCall, nestedBindings, reachable, typedVariable, variable)
 import ConstructionImplicit
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
@@ -98,7 +98,7 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
   where
     schemes = implicitFormals qc modules
     groups = [(m, group, implicitParameters schemes m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
-    parameters = Map.fromList [(ms_mod (pm_mod_summary (tm_parsed_module m)), ip) | (m, _, ip) <- groups]
+    parameters = Map.fromList [(checkedModule m, ip) | (m, _, ip) <- groups]
     region ip role ns (bs, refs) = (role, ns, refs) : concatMap (local ip) bs
     locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (references ip) b) |
         (m, group, ip) <- groups, b <- fst (parts (const []) group)] ++
@@ -189,7 +189,7 @@ valueRhs rt ty = at
 
 implicitBindingAt :: Locals -> TypecheckedModule -> SrcSpan -> Maybe (Id, LHsExpr GhcTc)
 implicitBindingAt locals checked = maybe (const Nothing) bindingAt
-    (Map.lookup (ms_mod (pm_mod_summary (tm_parsed_module checked))) (moduleIPs locals))
+    (Map.lookup (checkedModule checked) (moduleIPs locals))
 
 implicitSource :: Locals -> TypecheckedModule -> HsGroup GhcRn -> [SourceBody]
 implicitSource locals checked = concatMap classify . implicitBodies

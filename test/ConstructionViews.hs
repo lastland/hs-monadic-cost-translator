@@ -58,7 +58,7 @@ data ViewSupport = ViewSupport
 moduleViews :: ViewSupport -> TypecheckedModule -> ([(SrcSpan, Name)], SrcSpan -> Bool)
 moduleViews support checked = (definitions, isCall)
   where
-    owner = ms_mod (pm_mod_summary (tm_parsed_module checked))
+    owner = checkedModule checked
     (definitions, calls) = Map.findWithDefault ([], Set.empty) owner (viewSites support)
     isCall span' = case getBufSpan span' of
         Strict.Just bytes -> Set.member bytes calls
@@ -91,7 +91,7 @@ viewSupport runtime' locals homes checkedPrograms = do
     sites <- forM checked $ \m -> case tm_renamed_source m of
         Nothing -> fail "construction views: renamed source unavailable"
         Just (group, _, _, _, _) -> do
-            let owner = ms_mod (pm_mod_summary (tm_parsed_module m))
+            let owner = checkedModule m
                 support = [(getLocA n, unLoc n) | FunBind _ n _ <- collectAst group :: [HsBind GhcRn], unLoc n `elem` helpers]
                 callsites = [e | e <- collectAst group :: [LHsExpr GhcRn], sourceRoot policy homes e]
                 typed = atSourceSpan [(getLocA e, e) | e <- collectAst (tm_typechecked_source m) :: [LHsExpr GhcTc]]

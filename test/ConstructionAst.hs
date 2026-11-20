@@ -1,5 +1,5 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, reachable, allBindings, nestedBindings, pretty, spine, firstOrderCall, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, checkedModule, atSourceSpan, reachable, allBindings, nestedBindings, pretty, spine, firstOrderCall, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
@@ -24,6 +24,9 @@ children walk value
     | isJust (cast value :: Maybe HsWrapper) = []
     | isJust (cast value :: Maybe TcEvBinds) = []
     | otherwise = gmapQ walk value
+
+checkedModule :: TypecheckedModule -> Module
+checkedModule = ms_mod . pm_mod_summary . tm_parsed_module
 
 -- Index one module once. Keep every candidate in source order: GHC can
 -- retain several typed expressions at one token, with different wrappers.
