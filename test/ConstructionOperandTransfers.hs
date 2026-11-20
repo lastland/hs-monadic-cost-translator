@@ -9,6 +9,7 @@ import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
 import Data.Data (Data, cast)
 import Data.Foldable (toList)
+import Data.Graph (flattenSCC, stronglyConnComp)
 import Data.List (nub, nubBy)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -18,7 +19,7 @@ import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.DataCon (dataConImplBangs, dataConOrigArgTys, dataConOrigResTy, isBanged)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
-import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Core.TyCo.Rep (scaledThing, typeSize)
 import GHC.Core.Type (getTyVar_maybe, mkScaledFunTys, mkTyVarTy, splitAppTys, splitFunTys, splitPiTys, splitTyConApp_maybe, substTy)
 import GHC.Core.Unify (tcMatchTy)
 import qualified GHC.Data.Strict as Strict
@@ -53,20 +54,24 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
 
     -- For a first-order value only its outer type constructor decides the
     -- role. Carry open heads across statically named calls, including aliases.
-    -- A family head also needs its arguments. Intern only the family operands
-    -- actually present in a retained signature or use. These and a template's
-    -- free variable heads are a finite domain even for polymorphic recursion.
-    families = Map.map (\body -> concatMap familyOperands (template body : forcedOperands body ++ [rho t | (_, _, t) <- calls body])) bodies
-    open key body ty
+    -- A family head also needs its arguments. Across an acyclic call they can
+    -- change even if the caller's type mentions only their enclosing datatype.
+    open body ty
         | Just v <- getTyVar_maybe (fst (splitAppTys ty)), v `elemVarSet` tyCoVarsOfType (template body) = Just (mkTyVarTy v)
-        | Just (tc, _) <- splitTyConApp_maybe ty, isTypeFamilyTyCon tc, any (eqType ty) (families Map.! key) = Just ty
+        | Just (tc, _) <- splitTyConApp_maybe ty, isTypeFamilyTyCon tc = Just ty
         | otherwise = Nothing
-    seeds = Map.mapWithKey (\k body -> [(t, Nothing) | t <- mapMaybe (open k body) (forcedOperands body)]) bodies
+    seeds = Map.map (\body -> [(t, Nothing) | t <- mapMaybe (open body) (forcedOperands body)]) bodies
     edges = Map.map (mapMaybe (\call@(_, n, _) -> (n,) <$> instantiate call) . calls) bodies
+    groups = Map.fromList [(member, i) | (i, group) <- zip [0 :: Int ..] (stronglyConnComp
+        [(n, n, [child | (_, (child, _, _)) <- cs]) | (n, cs) <- Map.toList edges]), member <- flattenSCC group]
+    -- Inside a recursive component only the finite written family operands
+    -- may introduce a larger type. Every other transfer is size bounded.
+    families = Map.map (\body -> concatMap familyOperands (template body : forcedOperands body ++ [rho t | (_, _, t) <- calls body])) bodies
+    bounded name child h t = groups Map.! name /= groups Map.! child || typeSize t <= typeSize h || any (eqType t) (families Map.! name)
     close known =
         let step name body = nubBy same (known Map.! name ++
                 [(t, Just (fromMaybe called origin)) | (called, (child, _, sub)) <- edges Map.! name,
-                    (h, origin) <- known Map.! child, Just t <- [open name body (substTy sub h)]])
+                    (h, origin) <- known Map.! child, Just t <- [open body (substTy sub h)], bounded name child h t])
             next = Map.mapWithKey step bodies
         in if fmap length next == fmap length known then next else close next
     same (a, via) (b, other) = via == other && eqType a b
