@@ -121,6 +121,34 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "StockSimple.hs"
+    accepts "StockBox.hs"
+    accepts "StockRecursive.hs"
+    accepts "StockRenamed.hs"
+    rejectsAt "StockEscape.hs"
+        [(8, selected "GHC.Classes.=="), (10, selected "GHC.Classes.=="),
+         (12, selected "GHC.Classes.=="), (14, selected "GHC.Internal.Show.show"),
+         (16, selected "GHC.Classes.=="), (18, selected "GHC.Classes.=="),
+         (21, selected "GHC.Classes.=="), (23, selected "GHC.Classes.==")]
+    rejectsAt "StockObserving.hs"
+        [(10, forbidden tval), (12, forbidden tval),
+         (15, selected "GHC.Classes.=="), (17, selected "GHC.Internal.Show.show"),
+         (19, selected "GHC.Internal.Show.show"), (25, selected "GHC.Classes.=="),
+         (27, selected "GHC.Internal.Show.show"), (30, selected "GHC.Classes.=="),
+         (32, selected "GHC.Internal.Show.show")]
+    mixed "StockOverride.hs" [TopBinding "sameStock", TopBinding "showStock"] "StockOverride.hs"
+        [(12, forbidden tval), (15, forbidden tval),
+         (18, selected "GHC.Classes.=="), (20, selected "GHC.Classes./="),
+         (22, selected "GHC.Internal.Show.show"), (24, selected "GHC.Internal.Show.showsPrec")]
+    mixed "StockSibling.hs" [TopBinding "same"] "StockSibling.hs"
+        [(9, selected "GHC.Classes.=="), (17, unknown "StockSibling.sibling"),
+         (20, selected "GHC.Classes.==")]
+    mixed "StockContext.hs" [TopBinding "concrete"] "StockContext.hs"
+        [(11, selected "GHC.Classes.==")]
+    rejectsAt "StockGrowth.hs"
+        [(9, selected "GHC.Classes.=="), (11, selected "GHC.Internal.Show.show")]
+    rejectsAt "StockSpecialized.hs"
+        [(7, selected "GHC.Classes.=="), (10, selected "GHC.Classes.==")]
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
     accepts "ConcreteFoldableClosure.hs"
@@ -681,20 +709,12 @@ checkGeneratedConstructionSpecimens = do
     checksFamilyArtifact label datatype = do
         (directory, _, output) <- completeArtifact label (label </> "Example.hs")
         typechecks output
-        diagnostics <- rejection output
+        diagnostics <- unlines <$> constructionReports output
         writeFile (directory </> "construction-reports.txt") diagnostics
-        -- The full emitted graph still rejects contextual stock Eq/Show.
-        -- Family transport closes only Repr and Demand support obligations.
-        reports <- siteReports output diagnostics
-        let stock report = any (`isInfixOf` report)
-                ["unapproved selected method GHC.Classes.==:",
-                 "unapproved selected method GHC.Classes.$dm/=:",
-                 "unapproved selected method GHC.Internal.Show.show:",
-                 "unapproved selected method GHC.Internal.Show.showsPrec:",
-                 "unapproved selected method GHC.Internal.Show.$dmshow:",
-                 "unapproved selected method GHC.Internal.Show.$dmshowList:"]
-        unless (length reports == 10 && all (stock . snd) reports) $
-            fail (label ++ ": expected only the ten residual stock Eq/Show reports:\n" ++ diagnostics)
+        -- Check the complete published graph, including contextual stock
+        -- methods and defaults; no declarations or annotations are removed.
+        unless (null diagnostics) $
+            fail (label ++ ": complete family/stock construction must close:\n" ++ diagnostics)
         cleanDefinitions diagnostics output
             [InstanceMethod "Repr" [datatype, "a"] method | method <- ["reprM", "abstract"]]
         cleanDefinitions diagnostics output

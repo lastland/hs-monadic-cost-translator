@@ -7,7 +7,8 @@ import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
-import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType)
+import ConstructionDemandMethods (StockMethods, stockMethods, safeHomeType)
+import ConstructionStock (stockUse)
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
@@ -81,7 +82,7 @@ methodNames rt modules = do
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
 data Site = FieldBody Name | Site String MethodSite (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
-    | StockFacts [(Name, Name, Type, [Use])]
+    | StockFacts StockMethods
     | TagFacts Platform [TyCon]
     | MethodFacts Methods
 
@@ -163,10 +164,9 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
-                        (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
+                    stock = stockMethods rt checked env (uses qc selected env allGivens)
                     rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
-                        StockFacts stockFacts : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
+                        StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
                         DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
@@ -209,7 +209,7 @@ checkEvidence rt homes demands sites = concatMap check sites
         { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
-        , stockFacts = concat [facts | StockFacts facts <- sites]
+        , stockFacts = [facts | StockFacts facts <- sites]
         , methodFacts = [retainedMethods [(origin, u) | Site _ origin _ _ u <- sites] facts |
             MethodFacts facts <- sites]
         , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
@@ -226,7 +226,7 @@ checkEvidence rt homes demands sites = concatMap check sites
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
     , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
-    , stockFacts :: [(Name, Name, Type, [Use])], tagFacts :: [(Platform, [TyCon])]
+    , stockFacts :: [StockMethods], tagFacts :: [(Platform, [TyCon])]
     , methodFacts :: [Methods] }
 
 -- A back-edge closes only this instantiated method obligation, not the
@@ -256,7 +256,7 @@ checkUse rules origin utility = check
                 RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
                     | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
-                    | selectedPredicate ty evidence && demandMethod [] name evidence -> Nothing
+                    | stockUse rt homes (stockFacts rules) origin tagUse use -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
                     | callerArithmetic rt use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
@@ -295,32 +295,6 @@ checkUse rules origin utility = check
                     any (\(platform, homes') -> validTag platform homes' operand op) (tagFacts rules)
                 _ -> False
         tagUse _ = False
-        demandMethod active method ev@(Instance df predicate args ds)
-            | Just (childMethod, childType) <- runtimeDemandMethod rt method df predicate args (mapMaybePredicate ds) =
-                length ds == 1 && all (\child -> case predicateOf child >>= getClassPredTys_maybe of
-                    Just (_, [operand]) -> eqType operand childType &&
-                        ((stockChild childMethod child && demandMethod active childMethod child) ||
-                            (scalarType operand && ordinary child))
-                    _ -> False) ds
-            | null args && null ds,
-              [(formal, obligations)] <- [(p, obligations) | (owner, selected, p, obligations) <- stockFacts rules,
-                  owner == getName df, selected == method],
-              eqType formal predicate =
-                any (\(selected, previous) -> selected == method && sameEvidence ev previous) active || all safe obligations
-          where
-            safe obligation | tagUse obligation = True
-            safe (Use selected cls ScalarMethod (ty : _) [child])
-                | Just (actual, [operand]) <- predicateOf child >>= getClassPredTys_maybe,
-                  getName actual == cls, eqType operand ty, not (isProtected rt operand) =
-                    demandMethod ((method, ev) : active) selected child ||
-                        (scalarType operand && ordinary child)
-            safe _ = False
-        demandMethod _ _ _ = False
-        stockChild method (Instance df predicate [] []) =
-            any (\(owner, selected, formal, _) -> owner == getName df && selected == method &&
-                eqType formal predicate) (stockFacts rules)
-        stockChild _ _ = False
-        mapMaybePredicate ds = [p | d <- ds, Just p <- [predicateOf d]]
         selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty
             _ -> False
