@@ -13,7 +13,7 @@ import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
-import ConstructionRoles (quickCheckRoles, homeDemandTypes, supportRoles)
+import ConstructionRoles (quickCheckRoles, homeDemandTypes, supportRoles, demandShrinkMethods)
 import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (coreViewNames, viewSupport)
@@ -86,7 +86,8 @@ constructionReports output =
             representations = homeReprs rt checkedPrograms
         qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
-        let utilities = supportRoles rt qc checkedPrograms
+        shrinkers <- demandShrinkMethods rt checkedModules
+        let utilities = supportRoles rt qc shrinkers checkedPrograms
             uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
             locals = localBindings rt qc checkedModules
         views <- viewSupport rt locals homes checkedPrograms
@@ -121,7 +122,10 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "StandaloneDemandShrink.hs"
     rejectsAt "StandaloneDemandShrinkBypass.hs"
-        [(7, unknown "StandaloneDemandShrink.shrinkDemandCompatible")]
+        [(7, unknown "StandaloneDemandShrink.shrinkDemandCompatible"),
+         (7, supportUse "StandaloneDemandShrink.shrinkDemandCompatible"),
+         (10, supportUse "StandaloneDemandShrink.standalone"),
+         (13, supportUse "StandaloneDemandShrink.shrinkField")]
     accepts "BoxSupport.hs"
     rejectsAt "BoxSupportBypass.hs"
         [(7, forbidden tval), (10, forbidden "Memorist.Data.Interface.Data.abstract"),
@@ -303,7 +307,7 @@ checkGeneratedConstructionSpecimens = do
     -- Both projections are on line 6; only the filename distinguishes them.
     rejectsDespiteImport "PairedPayload.hs" 6 "HiddenConstruction.hs" 6 (forbidden tval)
     rejectsIn "DemandComputation.hs" "DemandControl.hs" [(19, forbidden tval)]
-    mixed "AlteredDemandView.hs" [TopBinding "generateField"] "DemandControl.hs" [(19, forbidden tval)]
+    accepts "AlteredDemandView.hs"
     rejects "ViewAlteredMetadata.hs" [(6, "Memorist.Base.Thunk.Th"), (9, "Memorist.Base.Thunk.Th")]
     rejectsAt "ViewArbitraryConverter.hs" [(7, view "preserve"), (10, view "preserve")]
     rejects "ViewDeadConverter.hs" [(7, eval1)]
@@ -321,8 +325,8 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "SplicedDeclaration.hs" [(1, "unsupported executable form: Template Haskell")]
     rejectsAt "RebindableExpansion.hs" [(13, "unsupported executable expansion")]
     accepts "ReboundDemand.hs"
-    mixed "SizedDemandOtherInput.hs" charGenerators "DemandControl.hs" [(19, forbidden tval)]
-    mixed "SizedDemandEscape.hs" [TopBinding "ordinary"] "DemandControl.hs" [(19, forbidden tval)]
+    accepts "SizedDemandOtherInput.hs"
+    accepts "SizedDemandEscape.hs"
     rejects "SizedDemandDead.hs" [(14, eval1)]
     accepts "ArbitraryWithoutDemand.hs"
     rejectsDespiteImport "DatatypeGeneratorEscape.hs" 7 "DatatypeGeneratorControl.hs" 18 sized
@@ -345,21 +349,21 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "ErasedHomeMethod.hs" [(10, unknown "QuickCheckRoles.make")]
     rejectsAt "ForallClosureChanged.hs" [(10, view "preserve"), (13, view "preserve")]
     rejects "ConstraintWrapperEscape.hs" [(11, tval)]
-    rejectsIn "ConstraintWrapperEscape.hs" "DemandControl.hs" [(19, forbidden tval)]
     -- abstract's permission does not depend on a constraint-wrapper protocol.
     accepts "ConstraintWrapperAltered.hs"
     accepts "ConstraintWrapperWrongProtocol.hs"
     rejects "ConstraintWrapperDead.hs" [(15, eval1)]
     accepts "Construction.hs"
     rejectsAt "MethodControl.hs" [(19, carrier ">>=" ++ "; generic dictionaries confer no permission")]
-    mixed "DemandControl.hs" [TopBinding "generateField"] "DemandControl.hs" [(19, forbidden tval)]
-    mixed "SizedDemandControl.hs" charGenerators "DemandControl.hs" [(19, forbidden tval)]
+    accepts "DemandControl.hs"
+    accepts "SizedDemandControl.hs"
     mixed "DatatypeGeneratorControl.hs" demandProducer "DatatypeGeneratorControl.hs" [(18, sized)]
     accepts "DemandDerivingControl.hs"
     mixed "SumGeneratorControl.hs" demandProducer "SumGeneratorControl.hs" [(25, oneof)]
     mixed "ConstraintWrapperControl.hs"
         [InstanceMethod "Repr" ["Source"] "abstract", InstanceMethod "Demand" ["Target"] "fullDemand",
-         InstanceMethod "Demand" ["Target"] "usage"] "DemandControl.hs" [(19, forbidden tval)]
+         InstanceMethod "Demand" ["Target"] "usage", InstanceMethod "Observation" ["Target"] "shrinkCompatible"]
+        "ConstraintWrapperControl.hs" [(18, reprFailure)]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "ConcreteConstructionControl.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
           "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs", "TypeOnlyControl.hs",
@@ -391,6 +395,7 @@ checkGeneratedConstructionSpecimens = do
     eval1 = "Memorist.Base.Core.eval1"
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
+    supportUse op = "support utility used by ordinary computation: " ++ op
     qcValue name = "QuickCheck value used outside a generator or property: " ++ name
     wrappedForce wrapper = qcValue ("OperandPropertyLaws." ++ wrapper) ++ " (operand in ordinary callee OperandPropertyLaws.strict at this instantiation)"
     selected op = "unapproved selected method " ++ op
@@ -404,7 +409,6 @@ checkGeneratedConstructionSpecimens = do
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
-    charGenerators = [InstanceMethod "Observation" ["Char"] "generate", InstanceMethod "DemandArb" ["Char"] "arbDemandFrom"]
     rejectsOption reason output = do
         typechecks output
         problems <- rejection output
@@ -533,9 +537,12 @@ checkGeneratedConstructionSpecimens = do
         diagnostics <- constructionReports output
         writeFile (directory </> "construction-reports.txt") (unlines diagnostics)
         -- These are actual generated dictionaries, not a model of the emitter.
-        -- Shrinker obligations remain; nominal support fields are not computations.
-        unless (not (null diagnostics) && any (isInfixOf "Test.QuickCheck.Arbitrary.liftShrink") diagnostics) $
-            fail ("anf-demand must retain shrinker rejections:\n" ++ unlines diagnostics)
+        -- Neither observers nor standalone shrinkers are computations. Unrelated
+        -- selected-method blockers are still inspected in this complete output.
+        unless (not (null diagnostics) && any (isInfixOf "Generated.foldrT") diagnostics) $
+            fail ("anf-demand must retain unrelated construction rejections:\n" ++ unlines diagnostics)
+        when (any (isInfixOf "liftShrink") diagnostics) $
+            fail ("anf-demand shrinker helpers must have support roles:\n" ++ unlines diagnostics)
         let pureMethod report = any (`isInfixOf` report)
                 ["unapproved selected method GHC.Classes.==:", "unapproved selected method GHC.Classes.$dm/=:",
                  "unapproved selected method GHC.Internal.Show.show:", "unapproved selected method GHC.Internal.Show.showsPrec:",
@@ -609,7 +616,7 @@ checkGeneratedConstructionSpecimens = do
             [(InstanceMethod "Repr" ["Box"] "abstract", []),
               (InstanceMethod "Demand" ["BoxT"] "fullDemand", []),
               (InstanceMethod "Demand" ["BoxT"] "usage", []),
-             (TopBinding "shrinkField", [forbidden tval, external "Test.QuickCheck.Arbitrary.liftShrink"])]
+              (TopBinding "shrinkField", [])]
         mapM_ (\key -> check (key, []))
             [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
              InstanceMethod "GeneratedDemand" ["BoxT"] "genDemandBudget", InstanceMethod "Arbitrary" ["BoxD"] "arbitrary",

@@ -26,7 +26,7 @@ import GHC.Iface.Syntax (ifDFun)
 data Role
     = Primitive | Derived | Representation | DemandData
     | View | Payload | ThunkAccounting | EmptyAccounting | UnionAccounting | Annotation
-    | ReprMethod | AbstractMethod | FullMethod | UsageMethod | MinimumMethod | DemandArbitraryMethod
+    | ReprMethod | AbstractMethod | FullMethod | UsageMethod | MinimumMethod | DemandArbitraryMethod | DemandShrink
     deriving (Eq, Show)
 
 data Runtime = Runtime

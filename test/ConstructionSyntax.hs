@@ -7,7 +7,7 @@ import ConstructionAst
 import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitSource, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
-import ConstructionRoles (Support, supportAt)
+import ConstructionRoles (Support, supportAt, shrinkSupport, restrictedSupport)
 import ConstructionRuntime
 import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
@@ -98,7 +98,7 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, exempt binding, not (strictBinding binding) =
+        | Just binding <- cast value, (exempt binding || shrinkBinding binding), not (strictBinding binding) =
             foldr (plus . nested location) ([], []) (nestedSource locals binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
@@ -155,6 +155,8 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
     descend location value = foldr plus ([], []) (children (walk location) value)
     strictBinding FunBind{fun_matches = matches} = strictNullaryRhs matches
     strictBinding _ = False
+    shrinkBinding (FunBind _ name _) = shrinkSupport (supportAt utilities (getLocA name))
+    shrinkBinding _ = False
     nested location (Declaration binding) = walk location binding `plus`
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
@@ -173,9 +175,13 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
     checkName location name | isQuickCheckBinding qc name =
         ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
     checkName location name = checkOperation location name
-    checkOperation location name = if permitted name || utilityOperation location name then ([], []) else
+    checkOperation location name
+        | restrictedSupport utilities name, Nothing <- supportAt utilities location =
+            ([pretty location ++ ": support utility used by ordinary computation: " ++ describeName name], [])
+        | permitted name || utilityOperation location name = ([], [])
+        | otherwise =
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
-           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
+          " operation " ++ describeName name ++ " is forbidden in generated code"], [])
     utilityOperation location name = case (supportAt utilities location, roleOf rt name) of
         (Just roles, Just operation) -> not (null roles) && all (`permits` operation) roles
         _ -> False

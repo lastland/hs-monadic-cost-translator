@@ -3,24 +3,32 @@ module ConstructionRoles
     ( QuickCheck, quickCheckRoles, isQuickCheckBinding, quickCheckBody
     , supportCoreNames, homeDemandTypes
     , Support, supportRoles, supportAt, supportBinding, sourceBinding
+    , demandShrinkMethods, shrinkSupport
+    , restrictedSupport
     ) where
 
 import ConstructionAst
-import ConstructionQuickCheckTypes (checkedHome)
+import ConstructionQuickCheckTypes (checkedHome, quickCheckPackage)
 import ConstructionRuntime
 import Data.List (nub)
 import Data.Foldable (toList)
 import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
+import Control.Monad (forM)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.FamInstEnv (FamInst(..))
 import qualified GHC.Core as C
-import GHC.Core.Class (classAllSelIds, classTyCon)
+import GHC.Core.Class (classAllSelIds, classTyCon, classTyVars, classOpItems)
+import GHC.Builtin.Types (intTy, listTyCon)
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
-import GHC.Core.Type (splitTyConApp_maybe, splitFunTys, splitForAllTyVars)
+import GHC.Core.Type (splitTyConApp_maybe, splitFunTys, splitForAllTyVars, mkTyVarTy)
+import GHC.Core.TyCo.Compare (eqType)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Data.FastString (mkFastString)
+import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import qualified GHC.Data.Strict as Strict
@@ -30,16 +38,18 @@ import GHC.Types.Name.Set (NameSet)
 
 -- Permission belongs to the nominal class field, never its dictionary or
 -- spelling. Every nested declaration starts a fresh ordinary obligation.
-data Support = Support [(SrcSpan, Maybe [Role])] (Map.Map Name [Role]) (Set.Set Name)
+data Support = Support [(SrcSpan, Maybe [Role])] (Map.Map Name [Role]) (Set.Set Name) (Set.Set Name)
 
-supportRoles :: Runtime -> QuickCheck -> [(TypecheckedModule, C.CoreProgram)] -> Support
-supportRoles rt qc programs = Support regions core declared
+supportRoles :: Runtime -> QuickCheck -> [Name] -> [(TypecheckedModule, C.CoreProgram)] -> Support
+supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrappers
   where
     modules = map fst programs
     roots = [(getLocA n, role) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
-        ClsInstDecl{cid_binds = bs} <- collectAst group :: [ClsInstDecl GhcRn],
-        L _ (FunBind _ n _) <- toList bs, Just role <- [roleOf rt (unLoc n)],
-        role `elem` [AbstractMethod, FullMethod, UsageMethod]]
+        FunBind _ n _ <- collectAst group :: [HsBind GhcRn],
+        getLocA n `elem` methods, Just role <- [selectorRole (unLoc n)]]
+    selectorRole name | name `elem` shrinkers = Just DemandShrink
+                      | Just role <- roleOf rt name, role `elem` [AbstractMethod, FullMethod, UsageMethod] = Just role
+                      | otherwise = Nothing
     bindings = [(m, b) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         b <- collectAst group :: [HsBind GhcRn]]
     methods = [getLocA n | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
@@ -51,14 +61,25 @@ supportRoles rt qc programs = Support regions core declared
     helper _ = False
     references b = concat (children supportReferences b)
     edges = Map.fromList [(n, references b) | (_, b) <- bindings, helper b, Just n <- [bindingName b]]
-    reached role = reachable edges (Set.fromList [n | (_, b@(FunBind _ binder _)) <- bindings,
+    forwardReach role = reachable edges (Set.fromList [n | (_, b@(FunBind _ binder _)) <- bindings,
         lookup (getLocA binder) roots == Just role, n <- references b])
-    candidates = Set.unions (map reached [AbstractMethod, FullMethod, UsageMethod])
+    -- Exported wrappers have the same pure-list interface. Certify only an
+    -- alias or an eta-expanded forwarding equation to a known shrink utility,
+    -- never an arbitrary list result or a callback-taking adapter.
+    shrinkWrappers = wrappers (Set.fromList shrinkers)
+    shrinkReach = Set.union shrinkWrappers (Set.intersection (Map.keysSet edges) (forwardReach DemandShrink))
+    wrappers known = let next = Set.union known (Set.fromList
+                             [n | (_, b) <- bindings, helper b, Just n <- [bindingName b], forwards known b])
+                     in if next == known then known else wrappers next
+    reached DemandShrink = shrinkReach
+    reached role = forwardReach role
+    supportKinds = [AbstractMethod, FullMethod, UsageMethod, DemandShrink]
+    candidates = Set.unions (map reached supportKinds)
     ordinary = reachable edges (Set.fromList [n | (m, b) <- bindings,
         not (quickCheckBody qc m b), not (maybe False (`Set.member` candidates) (bindingName b) && helper b),
         not (case b of FunBind _ binder _ -> getLocA binder `elem` map fst roots; _ -> False),
         n <- references b])
-    helperRoles n = [role | role <- [AbstractMethod, FullMethod, UsageMethod],
+    helperRoles n = [role | role <- supportKinds,
         n `Set.member` reached role, n `Set.notMember` ordinary, Map.member n edges]
     sourceRole n = case lookup (getLocA n) roots of
         Just role -> Just [role]
@@ -78,10 +99,12 @@ supportRoles rt qc programs = Support regions core declared
         let values = filter (not . C.isTyCoArg) args,
         length values == length (classAllSelIds cls),
         (selector, value) <- zip (classAllSelIds cls) values,
-        Just role <- [roleOf rt (getName selector)], role `elem` [AbstractMethod, FullMethod, UsageMethod],
+        Just role <- [selectorRole (getName selector)],
         (C.Var method, _) <- [C.collectArgs value]]
     sourceRoles = [(getLocA n, roles) | (_, FunBind _ n _) <- bindings, Just roles <- [sourceRole n]]
-    initial = Map.fromList ([(name, [role]) | (name, role) <- fields] ++
+    defaults = [name | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)), Just cls <- [tyConClass_maybe tc],
+        (method, Just (name, _)) <- classOpItems cls, getName method `elem` shrinkers]
+    initial = Map.fromList ([(name, [DemandShrink]) | name <- defaults] ++ [(name, [role]) | (name, role) <- fields] ++
         [(name, roles) | (name, at) <- typed, Just roles <- [lookup at sourceRoles]])
     close names = let next = Map.union names (Map.fromList
                          [(poly, role) | (poly, mono) <- exports, Just role <- [Map.lookup mono names]])
@@ -92,17 +115,97 @@ supportRoles rt qc programs = Support regions core declared
     declared = Set.fromList (sourceNames ++ [poly | (poly, mono) <- exports, mono `elem` sourceNames])
 
 supportAt :: Support -> SrcSpan -> Maybe [Role]
-supportAt (Support regions _ _) at = case
+supportAt (Support regions _ _ _) at = case
     [(region, role) | (region, role) <- regions, at `isSubspanOf` region,
         not (any (\(inner, _) -> inner /= region && inner `isSubspanOf` region && at `isSubspanOf` inner) regions)] of
     [(_, role)] -> role
     _ -> Nothing
 
 supportBinding :: Support -> Name -> Maybe [Role]
-supportBinding (Support _ names _) name = Map.lookup name names
+supportBinding (Support _ names _ _) name = Map.lookup name names
 
 sourceBinding :: Support -> Name -> Bool
-sourceBinding (Support _ _ names) name = Set.member name names
+sourceBinding (Support _ _ names _) name = Set.member name names
+
+restrictedSupport :: Support -> Name -> Bool
+restrictedSupport (Support _ _ _ names) name = Set.member name names
+
+shrinkSupport :: Maybe [Role] -> Bool
+shrinkSupport = (== Just [DemandShrink])
+
+forwards :: Set.Set Name -> HsBind GhcRn -> Bool
+forwards known binding = case equations binding of
+    Just [(patterns, body)] | Just args <- mapM binder patterns ->
+        let (head', supplied) = firstOrderCall body
+        in maybe False (`Set.member` known) (variable head') &&
+            mapM variable supplied == Just args
+    _ -> False
+  where
+    binder (L _ (VarPat _ n)) = Just (unLoc n)
+    binder _ = Nothing
+
+-- Select one nominal method using the complete Demand-anchored class schema.
+-- The names of the class and its methods are irrelevant. A list-valued method
+-- in an unrelated class, or another field in this class, earns no permission.
+demandShrinkMethods :: Runtime -> [TypecheckedModule] -> Ghc [Name]
+demandShrinkMethods rt modules = do
+    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (mkFastString quickCheckPackage))
+    gen <- resolveType qc "Gen"
+    liftShrink <- resolveExport qc "liftShrink"
+    let methods = [(getName shrink, getName cls) | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
+            Just cls <- [tyConClass_maybe tc], [v] <- [classTyVars cls],
+            let a = mkTyVarTy v, [super] <- [classSCTheta cls],
+            Just (demand, [operand]) <- [getClassPredTys_maybe super],
+            getName demand == runtimeName rt "Memorist.Data.Interface.Demand" "Demand", eqType operand a,
+            [_, _] <- [classMethods cls], shrink <- classMethods cls,
+            let (args, result) = signature shrink,
+            [value, demanded] <- [args], eqType value a, dem a demanded,
+            Just (list, [element]) <- [splitTyConApp_maybe result], list == listTyCon, eqType element demanded,
+            any (generator gen a) (filter (/= shrink) (classMethods cls))]
+        fieldSources = [(name, selected) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+            binding <- collectAst group :: [HsBind GhcRn], Just name <- [bindingName binding], isExternalName name,
+            Just selected <- [fieldProtocol liftShrink binding], selected `elem` map fst methods]
+    fields <- forM fieldSources $ \(name, selected) -> do
+        thing <- lookupName name
+        pure [name | Just (AnId identifier) <- [thing], fieldSignature (lookup selected methods) (idType identifier)]
+    pure (map fst methods ++ concat fields)
+  where
+    signature method = let (_, _, body) = tcSplitSigmaTy (idType method)
+                           (args, result) = splitFunTys body
+                       in (map scaledThing args, result)
+    dem a ty = case splitTyConApp_maybe ty of
+        Just (family, [operand]) -> getName family == runtimeName rt "Memorist.Data.Interface.Demand" "Dem" && eqType operand a
+        _ -> False
+    generator gen a method = case signature method of
+        ([budget, value], result) | eqType budget intTy, eqType value a,
+            Just (actual, [demanded]) <- splitTyConApp_maybe result -> actual == gen && dem a demanded
+        _ -> False
+    fieldProtocol liftShrink binding = do
+        [([L _ (VarPat _ value)], body)] <- equations binding
+        let (outer, args) = firstOrderCall body
+        actual <- variable outer
+        [inner] <- pure args
+        if actual /= liftShrink then Nothing else do
+            let (method, operands) = firstOrderCall inner
+            selected <- variable method
+            [payload] <- pure operands
+            let (observer, fields) = firstOrderCall payload
+            actualObserver <- variable observer
+            [field] <- pure fields
+            actualField <- variable field
+            if actualObserver `elem` roleNames rt Payload && actualField == unLoc value then Just selected else Nothing
+    fieldSignature expected ty = case tcSplitSigmaTy ty of
+        ([v], [predicate], body) | Just (cls, [a]) <- getClassPredTys_maybe predicate,
+            Just (getName cls) == expected, eqType a (mkTyVarTy v),
+            ([value, demanded], result) <- let (args, out) = splitFunTys body in (map scaledThing args, out),
+            nominal "Memorist.Base.Thunk" "Th" a value,
+            Just (thd, [element]) <- splitTyConApp_maybe demanded,
+            getName thd == runtimeName rt "Memorist.Data.Interface.Demand" "ThD", dem a element,
+            Just (list, [out]) <- splitTyConApp_maybe result -> list == listTyCon && eqType out demanded
+        _ -> False
+    nominal owner label arg ty = case splitTyConApp_maybe ty of
+        Just (tc, [actual]) -> getName tc == runtimeName rt owner label && eqType arg actual
+        _ -> False
 
 -- References belong to the immediate equation. Nested definitions, including
 -- unused ones, have their own role and cannot borrow their parent's authority.

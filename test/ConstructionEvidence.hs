@@ -10,7 +10,7 @@ import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeTyp
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
-import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding)
+import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding, shrinkSupport)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -100,7 +100,8 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                  collect = case role of
                      Just _ -> usesExcept qc (sourceBinding utilities)
                      Nothing -> uses qc
-             in recordRole role (coreLocation locals binder) (Left (getName binder)) (collect selected env given rhs) ++
+             in (if shrinkSupport role then [] else
+                    recordRole role (coreLocation locals binder) (Left (getName binder)) (collect selected env given rhs)) ++
                  concat [recordRole (supportBinding utilities (getName v)) (coreLocation locals v)
                      (Left (getName v)) (usesExcept qc (sourceBinding utilities) selected env given body) |
                      Just _ <- [role], (v, body) <- allBindings [C.NonRec binder rhs],
