@@ -9,11 +9,11 @@ import ConstructionAllocation (checkPhantomAllocation)
 import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
-import ConstructionLocals (localBindings)
+import ConstructionLocals (localBindings, independentBinding)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
-import ConstructionRoles (quickCheckRoles, homeDemandTypes, supportRoles, demandShrinkMethods)
+import ConstructionRoles (quickCheckRoles, homeDemandTypes, supportRoles, demandShrinkMethods, supportValues)
 import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (coreViewNames, viewSupport)
@@ -87,9 +87,10 @@ constructionReports output =
         qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
         shrinkers <- demandShrinkMethods rt checkedModules
-        let utilities = supportRoles rt qc shrinkers checkedPrograms
+        let roles = supportRoles rt qc shrinkers checkedPrograms
+            utilities = supportValues (independentBinding locals) checkedModules roles
             uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
-            locals = localBindings rt qc checkedModules
+            locals = localBindings rt qc roles checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
             let (syntaxProblems, sites) = checkSyntax rt utilities locals uses homes methods views checked

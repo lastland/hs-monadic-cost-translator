@@ -9,7 +9,7 @@ import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType)
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
+import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding, shrinkSupport)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -105,7 +105,8 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                  concat [recordRole (supportBinding utilities (getName v)) (coreLocation locals v)
                      (Left (getName v)) (usesExcept qc (sourceBinding utilities) selected env given body) |
                      Just _ <- [role], (v, body) <- allBindings [C.NonRec binder rhs],
-                     getName v /= getName binder, sourceBinding utilities (getName v), not (isQuickCheckBinding qc v)]
+                     getName v /= getName binder, sourceBinding utilities (getName v),
+                     not (shrinkSupport role) || independentBinding locals (getName v), not (isQuickCheckBinding qc v)]
             | (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession

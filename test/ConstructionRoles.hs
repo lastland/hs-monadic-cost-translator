@@ -5,6 +5,7 @@ module ConstructionRoles
     , Support, supportRoles, supportAt, supportBinding, sourceBinding
     , demandShrinkMethods, shrinkSupport
     , restrictedSupport
+    , supportValues
     ) where
 
 import ConstructionAst
@@ -35,6 +36,7 @@ import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
 import GHC.Types.SrcLoc (getBufSpan, bufSpanStart, bufSpanEnd)
 import GHC.Types.Name.Set (NameSet)
+import GHC.Types.Name (isInternalName)
 
 -- Permission belongs to the nominal class field, never its dictionary or
 -- spelling. Every nested declaration starts a fresh ordinary obligation.
@@ -69,7 +71,7 @@ supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrap
     shrinkWrappers = wrappers (Set.fromList shrinkers)
     shrinkReach = Set.union shrinkWrappers (Set.intersection (Map.keysSet edges) (forwardReach DemandShrink))
     wrappers known = let next = Set.union known (Set.fromList
-                             [n | (m, b) <- bindings, helper m b, Just n <- [bindingName b], forwards known b])
+                             [n | (m, b) <- bindings, helper m b, forwards known b, Just n <- [bindingName b]])
                      in if next == known then known else wrappers next
     reached DemandShrink = shrinkReach
     reached role = forwardReach role
@@ -93,8 +95,9 @@ supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrap
     exports = [(getName poly, getName mono) | m <- modules,
         ABE poly mono _ _ <- collectAst (tm_typechecked_source m)]
     fields = [(getName method, role) | (_, program) <- programs, (df, rhs) <- C.flattenBinds program, isDFunId df,
+        let (_, body) = C.collectBinders rhs,
         Just (cls, _) <- [getClassPredTys_maybe (snd (splitFunTys (snd (splitForAllTyVars (idType df)))))],
-        let (_, body) = C.collectBinders rhs, (C.Var con, args) <- [C.collectArgs body],
+        (C.Var con, args) <- [C.collectArgs body],
         con == dataConWorkId (tyConSingleDataCon (classTyCon cls)),
         let values = filter (not . C.isTyCoArg) args,
         length values == length (classAllSelIds cls),
@@ -133,6 +136,19 @@ sourceBinding (Support _ _ names _) name = Set.member name names
 
 restrictedSupport :: Support -> Name -> Bool
 restrictedSupport (Support _ _ _ names) name = Set.member name names
+
+-- Reuse the existing value-demand analysis: a consumed local value is part of
+-- its utility expression. Callable helpers and unused declarations remain
+-- independent boundaries, just as they do below a generator or property.
+supportValues :: (Name -> Bool) -> [TypecheckedModule] -> Support -> Support
+supportValues independent modules (Support regions names declared restricted) =
+    Support [entry | entry@(owner, at, role) <- regions,
+        role /= Nothing || (owner, at) `notElem` consumed] names declared restricted
+  where
+    consumed = [(checkedHome m, getLocA b) | m <- modules,
+        Just (group, _, _, _, _) <- [tm_renamed_source m], b <- collectAst group :: [LHsBind GhcRn],
+        let ns = collectHsBindBinders CollNoDictBinders (unLoc b),
+        not (null ns), all (\n -> isInternalName n && not (independent n)) ns]
 
 shrinkSupport :: Maybe [Role] -> Bool
 shrinkSupport = (== Just [DemandShrink])

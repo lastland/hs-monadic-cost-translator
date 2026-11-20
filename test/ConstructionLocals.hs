@@ -1,12 +1,12 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
 module ConstructionLocals (Locals, quickCheckBindings, checkedActions, SourceBody(..), SourceSite(..), localBindings, implicitSource,
-    implicitBindingAt, nestedSource, ordinaryCoreBindings, components, coreLocation) where
+    implicitBindingAt, nestedSource, ordinaryCoreBindings, components, coreLocation, independentBinding) where
 
 import ConstructionAst (bindingName, checkedModule, children, collectAst, constructorPattern, firstOrderCall, nestedBindings, reachable, strictNullaryRhs, typedVariable, variable)
 import ConstructionActionFields (ActionFields, actionFields, inModule, sourceActions)
 import ConstructionImplicit
-import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
+import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody, Support, supportAt, shrinkSupport)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
 import Control.Monad (zipWithM)
 import Data.Data (Data, cast)
@@ -102,8 +102,8 @@ data BindingRegion = BindingRegion
 data CheckedGroup = CheckedGroup
     { groupChecked :: TypecheckedModule, groupSource :: HsGroup GhcRn, groupIPs :: Implicits }
 
-localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
-localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries ipsByModule (inModule actions)
+localBindings :: Runtime -> QuickCheck -> Support -> [TypecheckedModule] -> Locals
+localBindings rt qc utilities modules = Locals qc values (reachable aliases independent) dictionaries ipsByModule (inModule actions)
   where
     formals = implicitFormals qc modules
     groups = [CheckedGroup{groupChecked = m, groupSource = group, groupIPs = implicitParameters formals m} |
@@ -118,7 +118,11 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
       where ip = groupIPs g
     topRegions g = concat [region ip (if exempt b then Testing else Ordinary) [] (bodyParts (references ip) b) |
         b <- fst (parts (const []) (groupSource g))]
-      where ip = groupIPs g; exempt = quickCheckBody qc (groupChecked g)
+       where
+         ip = groupIPs g
+         exempt b = quickCheckBody qc (groupChecked g) b || case b of
+             FunBind _ n _ -> shrinkSupport (supportAt utilities (groupChecked g) (getLocA n))
+             _ -> False
     implicitRegions g = concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (references ip) rhs) |
         rhs <- implicitBodies (groupSource g), let vs = [v | Just (v, _) <- [bindingAt ip (getLocA rhs)]]]
       where ip = groupIPs g
@@ -255,3 +259,6 @@ ordinaryCoreBindings locals bs = filter (not . isQuickCheckBinding qc . fst) bs 
 -- GHC's IP dictionary Id can have no source span; its declaration has one.
 coreLocation :: Locals -> Id -> SrcSpan
 coreLocation locals v = Map.findWithDefault (nameSrcSpan n) n (ipSites locals) where n = getName v
+
+independentBinding :: Locals -> Name -> Bool
+independentBinding locals name = Set.member name (independentIds locals)

@@ -6,8 +6,7 @@ import ConstructionActionFields (missingActions, sourceActions)
 import ConstructionAst
 import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitSource, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
-import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
-import ConstructionRoles (Support, supportAt, shrinkSupport, restrictedSupport)
+import ConstructionRoles (isQuickCheckBinding, quickCheckBody, Support, supportAt, shrinkSupport, restrictedSupport)
 import ConstructionRuntime
 import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
@@ -98,7 +97,7 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, (exempt binding || shrinkBinding binding), not (strictBinding binding) =
+        | Just binding <- cast value, exempt binding || shrinkBinding binding, not (strictBinding binding) =
             foldr (plus . nested location) ([], []) (nestedSource locals binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
