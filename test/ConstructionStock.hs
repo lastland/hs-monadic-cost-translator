@@ -16,7 +16,7 @@ import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.Type (isPredTy, substTyWith)
+import GHC.Core.Type (isPredTy, splitTyConApp_maybe, substTyWith)
 import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Core.Utils (exprType)
 import GHC.Types.Var (isId, isTyVar)
@@ -32,9 +32,17 @@ stockUse rt homes programs origin tag use =
     stocks = concat [ss | StockMethods _ ss <- programs]
     env = Map.unions [e | StockMethods e _ <- programs]
     homeEntry (Use _ _ ScalarMethod _ [e]) = case resolve [] e of
-        Just (Instance df _ _ _) -> runtimeOwns rt (getName df) || any (\(Stock owner _ _ _ _) -> df == owner) stocks
+        Just (Instance df predicate _ ds) -> stockOwner df ||
+            (runtimeOwns rt (getName df) &&
+             case (getClassPredTys_maybe predicate, ds) of
+                (Just (_, [operand]), [child]) -> case splitTyConApp_maybe operand of
+                    Just (tc, [payload]) -> getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD" &&
+                        (scalarType payload || case child of Instance owner _ _ _ -> stockOwner owner; _ -> False)
+                    _ -> False
+                _ -> False)
         _ -> False
     homeEntry _ = False
+    stockOwner df = any (\(Stock owner _ _ _ _) -> df == owner) stocks
     prove _ _ obligation | tag obligation = True
     prove active own (Use method expected ScalarMethod [operand] [e])
         | not (isProtected rt operand), Just ev <- resolve [] e,
@@ -60,12 +68,10 @@ stockUse rt homes programs origin tag use =
             _ -> False
     ordinary _ = False
     runtime active own method (Instance df predicate args [child])
-        | Just (childMethod, childType) <- runtimeDemandMethod rt method df predicate args [p],
+        | Just p <- predicateOf child,
+          Just (childMethod, childType) <- runtimeDemandMethod rt method df predicate args [p],
           Just (cls, _) <- getClassPredTys_maybe predicate =
             prove active own (Use childMethod (getName cls) ScalarMethod [childType] [child])
-      where p = case predicateOf child of
-                Just actual -> actual
-                Nothing -> predicate
     runtime _ _ _ _ = False
     selected active own method evidence@(Instance df predicate args ds) =
         case [s | s@(Stock actual _ _ _ _) <- stocks, actual == df] of
@@ -169,7 +175,7 @@ stockUse rt homes programs origin tag use =
             template <- fieldEvidence local (getName helper : seen) (Set.union given (Set.fromList (map getName slots))) body
             let ty = substTyWith vs ts
             guard (and (zipWith (\v d -> maybe False (eqType (ty (idType v))) (predicateOf d)) slots values))
-            result <- pure (substitute ty (zip (map getName slots) values) template)
+            let result = substitute ty (zip (map getName slots) values) template
             guard (maybe False (eqType (exprType expression)) (predicateOf result))
             pure result
         evidence -> Just evidence
