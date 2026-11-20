@@ -118,6 +118,8 @@ checkGeneratedConstructionSpecimens = do
     checksQuickCheckMixed
     checksMixedMakeInstances
     checksOperandPropertyCall
+    mixed "OperandWrappedProperty.hs" (map TopBinding ["draw", "prop_own", "prop_scalar"]) "OperandWrappedProperty.hs"
+        [(10, wrappedForce "law"), (11, wrappedForce "relay")]
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
@@ -308,6 +310,7 @@ checkGeneratedConstructionSpecimens = do
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
     qcValue name = "QuickCheck value used outside a generator or property: " ++ name
+    wrappedForce wrapper = qcValue ("OperandPropertyLaws." ++ wrapper) ++ " (operand in ordinary callee OperandPropertyLaws.strict at this instantiation)"
     selected op = "unapproved selected method " ++ op
     unknown op = selected (op ++ ": unknown executable method/default dependency")
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
