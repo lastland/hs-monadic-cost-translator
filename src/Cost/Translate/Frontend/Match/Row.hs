@@ -41,7 +41,7 @@ data Row = Row
     , rowStep :: Step
     }
 
-data Step = Ready (Facts -> O.Expr -> Result) | Inspect Subject Check
+data Step = Ready (Facts -> Env) Body | Inspect Subject Check
 
 data Subject = Subject
     { position :: [Int]
@@ -79,9 +79,9 @@ prepareRow env sources (location, patterns, body) =
             Just (Constructor _ _ names) -> Just names
             _ -> Nothing
         row bindings = Row (Set.fromList (map fst bindings)) next
-        advance _ scope bindings [] = Right (row bindings (Ready finish))
+        advance _ scope bindings [] = Right (row bindings (Ready finish body))
             where
-                finish facts = body (refine facts bindings scope)
+                finish facts = refine facts bindings scope
         advance used scope bs ((column, thunk, pat) : rest) = case test pat of
             Skip -> done
             Equal value -> inspect (Right (Compare value done))

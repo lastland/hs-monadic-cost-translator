@@ -31,12 +31,11 @@ bindAliases env pos names =
 
 refine :: Facts -> Sources -> Env -> Env
 refine facts sources env =
-    env {knownScalarValues = Map.unionWith (++) entries (knownScalarValues env)}
+    Map.foldrWithKey bind env (Map.fromListWith (++) groups)
     where
-        entries =
-            Map.fromListWith
-                (++)
-                [ (n, [(ty, v)])
-                | (p, (n, ty)) <- sources
-                , Just v <- [Map.lookup p facts]
-                ]
+        groups = [(pos, [key]) | (pos, key) <- sources]
+        bind pos keys scope =
+            let linked = aliasScalars keys scope
+             in case Map.lookup pos facts of
+                    Nothing -> linked
+                    Just value -> foldr (`rememberScalar` value) linked keys

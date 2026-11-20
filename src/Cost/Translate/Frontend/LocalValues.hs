@@ -141,10 +141,7 @@ withLocalThunk scope binding name bindingType reference done
         let inner = case bindingType of
                 Just ty
                     | closedScalar ty ->
-                        bound
-                            { knownScalarValues =
-                                Map.insert name [(ty, O.v value)] facts
-                            }
+                        rememberScalar (name, ty) (O.v value) bound
                 _ -> bound
         continuation <- done inner
         pure
@@ -155,7 +152,6 @@ withLocalThunk scope binding name bindingType reference done
     | otherwise = done bound
     where
         bound = insertEnv name (Thunk reference) scope
-        facts = knownScalarValues bound
 
 usedNames :: O.Expr -> Set.Set String
 usedNames continuation =

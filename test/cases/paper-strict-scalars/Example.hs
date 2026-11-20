@@ -25,6 +25,25 @@ nestedAnd flag x = if flag && (x > 0 && x < 8) then x + 2 else 0
 bangNext :: Int -> Int
 bangNext x = let !y = work x in y + 1
 
+letGuard, variableGuard :: Int -> Int
+letGuard x
+    | let y = x, x > 0 = y
+    | otherwise = x - 1
+variableGuard x
+    | y <- x, x > 0 = y
+    | otherwise = x - 1
+
+checkedFlag :: Bool -> Bool
+-- Keep both Bool uses visible to the translator.
+{- HLINT ignore checkedFlag "Redundant if" -}
+{- HLINT ignore checkedFlag "Redundant ==" -}
+checkedFlag flag = if (flag :: Bool) then flag == True else False
+
+aliasGuard :: Bool -> Int -> Maybe Int
+aliasGuard enabled x
+    | y <- x, enabled, x > 0 = Just y
+    | otherwise = Just x
+
 literal :: Int -> Int
 literal x@0 = x + 1
 literal y@1 = y + 2
@@ -90,3 +109,9 @@ mappedGuards x y
 {-# LINE 100 "Guard.hs" #-}
     , y > 0 = x - y
     | otherwise = 0
+
+viaCase :: Int -> Int
+viaCase x = case x of y -> y + x
+
+nested :: Int -> Int
+nested x = if x + 1 > 0 then x + 2 else x

@@ -1,7 +1,14 @@
-module Cost.Translate.Frontend.Expression.Conditions (underCondition) where
+module Cost.Translate.Frontend.Expression.Conditions
+    ( constantCondition
+    , underCondition
+    ) where
 
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expression.Scalar (ScalarCall (..), scalarCall)
+import Cost.Translate.Frontend.Expression.Scalar
+    ( ScalarCall (..)
+    , checkSignature
+    , scalarCall
+    )
 import Cost.Translate.Frontend.Expression.Thunks
     ( conditionalAction
     , emitSaturated
@@ -15,6 +22,7 @@ import Cost.Translate.Output qualified as O
 import Cost.Translate.Primitive (Destination (Branching), Primitive (..))
 import Data.Map.Strict qualified as Map
 import GHC
+import GHC.Builtin.Types (boolTy)
 
 type Result = Either String O.Expr
 type Branch = Env -> Result
@@ -27,6 +35,15 @@ select env build yes no = do
     n <- no env
     build y n
 
+constantCondition :: Env -> LHsExpr GhcRn -> Maybe Bool
+constantCondition env expr = case unLoc expr of
+    HsPar _ e -> constantCondition env e
+    ExprWithTySig _ e signature -> do
+        checkSignature env expr signature boolTy
+        constantCondition env e
+    HsVar _ name -> booleanConstant (unLoc name)
+    _ -> Nothing
+
 underCondition ::
     (Env -> String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)) ->
     (Env -> LHsExpr GhcRn -> Result) ->
@@ -38,8 +55,8 @@ underCondition prepare render = go Nothing
     where
         go hint env condition continue = case unLoc condition of
             HsPar _ expr -> go hint env expr continue
-            HsVar _ name
-                | Just b <- booleanConstant (unLoc name) ->
+            _
+                | Just b <- constantCondition env condition ->
                     continue env (select env (constant b))
             _
                 | Just call <- scalarCall env condition

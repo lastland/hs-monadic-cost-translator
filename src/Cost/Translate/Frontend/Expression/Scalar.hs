@@ -2,6 +2,7 @@ module Cost.Translate.Frontend.Expression.Scalar
     ( ScalarCall (..)
     , scalarCall
     , scalarLiteral
+    , checkSignature
     ) where
 
 import Control.Monad (guard)

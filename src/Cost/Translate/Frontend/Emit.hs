@@ -1,6 +1,6 @@
 module Cost.Translate.Frontend.Emit (emitBind, emitExpr, emitCondition) where
 
-import Control.Monad (unless, zipWithM)
+import Control.Monad (unless, void, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Expression.Arguments
@@ -9,8 +9,8 @@ import Cost.Translate.Frontend.Expression.Thunks
 import Cost.Translate.Frontend.Expression.Values (knownValue, returningScalar)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
-import Cost.Translate.Frontend.Match.Facts qualified as Facts
 import Cost.Translate.Frontend.Match.Fallback (withFallback)
+import Cost.Translate.Frontend.Match.Pattern qualified as P
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Patterns
 import Cost.Translate.Frontend.Polymorphic
@@ -46,24 +46,21 @@ emitBind outer binding = case unLoc binding of
 emitGuards ::
     Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
 emitGuards _ [] fallback = Right fallback
-emitGuards env [L _ (GRHS _ [] body)] _ = emitExpr env body
-emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback =
-    case guards of
-        L _ (BodyStmt _ expr _ _) : gs ->
-            underCondition emitThunk emitExpr env expr $ \scope choose ->
-                if null gs
-                    then choose (`emitExpr` body) followingAction
-                    else following scope $ \miss ->
-                        let yes s = emitGuardStatements s body gs miss
-                         in choose yes (const (Right miss))
-        s@(L _ (BindStmt _ pat expr)) : gs
-            | not (null (Facts.scrutinee env expr)) ->
-                patternGuard env (getLocA s) pat expr body gs following
-        _ -> following env (emitGuardStatements env body guards)
+emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
+    let failures = scanr ((||) . canMiss) False guards
+    -- Still diagnose unsupported syntax in unreachable alternatives.
+    unless (or failures) (void (emitGuards env rest fallback))
+    emitGuardStatements env body (zip guards (drop 1 failures)) following
     where
-        followingAction scope = emitGuards scope rest fallback
+        canMiss (L _ statement) = case statement of
+            LetStmt {} -> False
+            BodyStmt _ expr _ _ -> constantCondition env expr /= Just True
+            BindStmt _ pat _ -> case P.patternAt (const Nothing) pat "" of
+                Right (P.Pattern _ _ P.Skip) -> False
+                _ -> True
+            _ -> True
         following scope build = do
-            next <- followingAction scope
+            next <- emitGuards scope rest fallback
             withFallback label next build
         label = actionName env "nextGuard" (getLocA located)
 
@@ -78,32 +75,35 @@ emitMatchBody env match failure =
 emitGuardStatements ::
     Env ->
     LHsExpr GhcRn ->
-    [GuardLStmt GhcRn] ->
-    O.Expr ->
+    [(GuardLStmt GhcRn, Bool)] ->
+    GuardEnd ->
     Either String O.Expr
 emitGuardStatements scope body [] _ = emitExpr scope body
-emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next =
-    underCondition emitThunk emitExpr scope expr $ \_ choose ->
-        choose (\s' -> emitGuardStatements s' body gs next) (const (Right next))
-emitGuardStatements scope body (s@(L _ (BindStmt _ pat expr)) : gs) next =
-    patternGuard scope (getLocA s) pat expr body gs (\_ build -> build next)
-emitGuardStatements scope body (L _ (LetStmt _ locals) : gs) next =
+emitGuardStatements env body ((L _ (BodyStmt _ expr _ _), later) : gs) next
+    | constantCondition env expr == Just True = yes next env
+    | otherwise =
+        underCondition emitThunk emitExpr env expr $ \common choose ->
+            if later
+                then next common $ \miss ->
+                    let joined _ build = build miss
+                     in choose (yes joined) (const (Right miss))
+                else choose (yes next) (`next` Right)
+    where
+        yes end scope = emitGuardStatements scope body gs end
+emitGuardStatements scope body ((s@(L _ (BindStmt _ pat expr)), _) : gs) next =
+    withMatchThunk scope (actionName scope "guardThunk" site) expr $ \ref ->
+        matchGuard
+            scope
+            site
+            expr
+            (ref, pat)
+            (\s' -> emitGuardStatements s' body gs)
+            next
+    where
+        site = getLocA s
+emitGuardStatements scope body ((L _ (LetStmt _ locals), _) : gs) next =
     withLocals scope locals (\scope' -> emitGuardStatements scope' body gs next)
 emitGuardStatements _ _ _ _ = Left "unsupported guard statement"
-
-patternGuard ::
-    Env ->
-    SrcSpan ->
-    LPat GhcRn ->
-    LHsExpr GhcRn ->
-    LHsExpr GhcRn ->
-    [GuardLStmt GhcRn] ->
-    (Env -> (O.Expr -> Either String O.Expr) -> Either String O.Expr) ->
-    Either String O.Expr
-patternGuard env site pat expr body gs end =
-    withMatchThunk env (actionName env "guardThunk" site) expr $ \reference ->
-        let yes scope = emitGuardStatements scope body gs
-         in matchRows env (Just expr) [(site, [(reference, pat)], yes)] end
 
 withLocals ::
     Env ->

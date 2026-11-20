@@ -41,6 +41,22 @@ whenFlag entered result flag x = do
 bangNextM :: M.Th Int -> M.MemoristM Int
 bangNextM x = M.tick >> M.tick >> ((\n -> double n + 1) <$> M.force x)
 
+letGuardM, variableGuardM :: M.Th Int -> M.MemoristM Int
+letGuardM x = M.tick >> ((\n -> if n <= 0 then pred n else n) <$> M.force x)
+variableGuardM = letGuardM
+
+checkedFlagM :: M.Th Bool -> M.MemoristM Bool
+checkedFlagM flag = M.tick >> M.force flag
+
+aliasGuardM :: M.Th Bool -> M.Th Int -> M.MemoristM (M.MaybeT Int)
+aliasGuardM enabled x = do
+    M.tick
+    check <- M.force enabled
+    if check then do
+        n <- M.force x
+        n `seq` pure (M.JustT x)
+    else pure (M.JustT x)
+
 literalM, inspectM :: M.Th Int -> M.MemoristM Int
 literalM x = M.tick >> ((\n -> fromMaybe 0 (lookup n [(0,1), (1,3)])) <$> M.force x)
 inspectM x = M.tick >> ((\n -> if n == 0 then 1 else n - 1) <$> M.force x)
@@ -125,3 +141,12 @@ shadowPlusM x = M.tick >> M.tick >> M.force x
 
 givenAddM :: M.Th Int -> M.MemoristM (M.MaybeT Int)
 givenAddM x = M.tick >> (M.JustT <$> M.lazy ((+ 1) <$> M.force x))
+
+viaCaseM :: M.Th Int -> M.MemoristM Int
+viaCaseM x = M.tick >> (double <$> M.force x)
+
+nestedM :: M.Th Int -> M.MemoristM Int
+nestedM x = M.tick >> (result <$> M.force x)
+  where
+    result n | n + 1 <= 0 = n
+             | otherwise = n + 2

@@ -1,4 +1,8 @@
-module Cost.Translate.Frontend.Patterns (matchRows, matchesWith) where
+module Cost.Translate.Frontend.Patterns
+    ( GuardEnd
+    , matchGuard
+    , matchesWith
+    ) where
 
 import Cost.Translate.Datatypes (constructors)
 import Cost.Translate.Frontend.Environment
@@ -16,6 +20,8 @@ import Data.Set qualified as Set
 import GHC
 
 type End = Facts -> (O.Expr -> Result) -> Result
+
+type GuardEnd = Env -> (O.Expr -> Result) -> Result
 
 matchesWith ::
     (Env -> Match GhcRn (LHsExpr GhcRn) -> O.Expr -> Result) ->
@@ -37,15 +43,38 @@ matchRows ::
     Env ->
     Maybe (LHsExpr GhcRn) ->
     [(SrcSpan, [(O.Expr, LPat GhcRn)], Body)] ->
-    (Env -> (O.Expr -> Result) -> Result) ->
+    GuardEnd ->
     Result
 matchRows env original equations end = do
     let sources = maybe [] (scrutinee env) original
-        known = case original >>= knownValue env of
-            Just (_, v) | not (null sources) -> Map.singleton [0] v
-            _ -> Map.empty
+        known = rootFacts env original sources
     rows <- mapM (prepareRow env sources) equations
     underRows env known rows (\facts -> end (refine facts sources env))
+
+rootFacts :: Env -> Maybe (LHsExpr GhcRn) -> Sources -> Facts
+rootFacts env original sources = case original >>= knownValue env of
+    Just (_, v) | not (null sources) -> Map.singleton [0] v
+    _ -> Map.empty
+
+matchGuard ::
+    Env ->
+    SrcSpan ->
+    LHsExpr GhcRn ->
+    (O.Expr, LPat GhcRn) ->
+    (Env -> GuardEnd -> Result) ->
+    GuardEnd ->
+    Result
+matchGuard env site expr subject success end = do
+    let sources = scrutinee env expr
+        known = rootFacts env (Just expr) sources
+        joined scope miss = success scope (\_ build -> build miss)
+    row <- prepareRow env sources (site, [subject], joined)
+    case rowStep row of
+        -- Binding aliases alone cannot miss. Let the next inspection decide
+        -- which facts dominate all paths to the following guard.
+        Ready scope _ -> success (scope known) end
+        Inspect {} ->
+            underRows env known [row] (\facts -> end (refine facts sources env))
 
 compileRows :: Env -> Facts -> [Row] -> O.Expr -> Result
 compileRows env facts rows failure =
@@ -54,7 +83,7 @@ compileRows env facts rows failure =
 underRows :: Env -> Facts -> [Row] -> End -> Result
 underRows _ facts [] end = end facts Right
 underRows env facts allRows@(Row _ name step : rows) end = case step of
-    Ready finish -> following facts name rows (finish facts)
+    Ready scope finish -> following facts name rows (finish (scope facts))
     Inspect subject check ->
         let (neighbors, rest) = spanMap (sameSubject subject) rows
             checks = (name, check) :| neighbors
