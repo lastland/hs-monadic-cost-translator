@@ -39,3 +39,16 @@ type family Grow a where
 
 same :: a -> Grow a -> Grow a
 same _ x = x
+
+type family Route a where
+    Route Bool = Route Char
+    Route Char = Q.Gen Bool
+type family Tag a where
+    Tag Int = Bool
+
+routed :: a -> Route (Tag a) -> Bool
+routed _ x = seq x True
+
+-- This cast depends on a local assumption; it cannot certify upstream.
+conditional :: (Open Bool ~ Q.Property) => Open Bool -> Q.Property
+conditional x = x

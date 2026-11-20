@@ -22,3 +22,6 @@ local = Q.property True
 prop_generic, prop_strip :: Q.Property
 prop_generic = generic True draw `seq` Q.property True
 prop_strip = Q.property (strip [True] (Q.property True))
+
+prop_routed :: Q.Property
+prop_routed = Q.property (routed (0 :: Int) draw)
