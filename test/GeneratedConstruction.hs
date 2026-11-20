@@ -139,7 +139,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuickCheckMappedLines.hs"
     mappedViews <- specimen "MappedViewGraph.hs"
     typechecks mappedViews
-    rejection mappedViews >>= \reports -> requireAt reports "SharedViewInput.hs" [(50, forbidden tval)]
+    rejection mappedViews >>= onlySite "SharedViewInput.hs" (50, forbidden tval)
     checksMappedBang
     mixed "QuickCheckStrictArgument.hs" [TopBinding "strict", TopBinding "prop_specialized"] "QuickCheckStrictArgument.hs"
         [(11, qcValue "QuickCheckStrictArgument.strict"), (14, qcValue "GHC.Prim.seq"),
@@ -340,11 +340,9 @@ checkGeneratedConstructionSpecimens = do
         output <- specimen "OperandPropertyCall.hs"
         typechecks output
         diagnostics <- rejection output
-        reports <- siteReports output diagnostics
         -- Only the ordinary callee is at fault; the same property observes a
         -- thunk and constructs its generator on the very same source line.
-        unless (length reports == 1 && hasSite (12, qcValue "OperandPropertyCall.strict") reports) $
-            fail (output ++ ": expected only the ordinary callee's operand diagnostic, got " ++ diagnostics)
+        onlySite output (12, qcValue "OperandPropertyCall.strict") diagnostics
     checksNestedInstanceRoles = do
         output <- specimen "NestedInstanceRoles.hs"
         typechecks output
@@ -494,6 +492,10 @@ checkGeneratedConstructionSpecimens = do
         definitions <- definitionSpans <$> parseHaskellModule output
         reports <- siteReports output diagnostics
         mapM_ (checkDefinition output definitions reports) expected
+    onlySite path target diagnostics = do
+        reports <- siteReports path diagnostics
+        unless (length reports == 1 && hasSite target reports) $
+            fail (path ++ ": expected only " ++ show target ++ "\nGot: " ++ diagnostics)
     requireAt diagnostics path expected = do
         reports <- siteReports path diagnostics
         let require target@(line, reason) = unless (hasSite target reports) $
