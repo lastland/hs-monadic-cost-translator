@@ -92,8 +92,7 @@ checkSelection = do
                 not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"])) $
             fail ("setup errors must be fatal, not reported as reference regressions\n" ++ childResult status out err)
     checkInterrupted executable
-    checkCrashedCompiler executable
-    checkPanickedCompiler executable
+    checkCandidateCompilerCrashes executable
     checkMissingRuntimeCompilerCrash executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
 
@@ -198,55 +197,35 @@ checkNegativeComparerCrash executable =
                 childResult status out err)
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
-checkCrashedCompiler :: FilePath -> IO ()
-checkCrashedCompiler executable =
-    withSystemTempDirectory "reference-selection-crash-" $ \root -> do
-        realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
-        environment <- getEnvironment
-        let commands = root </> "commands"
-            wrapper = commands </> "ghc"
-            injected =
-                [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
-                ,("REFERENCE_REAL_GHC", realGhc)]
-            child = (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
-                {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)}
-        createDirectoryIfMissing True commands
-        writeFile wrapper (unlines
-            ["#!/bin/sh", "case \"$*\" in *Generated.hs*) kill -TERM \"$$\" ;; esac"
-            ,"exec \"$REFERENCE_REAL_GHC\" \"$@\""])
-        permissions <- getPermissions wrapper
-        setPermissions wrapper permissions {executable = True}
-        (status, out, err) <- readCreateProcessWithExitCode child ""
-        unless (status /= ExitSuccess &&
-                "setup error: generated module compiler crashed" `isInfixOf` err &&
-                not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
-                length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
-            fail ("compiler crashes must stop the suite, not become deferred failures\n" ++ childResult status out err)
-
-checkPanickedCompiler :: FilePath -> IO ()
-checkPanickedCompiler executable =
-    withSystemTempDirectory "reference-selection-panic-" $ \root -> do
-        realGhc <- findExecutable "ghc" >>= maybe (fail "compiler panic test needs ghc") pure
-        environment <- getEnvironment
-        let wrapper = root </> "ghc"
-            injected =
-                [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
-                ,("REFERENCE_REAL_GHC", realGhc)]
-        writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
-            ["case \"$*\" in *Generated.hs*)"
-            ,"  echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1 ;; esac"]
-            ["exec \"$0.real\" \"$@\""])
-        permissions <- getPermissions wrapper
-        setPermissions wrapper permissions {executable = True}
-        (status, out, err) <- readCreateProcessWithExitCode
-            (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
-                {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
-        unless (status /= ExitSuccess &&
-                "setup error: generated module compiler crashed" `isInfixOf` err &&
-                not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
-                length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
-            fail ("compiler exit-1 panics must stop the suite before later cases\n" ++ childResult status out err)
-        putStrLn "PASS: reference-selection / candidate compiler exit-1 panic is fatal"
+checkCandidateCompilerCrashes :: FilePath -> IO ()
+checkCandidateCompilerCrashes executable =
+    mapM_ check
+        [("signal", "kill -TERM \"$$\"")
+        ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+  where
+    check (label, crash) =
+        withSystemTempDirectory "reference-selection-crash-" $ \root -> do
+            realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
+            environment <- getEnvironment
+            let wrapper = root </> "ghc"
+                injected =
+                    [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
+                    ,("REFERENCE_REAL_GHC", realGhc)]
+            writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
+                ["case \"$*\" in *Generated.hs*)", "  " ++ crash ++ " ;; esac"]
+                ["exec \"$0.real\" \"$@\""])
+            permissions <- getPermissions wrapper
+            setPermissions wrapper permissions {executable = True}
+            (status, out, err) <- readCreateProcessWithExitCode
+                (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
+                    {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
+            unless (status /= ExitSuccess &&
+                    "setup error: generated module compiler crashed" `isInfixOf` err &&
+                    not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
+                    length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
+                fail ("candidate compiler " ++ label ++ " must stop the suite before later cases\n" ++
+                    childResult status out err)
+            putStrLn ("PASS: reference-selection / candidate compiler " ++ label ++ " is fatal")
 
 checkMissingRuntimeCompilerCrash :: FilePath -> IO ()
 checkMissingRuntimeCompilerCrash executable =
