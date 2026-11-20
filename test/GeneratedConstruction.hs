@@ -118,6 +118,11 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "BoxSupport.hs"
+    rejectsAt "BoxSupportBypass.hs"
+        [(7, forbidden tval), (10, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (13, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (15, forbidden "Memorist.Data.Interface.Demand.usage")]
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
     accepts "DemandScalarMethods.hs"
