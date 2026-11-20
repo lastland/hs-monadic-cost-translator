@@ -118,6 +118,9 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "CallerArithmetic.hs"
+    rejectsAt "CallerArithmeticUnsafe.hs"
+        [(6, forbidden tval), (9, selected "GHC.Classes.==: unknown concrete scalar instance")]
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
     accepts "DemandScalarMethods.hs"
