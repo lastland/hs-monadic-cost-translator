@@ -1,6 +1,6 @@
 # `cost-translate` Examples
 
-This directory contains thirteen pure Haskell modules within the supported subset documented in the [root README](../README.md): eight introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
+These pure Haskell modules illustrate the supported subset documented in the [root README](../README.md).
 
 Each source has a checked-in translation alongside it. For example, compare
 [`Basic.hs`](Basic.hs) with [`BasicM.hs`](BasicM.hs) without building the translator.
@@ -12,6 +12,7 @@ Each source has a checked-in translation alongside it. For example, compare
 | [`Basic.hs`](Basic.hs) | Function entry ticks, `let` sharing, unused bottoms |
 | [`Guards.hs`](Guards.hs) | Ordered equations, guards in `case`, literal patterns, short-circuiting |
 | [`Lists.hs`](Lists.hs) | `map`, folds, `zipWith`, `scanl`, `filter`, and finite prefixes with `repeat`, `take`, and `replicate` |
+| [`ListPatternMatching.hs`](ListPatternMatching.hs) | Compare overlapping and disjoint `maybeHead` and `zip` equations, and inspect the arithmetic in a case-based `take`, in the [generated translation](ListPatternMatchingM.hs). |
 | [`InsertionSort.hs`](InsertionSort.hs) | Stable insertion sort with `insert` and `insertionSort` |
 | [`Datatypes.hs`](Datatypes.hs) | Recursive and nested datatypes, explicit demands, top-level values |
 | [`Records.hs`](Records.hs) | Record fields and selectors, infix constructors, `Maybe` and pair fields |
