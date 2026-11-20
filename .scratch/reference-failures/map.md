@@ -89,5 +89,7 @@ Issue links are relative to this map; consumers should resolve them under
 - Stock Eq/Show candidate `e577` and closed-local candidate `e34` are not
   integrated into this baseline. Growing-recursion closure remains unsupported,
   not inherently unsafe.
-- Open Foldable work may remain deferred under local issue #12. The approved
-  bounded generic-comparison candidate still needs implementation and receipts.
+- Open Foldable work may remain deferred under the existing general-typeclass
+  scope decision. A bounded inferred-local comparison candidate is implemented
+  and separately reviewed, but is not integrated here; those results do not
+  establish that it closes issue 08's generic equality rejection.

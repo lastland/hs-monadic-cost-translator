@@ -24,8 +24,9 @@ after this guard rejection. Recursion itself is not the reported failure.
 
 ## Intended behavior and acceptance
 
-The user approved a bounded generic-comparison candidate; implementation and
-verification remain pending. Establish the permitted comparison evidence and
+The user approved a bounded inferred-local comparison candidate. Its separate
+implementation and review do not establish acceptance of this case, and it is
+not integrated into this baseline. Establish the permitted comparison evidence and
 closure without treating any arbitrary `Eq a` dictionary as a concrete scalar
 instance. Preserve captured environments, recursion, laziness, ordinary caller
 interfaces and the unchanged independent reference and cost assertions.
