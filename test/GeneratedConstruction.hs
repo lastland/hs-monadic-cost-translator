@@ -13,7 +13,7 @@ import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, homeDemandTypes)
-import ConstructionRuntime (resolveExport, runtime)
+import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (coreViewNames, viewSupport)
 import GeneratedFunctions (parseHaskellModule)
@@ -21,11 +21,11 @@ import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
     , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..), TyThing(AnId)
-    , backend, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
+    , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
-    , unLoc, ghcLink
+    , tm_renamed_source, unLoc, ghcLink
     )
 import GHC.Builtin.Names (integralClassName)
 import GHC.Core.Predicate (getClassPredTys_maybe)
@@ -112,6 +112,8 @@ checkGeneratedConstructionSpecimens = do
     checksImplicitForcing
     checkIntegralContext ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
+    checkIntegralContext ("inferred-owner-residual" </> "Example.hs")
+    checkIntegralContext ("inferred-owner-residual" </> "UnrelatedShadow.hs")
     accepts "NestedPatternConsumption.hs"
     mixed "NestedPatternOrdinary.hs"
         [LocalBinding (TopBinding owner) "observed" | owner <- ["independentFunction", "unitWithHelper"]] "NestedPatternOrdinary.hs"
@@ -458,8 +460,15 @@ checkGeneratedConstructionSpecimens = do
             target <- guessTarget output Nothing Nothing
             setTargets [target]
             Succeeded <- load LoadAllTargets
-            home <- ms_mod <$> getModSummary (mkModuleName "Generated")
-            name <- resolveExport home "viewsM"
+            summary <- getModSummary (mkModuleName "Generated")
+            checked <- parseModule summary >>= typecheckModule
+            Just (group, _, _, _, _) <- pure (tm_renamed_source checked)
+            core <- findModule (mkModuleName "Memorist.Base.Core") (Just (mkFastString "MemoristANT"))
+            evaluators <- mapM (resolveValue core) ["eval", "eval1", "value"]
+            case filter (`elem` collectAst group) evaluators of
+                [] -> pure ()
+                found -> fail (output ++ ": native sharing must not reference the runtime evaluator: " ++ unwords (map pretty found))
+            name <- resolveExport (ms_mod summary) "viewsM"
             Just (AnId binder) <- lookupName name
             pure (idType binder)
         case tcSplitSigmaTy signature of

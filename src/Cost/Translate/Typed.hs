@@ -5,12 +5,18 @@ module Cost.Translate.Typed
     , expressionTypeAt
     , FunctionType (..)
     , functionTypes
+    , AllocationScope (..)
+    , emptyAllocationScope
+    , extendAllocationScope
+    , nameableType
+    , nameableDeclaredGivens
     , functionGivens
     , scopedVariables
     , hasFreeVariables
     , hasFreshAnnotationVariables
     ) where
 
+import Control.Monad (guard)
 import Data.Data (Data, cast, gmapQ)
 import Data.List (isSuffixOf, maximumBy, partition)
 import Data.Map.Strict qualified as Map
@@ -203,22 +209,57 @@ functionTypes checked =
                 (mg_res_ty matches)
                 (mg_arg_tys matches)
 
-functionGivens :: FunctionType -> ([Type], Maybe [Type])
-functionGivens info = case tcMatchTy body (functionBodyType info) of
+data AllocationScope = AllocationScope
+    { ownerVariables :: [TyVar]
+    , checkedGivens :: [Type]
+    , declaredGivens :: [Type]
+    , signatureBinders :: Map.Map String (Maybe TyVar)
+    }
+
+emptyAllocationScope :: AllocationScope
+emptyAllocationScope = AllocationScope [] [] [] Map.empty
+
+extendAllocationScope ::
+    Bool -> AllocationScope -> AllocationScope -> AllocationScope
+extendAllocationScope signed owner outer = AllocationScope vars givens ps names
+    where
+        vars = ownerVariables outer ++ ownerVariables owner
+        givens = checkedGivens outer ++ checkedGivens owner
+        ps
+            | signed && not (null (ownerVariables owner)) =
+                declaredGivens outer ++ declaredGivens owner
+            | otherwise = declaredGivens outer
+        names
+            | signed = signatureBinders owner `Map.union` signatureBinders outer
+            | otherwise = signatureBinders outer
+
+nameableType :: AllocationScope -> Type -> Bool
+nameableType scope = all visible . nonDetEltsUniqSet . tyCoVarsOfType
+    where
+        names = signatureBinders scope
+        visible v = Map.findWithDefault Nothing (getOccString v) names == Just v
+
+nameableDeclaredGivens :: AllocationScope -> [Type]
+nameableDeclaredGivens s = filter (nameableType s) (declaredGivens s)
+
+functionGivens :: (Type -> Type) -> FunctionType -> AllocationScope
+functionGivens adjust info = case tcMatchTy body (functionBodyType info) of
     Just substitution ->
         let instantiate = substTy substitution
-            givens = map instantiate predicates
-            owned = functionVariables info
-            actual = map (getTyVar_maybe . instantiate . mkTyVarTy) formal
-            named =
-                actual == map Just owned
-                    && map getOccString owned == map getOccString formal
-         in ( givens ++ checkedPredicates (functionEvidence info)
-            , if named then Just givens else Nothing
-            )
-    Nothing -> ([], Nothing)
+            declared = map (adjust . instantiate) predicates
+            named v = do
+                actual <- getTyVar_maybe (instantiate (mkTyVarTy v))
+                guard (actual `elem` owned)
+                guard (getOccString actual == getOccString v)
+                pure actual
+            checked = map adjust (checkedPredicates (functionEvidence info))
+         in AllocationScope owned (declared ++ checked) declared (binders named)
+    Nothing -> AllocationScope owned [] [] (binders (const Nothing))
     where
+        owned = functionVariables info
         (formal, predicates, body) = tcSplitSigmaTy (functionDeclaredType info)
+        binders f = Map.fromListWith (\_ _ -> Nothing) (pairs f)
+        pairs f = [(getOccString v, f v) | v <- formal]
 
 wrapperEvidence :: HsWrapper -> ([Id], [EvBind])
 wrapperEvidence (WpCompose left right) =

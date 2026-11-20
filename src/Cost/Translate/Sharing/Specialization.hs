@@ -160,10 +160,11 @@ foldableDictionary argument = case splitTyConApp_maybe argument of
     _ -> False
 
 scalarClasses :: [Name]
-scalarClasses =
+scalarClasses = scopedGivenClasses ++ scalarWitnessClasses
+
+scopedGivenClasses :: [Name]
+scopedGivenClasses =
     [ Builtin.numClassName
-    , Builtin.eqClassName
-    , Builtin.ordClassName
     , Builtin.fractionalClassName
     , Builtin.floatingClassName
     , Builtin.integralClassName
@@ -173,6 +174,9 @@ scalarClasses =
     , Builtin.enumClassName
     , Builtin.boundedClassName
     ]
+
+scalarWitnessClasses :: [Name]
+scalarWitnessClasses = [Builtin.eqClassName, Builtin.ordClassName]
 
 pairwiseDisjoint :: [Type] -> Bool
 pairwiseDisjoint [] = True

@@ -225,22 +225,27 @@ allocateSpecialization scope source bodyName (specialization, target, root) = do
             statement <- specializedAllocation scope bodyName (ty, target)
             pure (statement, [])
         Just (producerType, convert) -> do
-            signature <-
-                translatedSignatureAs
-                    False
-                    (O.tc "M.Th" . (: []))
-                    datatypes
-                    0
-                    renamed
-            let producer = O.ann (O.v bodyName) producerType
+            let action = O.v bodyName
                 alias =
                     if vacuousSharing ty
                         then O.v root
                         else O.call "mapThunk" [convert, O.v root]
-            pure
-                ( O.bind root (lazyAction producer)
-                , [O.sig target signature, O.val target [] alias]
-                )
+                allocate producer signatures =
+                    ( O.bind root (lazyAction producer)
+                    , signatures ++ [O.val target [] alias]
+                    )
+            if inferKeyFromUses specialization
+                then pure (allocate action [])
+                else do
+                    signature <-
+                        translatedSignatureAs
+                            False
+                            (O.tc "M.Th" . (: []))
+                            datatypes
+                            0
+                            renamed
+                    let producer = O.ann action producerType
+                    pure (allocate producer [O.sig target signature])
 
 specializedAllocation :: Env -> String -> (Type, String) -> Either String O.Stmt
 specializedAllocation scope bodyName (instanceType, target) = do
