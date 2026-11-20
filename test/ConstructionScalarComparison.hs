@@ -11,7 +11,7 @@ import ConstructionRuntime (Runtime, Family(..), scalarType, standardNames)
 import GHC
 import GHC.Builtin.Names (eqClassName, ordClassName)
 import GHC.Builtin.Types (liftedTypeKind)
-import GHC.Core.Class (classTyVars, classAllSelIds)
+import GHC.Core.Class (classTyVars, classAllSelIds, classATItems, classTvsFds)
 import GHC.Core.InstEnv (is_cls, is_tys, is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -49,6 +49,7 @@ scalarComparisonFacts output modules =
         Just cls <- [tyConClass_maybe tc], [k, v] <- [classTyVars cls],
         eqType (tyVarKind k) liftedTypeKind, eqType (tyVarKind v) (mkTyVarTy k),
         null (classSCTheta cls), null (classAllSelIds cls),
+        null (classATItems cls), null (snd (classTvsFds cls)),
         let instances = [i | home <- modules, i <- tcg_insts (fst (tm_internals_ home)), is_cls i == cls],
         length instances == 7, all primitive instances,
         length [() | i <- instances, j <- instances, sameHead i j] == 7]
