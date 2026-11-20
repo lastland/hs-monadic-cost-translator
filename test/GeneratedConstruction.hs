@@ -119,6 +119,9 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "StandaloneDemandShrink.hs"
+    rejectsAt "StandaloneDemandShrinkBypass.hs"
+        [(7, unknown "StandaloneDemandShrink.shrinkDemandCompatible")]
     accepts "BoxSupport.hs"
     rejectsAt "BoxSupportBypass.hs"
         [(7, forbidden tval), (10, forbidden "Memorist.Data.Interface.Data.abstract"),
