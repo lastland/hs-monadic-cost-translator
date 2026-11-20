@@ -26,6 +26,15 @@ reboundCall t = let ?seen = M.tval t in
     helper :: (?seen :: Bool) => () -> Bool
     helper () = True
 
+readsSeen :: (?seen :: Bool) => () -> Q.Property
+readsSeen () = Q.property ?seen
+
+relay :: (?seen :: Bool) => () -> Q.Property
+relay u = readsSeen u
+
+throughProperty :: M.Th Bool -> Q.Property
+throughProperty t = let ?seen = M.tval t in relay ()
+
 -- Both ?n declarations and both RHSs print the same spans. Only mapped
 -- uses the observation; the ordinary dictionary in unusedInt is lawful.
 mapped :: M.Th Bool -> Q.Property

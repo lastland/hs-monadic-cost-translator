@@ -294,7 +294,7 @@ checkGeneratedConstructionSpecimens = do
     mixed "ErasedImplicitParameter.hs" [TopBinding "control"] "ErasedImplicitParameter.hs"
         [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num")]
     accepts "ImplicitValueControl.hs"
-    rejectsAt "ImplicitValueOrdinary.hs" [(line, forbidden tval) | line <- [8, 15, 18, 27, 30, 33]]
+    rejectsAt "ImplicitValueOrdinary.hs" [(line, forbidden tval) | line <- [8, 15, 18, 27, 30, 33, 39, 45]]
     accepts "LexicalValueControl.hs"
     mixed "IndependentTypedLocals.hs" [TopBinding "run", TopBinding "lawful"] "IndependentTypedLocals.hs"
         [(9, forbidden tval), (14, selected "GHC.Internal.Enum.maxBound: unknown executable method/default dependency [given Bounded"),
