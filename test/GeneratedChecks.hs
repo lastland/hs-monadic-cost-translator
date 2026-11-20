@@ -1,9 +1,10 @@
 module GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources) where
 
+import ConditionChecks (checkConditionOutput)
 import Control.Monad (unless, when)
 import Data.Char (isSpace)
 import Data.Data (Data, cast, gmapQ)
-import Data.List (isInfixOf, isPrefixOf, sort)
+import Data.List (isInfixOf, isPrefixOf, sort, tails)
 import Data.Maybe (maybeToList)
 import GHC
     ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), HsExpr(..), LHsExpr
@@ -29,8 +30,10 @@ checkGeneratedArtifacts label artifacts = do
     case label of
         "generated-warnings" -> checkGeneratedWarnings root
         "generated-warnings-minimal" -> checkMinimalWarnings root
-        "ordered-equations-and-conjunctive-guards" -> checkOuterListInspection output
-        "manual-constructor-equations" -> checkOuterListInspection output
+        "ordered-equations-and-conjunctive-guards" -> listInspection "chooseM"
+        "manual-constructor-equations" -> mapM_ listInspection ["chooseM", "repeatedM"]
+        "ordered-match-columns" -> checkParameterInspection output "chooseM" 2 ["JustT", "NothingT"]
+        "direct-primitive-conditions" -> checkConditionOutput (parseGeneratedBinding output)
         "anf-demand" -> checkTerminalDoBlocks output "chooseM"
         "manual-terminal-do" -> mapM_ (checkTerminalDoBlocks output) ["chooseM", "localM"]
         "pattern-scaling" -> do
@@ -47,6 +50,7 @@ checkGeneratedArtifacts label artifacts = do
   where
     root = ReferenceRunner.generatedDirectory artifacts
     output = root </> "Generated.hs"
+    listInspection target = checkParameterInspection output target 1 ["NilT", "ConsT"]
 
 -- Check maintained example sources separately. Generated-output warning checks
 -- retain their existing, explicitly bounded generated-warnings* scope.
@@ -65,25 +69,35 @@ checkManualSourceWarnings artifacts = do
     writeFile (root </> "source-hlint.log") (lintOut ++ lintErr)
     unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
 
-checkOuterListInspection :: FilePath -> IO ()
-checkOuterListInspection output = do
-    binding <- parseGeneratedBinding output "chooseM"
-    parameter <- case m_pats binding of
-        [L _ (VarPat _ name)] -> pure (unLoc name)
-        _ -> fail "chooseM: expected one outer-list parameter"
+-- Follow the selected parameter's force to its result binder. A case on a
+-- field or another argument of the same type is a different inspection.
+checkParameterInspection :: FilePath -> String -> Int -> [String] -> IO ()
+checkParameterInspection output target position constructors = do
+    binding <- parseGeneratedBinding output target
+    let label = target ++ ", parameter " ++ show position
+    parameter <- case drop (position - 1) (m_pats binding) of
+        L _ (VarPat _ name) : _ -> pure (unLoc name)
+        _ -> fail (label ++ ": expected a named parameter")
     let expressions = collectAst (m_grhss binding) :: [HsExpr GhcPs]
-        forces = [() | HsApp _ function argument <- expressions,
-            Just (Qual qualifier occurrence) <- [expressionVariable function],
-            moduleNameString qualifier == "M", occNameString occurrence == "force",
-            expressionVariable argument == Just parameter]
-        cases = [() | HsCase _ _ matches <- expressions,
-            let constructors = [occNameString (rdrNameOcc (unLoc name)) |
-                    L _ alternative <- unLoc (mg_alts matches),
-                    [L _ (ConPat _ name _)] <- [m_pats alternative]],
-            all (`elem` constructors) ["NilT", "ConsT"]]
-    unless (length forces == 1 && length cases == 1) $
-        fail ("chooseM: expected one outer-list force and one case containing NilT and ConsT; found " ++
-              show (length forces) ++ " forces and " ++ show (length cases) ++ " cases")
+        forces = length (filter ((== Just parameter) . forcedVariable) expressions)
+        caseHeads =
+            [ [occNameString (rdrNameOcc (unLoc name)) | L _ alt <- unLoc (mg_alts matches),
+                   [L _ (ConPat _ name _)] <- [m_pats alt]]
+            | HsDo _ (DoExpr Nothing) statements <- expressions
+            , L _ (BindStmt _ (L _ (VarPat _ result)) action) : rest <- tails (unLoc statements)
+            , forcedVariable (bareExpression action) == Just parameter
+            , HsCase _ subject matches <- collectAst rest :: [HsExpr GhcPs]
+            , expressionVariable subject == Just (unLoc result)
+            ]
+    unless (forces == 1 && map sort caseHeads == [sort constructors]) $
+        fail (label ++ ": expected one force and one case with constructors " ++ show constructors ++
+              "; found " ++ show forces ++ " forces and case constructors " ++ show caseHeads)
+
+forcedVariable :: HsExpr GhcPs -> Maybe RdrName
+forcedVariable (HsApp _ function argument)
+    | Just (Qual qualifier occurrence) <- expressionVariable function
+    , moduleNameString qualifier == "M", occNameString occurrence == "force" = expressionVariable argument
+forcedVariable _ = Nothing
 
 checkTerminalDoBlocks :: FilePath -> String -> IO ()
 checkTerminalDoBlocks output target = do
@@ -125,17 +139,21 @@ collectAst :: (Data a, Data b) => b -> [a]
 collectAst value = maybeToList (cast value) ++ concat (gmapQ collectAst value)
 
 expressionVariable :: LHsExpr GhcPs -> Maybe RdrName
-expressionVariable expression = case unLoc expression of
+expressionVariable expression = case bareExpression expression of
     HsVar _ name -> Just (unLoc name)
-    HsPar _ nested -> expressionVariable nested
-    ExprWithTySig _ nested _ -> expressionVariable nested
     _ -> Nothing
+
+bareExpression :: LHsExpr GhcPs -> HsExpr GhcPs
+bareExpression expression = case unLoc expression of
+    HsPar _ nested -> bareExpression nested
+    ExprWithTySig _ nested _ -> bareExpression nested
+    other -> other
 
 checkGeneratedWarnings :: FilePath -> IO ()
 checkGeneratedWarnings root = do
     generated <- readFile (root </> "Generated.hs")
     checkGeneratedLayout "Generated.hs" generated
-    unless (all (`isInfixOf` generated) ["capturedM x", "add z", "chooseM arg0", "nextEquation0", "partial'' <-"]) $
+    unless (all (`isInfixOf` generated) ["capturedM x", "add z", "chooseM arg0", "partial'' <-"]) $
         fail "generated local names do not preserve readable source names"
     when (any (`isInfixOf` generated) ["_arg", "argument_", "partial0", "arg0'"]) $
         fail "generated output contains opaque local names"

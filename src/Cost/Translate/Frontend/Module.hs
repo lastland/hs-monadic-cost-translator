@@ -1,7 +1,7 @@
 module Cost.Translate.Frontend.Module (emitModule) where
 
 import Cost.Translate.Datatypes (emitDatatypeSections)
-import Cost.Translate.Frontend.Emit (emitBind, emitExpr)
+import Cost.Translate.Frontend.Emit (emitBind, emitCondition, emitExpr)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Gates (checkRecursiveValues)
 import Cost.Translate.Frontend.Logs (moduleLogs)
@@ -120,7 +120,7 @@ moduleResult target source hash helpers initial specialized group = do
             case unLoc binding of
                 FunBind _ n _
                     | Just worker <- Map.lookup (unLoc n) workers ->
-                        emitProducer emitExpr env name ty worker
+                        emitProducer emitExpr emitCondition env name ty worker
                 _ -> do
                     code <- emitBind (env {namePlan = plan}) binding
                     pure [O.sig name ty, code]

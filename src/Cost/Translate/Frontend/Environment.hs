@@ -6,8 +6,7 @@ module Cost.Translate.Frontend.Environment
     , extendEnv
     , localName
     , parameterNames
-    , readableBinder
-    , fieldSlot
+    , occupiedNames
     , actionName
     , plannedAction
     , argumentNames
@@ -19,6 +18,7 @@ import Cost.Translate.Frontend.NamePlan
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Typed (SourceKey)
+import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
@@ -65,28 +65,21 @@ localName env name = Map.findWithDefault "local" name locals
 
 parameterNames :: Env -> Name -> MatchGroup GhcRn (LHsExpr GhcRn) -> [String]
 parameterNames env name matches =
-    [ maybe (planned i) (readableBinder env) (patternBinder pattern')
-    | (i, pattern') <- zip [0 ..] (firstPatterns matches)
-    ]
+    snd (mapAccumL assign (occupiedNames env) parameters)
     where
+        parameters = zip [0 ..] (parameterBinders matches)
+        assign used (index, binder) =
+            let hint = maybe (planned index) sourceName binder
+                fresh = freshPrimed used hint
+             in (Set.insert fresh used, fresh)
+        sourceName n =
+            let occurrence = getOccString n
+             in if simpleIdentifier occurrence then occurrence else "local"
         planned i =
             Map.findWithDefault
                 ("arg" ++ show i)
                 (name, i)
                 (plannedParameters (namePlan env))
-
-patternBinder :: LPat GhcRn -> Maybe Name
-patternBinder (L _ pattern') = case pattern' of
-    VarPat _ name -> Just (unLoc name)
-    AsPat _ name _ -> Just (unLoc name)
-    ParPat _ nested -> patternBinder nested
-    _ -> Nothing
-
-readableBinder :: Env -> Name -> String
-readableBinder env name = freshPrimed (occupiedNames env) base
-    where
-        occurrence = getOccString name
-        base = if simpleIdentifier occurrence then occurrence else "local"
 
 occupiedNames :: Env -> Set.Set String
 occupiedNames env =
@@ -107,14 +100,6 @@ occupiedNames env =
                 ++ plannedTemporaryNames (namePlan env)
                 ++ Map.elems (producerCalls env)
             )
-
-fieldSlot :: Env -> String -> LPat GhcRn -> String
-fieldSlot env path pattern' = case unLoc pattern' of
-    VarPat _ name -> readableBinder env (unLoc name)
-    AsPat _ name _ -> readableBinder env (unLoc name)
-    ParPat _ nested -> fieldSlot env path nested
-    WildPat _ -> "_"
-    _ -> Map.findWithDefault path path (plannedFields (namePlan env))
 
 actionName :: Env -> String -> SrcSpan -> String
 actionName env prefix = plannedAction env . actionKey prefix

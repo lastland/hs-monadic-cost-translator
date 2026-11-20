@@ -13,11 +13,7 @@ import Control.Monad (guard, zipWithM)
 import Cost.Translate.Callable (spine)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions
-    ( conditionalAction
-    , reuseThunk
-    , suspendArgument
-    )
+import Cost.Translate.Frontend.Expressions (reuseThunk, suspendArgument)
 import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)
@@ -331,26 +327,26 @@ instantiatePayload = O.lam [O.p "payload"] (O.v "payload")
 
 emitPayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->
+    (LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr) ->
     Env ->
     Payload ->
     Either String O.Expr
-emitPayload emit env payload@(Payload _ _ _ body) = case body of
+emitPayload emit branch env payload@(Payload _ _ _ body) = case body of
     ProducerCall worker name expression -> do
         (statements, thunk) <- field (name, Ordinary expression)
         pure (O.doE statements (O.call worker [thunk]))
     ApplicationPayload target name argument -> do
         ty <- payloadType env argument
-        action <- emitPayload emit env argument
+        action <- render argument
         pure
             ( O.doE
                 [O.bind name (suspendPayload ty action)]
                 (O.app (O.typeApp (O.v target) ty) [O.v name])
             )
-    ConditionalPayload condition yes no ->
-        conditionalAction
-            <$> emit condition
-            <*> emitPayload emit env yes
-            <*> emitPayload emit env no
+    ConditionalPayload condition yes no -> do
+        yesAction <- render yes
+        noAction <- render no
+        branch condition yesAction noAction
     ConstructorPayload con fields -> do
         ty <- payloadType env payload
         arguments <- mapM field fields
@@ -363,12 +359,13 @@ emitPayload emit env payload@(Payload _ _ _ body) = case body of
                 )
             )
     where
+        render = emitPayload emit branch env
         field (name, Ordinary expression) = case reuseThunk env expression of
             Just thunk -> pure ([], thunk)
             Nothing -> suspendArgument name <$> emit expression
         field (name, Generalized nested) = do
             ty <- payloadType env nested
-            action <- emitPayload emit env nested
+            action <- render nested
             pure
                 ( [O.bind name (suspendPayload ty action)]
                 , payloadView ty (O.v name)
@@ -376,12 +373,13 @@ emitPayload emit env payload@(Payload _ _ _ body) = case body of
 
 allocatePayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->
+    (LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr) ->
     Env ->
     Name ->
     ([TyVar], Payload) ->
     O.Expr ->
     Either String O.Expr
-allocatePayload emit env name allocation@(_, payload) continuation
+allocatePayload emit branch env name allocation@(_, payload) continuation
     | let used = usedNames continuation
     , localName env name `Set.notMember` used = case payload of
         Payload _ _ _ ProducerCall {} -> validate
@@ -391,20 +389,21 @@ allocatePayload emit env name allocation@(_, payload) continuation
                 nativeSharing (planNativeSchemas Set.empty []) Map.empty ty ->
                 pure continuation
         _ -> validate
-    | otherwise = allocateUsedPayload emit env name allocation continuation
+    | otherwise = allocateUsedPayload render env name allocation continuation
     where
-        validate = emitPayload emit env payload >> pure continuation
+        validate = render payload >> pure continuation
+        render = emitPayload emit branch env
 
 allocateUsedPayload ::
-    (LHsExpr GhcRn -> Either String O.Expr) ->
+    (Payload -> Either String O.Expr) ->
     Env ->
     Name ->
     ([TyVar], Payload) ->
     O.Expr ->
     Either String O.Expr
-allocateUsedPayload emit env name (scoped, payload) continuation = do
+allocateUsedPayload render env name (scoped, payload) continuation = do
     ty <- payloadType env payload
-    action <- emitPayload emit env payload
+    action <- render payload
     sourceBinders <- mapM (renderBinder (sourceDatatypes env)) scoped
     let local = localName env name
         root =

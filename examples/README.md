@@ -1,6 +1,9 @@
 # `cost-translate` Examples
 
-This directory contains twelve pure Haskell modules within the supported subset documented in the [root README](../README.md): seven introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
+This directory contains thirteen pure Haskell modules within the supported subset documented in the [root README](../README.md): eight introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
+
+Each source has a checked-in translation alongside it. For example, compare
+[`Basic.hs`](Basic.hs) with [`BasicM.hs`](BasicM.hs) without building the translator.
 
 ### Introductory Modules
 
@@ -8,7 +11,8 @@ This directory contains twelve pure Haskell modules within the supported subset 
 | :--- | :--- |
 | [`Basic.hs`](Basic.hs) | Function entry ticks, `let` sharing, unused bottoms |
 | [`Guards.hs`](Guards.hs) | Ordered equations, guards in `case`, literal patterns, short-circuiting |
-| [`Lists.hs`](Lists.hs) | `map`, `foldr`, `foldl`, `zipWith`, `scanl`, `filter`, and infinite producers |
+| [`Lists.hs`](Lists.hs) | `map`, folds, `zipWith`, `scanl`, `filter`, and finite prefixes with `repeat`, `take`, and `replicate` |
+| [`InsertionSort.hs`](InsertionSort.hs) | Stable insertion sort with `insert` and `insertionSort` |
 | [`Datatypes.hs`](Datatypes.hs) | Recursive and nested datatypes, explicit demands, top-level values |
 | [`Records.hs`](Records.hs) | Record fields and selectors, infix constructors, `Maybe` and pair fields |
 | [`HigherKinded.hs`](HigherKinded.hs) | Higher-kinded fields, `Fix`, non-regular recursion, conversions |
@@ -23,7 +27,7 @@ The root test suite (`cost-translate-test`) translates and tests these five file
 | [`ThunkArguments.hs`](ThunkArguments.hs) | `manual-thunk-arguments` | Direct thunk reuse across arguments, fields, and callables vs. computed suspensions |
 | [`ThunkMatching.hs`](ThunkMatching.hs) | `manual-thunk-matching` | Thunk identity preservation in `case` and pattern guards, plus polymorphic and dictionary sharing |
 | [`ScopedAnnotations.hs`](ScopedAnnotations.hs) | `manual-scoped-annotations` | Scoped type annotations on `case` and guard subjects under shadowed `forall` binders |
-| [`ConstructorEquations.hs`](ConstructorEquations.hs) | `manual-constructor-equations` | Single-inspection grouping for adjacent disjoint constructors vs. guard/wildcard barriers |
+| [`ConstructorEquations.hs`](ConstructorEquations.hs) | `manual-constructor-equations` | Shared constructor inspections across equations and source-ordered guard fallthrough |
 | [`TerminalDo.hs`](TerminalDo.hs) | `manual-terminal-do` | Flat ordinary `do` blocks for function entry ticks and conditionals vs. scoped annotations |
 
 Run all five automated reference comparisons together with:
@@ -41,6 +45,22 @@ Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `Q
 ```sh
 stack build
 ```
+
+### Regenerating All Examples
+
+From `examples/`, run:
+
+```sh
+make
+```
+
+Make builds the translator and runtime with Stack, then regenerates every `*M.hs`
+copy from its source. After changing a source or the translator, rerun this command
+and include any changed translations in the same commit. Git ignores the companion
+diagnostic logs (such as `BasicM.hs.log`).
+
+On every push and pull request, CI regenerates the text without `hs-pbt/` and
+shows a Git diff if the checked-in copies are out of date.
 
 ### Translating and Inspecting an Example
 
@@ -147,6 +167,10 @@ the global-sharing cost limitation in the `Shared.hs` section below.
 | `fromPure1 filteredM (5 :: Int)` | `5` | `4` |
 | `fromPure1 observeM (5 :: Int)` | `6` | `4` |
 | `fromPure1 restM (5 :: Int)` | `6` | `5` |
+| `fromPure2 takeM (0 :: Int) (undefined :: [Int])` | `[]` | `1` |
+| `fromPure2 replicateM (3 :: Int) (5 :: Int)` | `[5, 5, 5]` | `8` |
+
+`replicate 3 5` takes three elements from the infinite list `repeat 5`. It costs one tick for `replicate`, four for `take`, and three for `repeat`. The final `take 0` returns `[]` without demanding another element of `repeat`; negative counts stop the same way.
 
 `zipped`, `scanned`, and `filtered` never force their undefined list tails. `observe` reads the second element of the infinite `stream` producer via pattern matching, and `rest` reads it via `head` after `tail`. Evaluating `stream` under an explicit finite demand (`import Memorist.Data.List` for `ConsD`) charges only for the demanded prefix:
 
@@ -155,6 +179,17 @@ infcost' (fromPure1 streamM (5 :: Int))
          (ConsD (Need 5) (Need (ConsD (Need 6) (Need (ConsD (Need 7) Skip)))))
 -- Cost 3
 ```
+
+### `InsertionSort.hs`
+
+`insert` places a value before the first equal or larger element in a sorted list and reuses the remaining suffix. `insertionSort` sorts the tail recursively, then inserts the head. Inserting before a tie keeps equal elements in their original order.
+
+In `insertM`, look for a single `case` on the list. Only its `ConsT` branch forces the two elements for `<=`. If the comparison succeeds, the new head points to the original list thunk; otherwise the new tail suspends the recursive `insertM` call.
+
+| Call | Value | Cost |
+| :--- | :--- | :--- |
+| `fromPure2 insertM (2 :: Int) [1, 2, 4 :: Int]` | `[1, 2, 2, 4]` | `2` |
+| `fromPure1 insertionSortM [3, 1, 2, 1 :: Int]` | `[1, 1, 2, 3]` | `13` |
 
 ### `Datatypes.hs`
 
@@ -339,8 +374,8 @@ runInt (fromPure1 guardFactoryM (5 :: Integer))
 
 `ConstructorEquations.hs` demonstrates how multi-equation functions compile to constructor inspections and ordered fallbacks:
 
-- Contiguous unary equations with distinct outer constructors (`choose` on `[]` and `y : _`) share a single outer `M.force` and a single `case` expression with `L.NilT` and `L.ConsT` branches.
-- Wildcard and variable equations (`wildcard`, `variable`, and the local unary `pick` helpers in `guardedWildcard` and `guardedVariable`) and repeated constructors (`repeated`) act as ordering barriers so guards execute before any constructor inspection from later equations.
+- `choose` and `repeated` each inspect the list once. In `repeated`, a failed guard in the `ConsT` branch tries the next cons equation without forcing the outer list again.
+- Wildcard and variable equations (`wildcard`, `variable`, and the local `pick` helpers in `guardedWildcard` and `guardedVariable`) keep their place. A guard can succeed on an undefined list when its equation does not inspect that list.
 
 Translate `examples/ConstructorEquations.hs` and inspect `chooseM` in `"$work/Generated.hs"`:
 

@@ -1,4 +1,4 @@
-module Cost.Translate.Frontend.Emit (emitBind, emitExpr) where
+module Cost.Translate.Frontend.Emit (emitBind, emitExpr, emitCondition) where
 
 import Control.Monad (unless, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)
@@ -6,12 +6,14 @@ import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Expressions
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
+import Cost.Translate.Frontend.Match.Fallback (withFallback)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Patterns
 import Cost.Translate.Frontend.Polymorphic
 import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Primitive (Destination (..))
 import Cost.Translate.Sharing (sharingPaths, useTypes)
 import Cost.Translate.Typed (hasFreshAnnotationVariables)
 import Data.Map.Strict qualified as Map
@@ -39,69 +41,13 @@ emitBind outer binding = case unLoc binding of
 
 emitMatches ::
     Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
-emitMatches _ _ [] = Right (failureExpr "source pattern match failure")
-emitMatches env [thunk] matches@(located@(L _ match) : _)
-    | [pattern'] <- m_pats match
-    , (group@(_ : _ : _), rest) <- adjacentConstructors env matches =
-        emitConstructorMatches env thunk located pattern' group rest
-emitMatches env args (located@(L _ match) : rest) = do
-    fallback <- emitMatches env args rest
-    let next = actionName env "nextEquation" (getLocA located)
-        failure = if null rest then fallback else O.v next
-    current <-
-        matchPatterns
-            env
-            (zip args (m_pats match))
-            (\scope -> emitMatchBody scope match failure)
-            failure
-    pure (if null rest then current else shareAction next fallback current)
-    where
-        shareAction name action = O.letE [O.val name [] action]
-
-emitConstructorMatches ::
-    Env ->
-    O.Expr ->
-    LMatch GhcRn (LHsExpr GhcRn) ->
-    LPat GhcRn ->
-    [LMatch GhcRn (LHsExpr GhcRn)] ->
-    [LMatch GhcRn (LHsExpr GhcRn)] ->
-    Either String O.Expr
-emitConstructorMatches env thunk located pattern' group rest = do
-    fallback <- emitMatches env [thunk] rest
-    let next = actionName env "nextEquation" (getLocA located)
-        failure = O.v next
-        matched =
-            Map.findWithDefault
-                "matched"
-                (patternRoot pattern' 0)
-                (plannedMatches (namePlan env))
-    branches <-
-        sequence
-            [ constructorFields
-                env
-                thunk
-                pat
-                (patternRoot pat 0)
-                (\scope -> emitMatchBody scope equation failure)
-                failure
-            | L _ equation <- group
-            , pat <- m_pats equation
-            ]
-    let heads = [con | (con, _, _) <- branches]
-        alternatives =
-            [ (O.conP con (map O.p fields), body)
-            | (con, fields, body) <- branches
-            ]
-                ++ [(O.p "_", failure) | not (exhaustiveConstructors env heads)]
-        current =
-            O.doE
-                [O.bind matched (O.call "M.force" [thunk])]
-                (O.caseE (O.v matched) alternatives)
-    pure
-        ( if next `elem` usedNames current
-            then O.letE [O.val next [] fallback] current
-            else current
-        )
+emitMatches env args matches =
+    matchRows
+        env
+        [ (getLocA located, zip args (m_pats match), (`emitMatchBody` match))
+        | located@(L _ match) <- matches
+        ]
+        (failureExpr "source pattern match failure")
 
 emitGuards ::
     Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
@@ -110,8 +56,7 @@ emitGuards env [L _ (GRHS _ [] body)] _ = emitExpr env body
 emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
     next <- emitGuards env rest fallback
     let name = actionName env "nextGuard" (getLocA located)
-    current <- emitGuardStatements env body guards (O.v name)
-    pure (O.letE [O.val name [] next] current)
+    withFallback name next (emitGuardStatements env body guards)
 
 emitMatchBody ::
     Env -> Match GhcRn (LHsExpr GhcRn) -> O.Expr -> Either String O.Expr
@@ -129,13 +74,8 @@ emitGuardStatements ::
     Either String O.Expr
 emitGuardStatements scope body [] _ = emitExpr scope body
 emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next = do
-    condition <- emitExpr scope expr
     remaining <- emitGuardStatements scope body gs next
-    pure
-        ( O.doE
-            [O.bind "guardResult" condition]
-            (O.ifE (O.v "guardResult") remaining next)
-        )
+    emitCondition scope expr remaining next
 emitGuardStatements scope body (s@(L _ (BindStmt _ pat expr)) : gs) next =
     let n = actionName scope "guardThunk" (getLocA s)
      in withMatchThunk scope n expr $ \reference ->
@@ -249,6 +189,7 @@ emitLocalValue signatures scope binding name match done = do
                             else remaining
                 allocatePayload
                     (emitExpr scope)
+                    (emitCondition scope)
                     scope
                     (unLoc name)
                     plan
@@ -334,10 +275,9 @@ emitExpr env located = case unLoc located of
             located
             <$> emitExpr env expr
     HsIf _ condition yes no -> do
-        cond <- emitExpr env condition
         yesAction <- emitExpr env yes
         noAction <- emitExpr env no
-        pure (conditionalAction cond yesAction noAction)
+        emitCondition env condition yesAction noAction
     HsLet _ locals body -> withLocals env locals (`emitExpr` body)
     ExplicitTuple _ [Present _ a, Present _ b] Boxed ->
         emitApplied env located (returnConstructor "M.PairT") [a, b]
@@ -354,8 +294,25 @@ emitExpr env located = case unLoc located of
     OpApp _ left operator right -> emitOperator env located left operator right
     _ -> unsupportedExpression located
 
+emitCondition ::
+    Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr
+emitCondition env located yes no = case unLoc located of
+    HsPar _ nested -> emitCondition env nested yes no
+    HsVar _ name
+        | Just value <- booleanConstant (unLoc name) ->
+            Right (if value then yes else no)
+    _
+        | Just action <- emitSaturated env (emitThunk env) located branches ->
+            action
+    _ -> do
+        condition <- emitExpr env located
+        pure (conditionalAction condition yes no)
+    where
+        branches = Branching yes no
+
 emitApplication :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitApplication env located = case unLoc fun of
+    _ | Just action <- emitSaturated env suspend located Returning -> action
     HsVar _ name | isComposition (unLoc name) -> callable
     HsVar _ name
         | builtin (unLoc name) "GHC.Internal.Err" "error"
@@ -399,6 +356,9 @@ emitOperator ::
     LHsExpr GhcRn ->
     Either String O.Expr
 emitOperator env located left operator right = case unLoc operator of
+    _
+        | Just action <- emitSaturated env (emitThunk env) located Returning ->
+            action
     HsVar _ name
         | isComposition (unLoc name) ->
             emitCallable (partialName env) resolver (emitThunk env) located

@@ -71,10 +71,13 @@ library
         Cost.Translate.Frontend.Gates
         Cost.Translate.Frontend.LocalValues
         Cost.Translate.Frontend.Logs
+        Cost.Translate.Frontend.Match.Fallback
+        Cost.Translate.Frontend.Match.Paths
+        Cost.Translate.Frontend.Match.Pattern
+        Cost.Translate.Frontend.Match.Row
         Cost.Translate.Frontend.Module
         Cost.Translate.Frontend.ModulePlan
         Cost.Translate.Frontend.NamePlan
-        Cost.Translate.Frontend.PatternPaths
         Cost.Translate.Frontend.Patterns
         Cost.Translate.Frontend.Polymorphic
         Cost.Translate.Frontend.Prepare
@@ -98,6 +101,7 @@ library
         Cost.Translate.Datatypes.Types
         Cost.Translate.Names
         Cost.Translate.Pretty
+        Cost.Translate.Primitive
         Cost.Translate.Foldable
         Cost.Translate.Validation
         Cost.Translate.Kinds
@@ -158,7 +162,8 @@ test-suite cost-translate-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
-    other-modules:    FixturePolicy
+    other-modules:    ConditionChecks
+                     FixturePolicy
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionAllocation

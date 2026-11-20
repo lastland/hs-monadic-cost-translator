@@ -13,20 +13,25 @@ module Cost.Translate.Frontend.Expressions
     , unsupportedCall
     , negatedAction
     , conditionalAction
+    , emitSaturated
     ) where
 
+import Control.Monad (guard)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Gates (locatedAt)
+import Cost.Translate.Frontend.NamePlan (plannedOperands)
 import Cost.Translate.Frontend.Resolve
 import Cost.Translate.Frontend.Signatures (monadicType)
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Output qualified as O
+import Cost.Translate.Primitive (Destination, primitiveBody, saturatedPrimitive)
 import Cost.Translate.Typed
     ( hasFreeVariables
     , hasFreshAnnotationVariables
     , sourceKey
     )
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 import GHC
 import GHC.Builtin.Types (unitDataCon)
 import GHC.Types.Name (getOccString, nameModule_maybe)
@@ -57,9 +62,9 @@ emitVariable env located name =
         Just Constructor {} -> unsupportedExpression located
         Just SpecializedThunks {} -> unsupportedExpression located
         Nothing | name == getName unitDataCon -> Right (O.ret (O.tuple []))
-        Nothing | sourceType "True" -> trueValue
-        Nothing | builtin name "GHC.Internal.Base" "otherwise" -> trueValue
-        Nothing | sourceType "False" -> Right (O.ret (O.v "False"))
+        Nothing
+            | Just value <- booleanConstant name ->
+                Right (O.ret (O.v (show value)))
         Nothing | sourceType "[]" -> Right (O.ret (O.v "L.NilT"))
         Nothing
             | builtin name "GHC.Internal.Err" "undefined" ->
@@ -75,7 +80,6 @@ emitVariable env located name =
     where
         annotate = annotateExpression env "M.MemoristM" False located
         sourceType = builtin name "GHC.Types"
-        trueValue = Right (O.ret (O.v "True"))
 
 annotateExpression :: Env -> String -> Bool -> LHsExpr GhcRn -> O.Expr -> O.Expr
 annotateExpression env wrapper allowFree located code =
@@ -169,6 +173,31 @@ conditionalAction condition yes no =
     O.doE
         [O.bind "condition" condition]
         (O.ifE (O.v "condition") yes no)
+
+emitSaturated ::
+    Env ->
+    (String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)) ->
+    LHsExpr GhcRn ->
+    Destination ->
+    Maybe (Either String O.Expr)
+emitSaturated env prepare located destination = do
+    (operator, operation, left, right) <- saturatedPrimitive located
+    guard (isNothing (lookupEnv operator env))
+    let site = argumentKey located
+        values = Map.lookup site (plannedOperands (namePlan env))
+    pure $ case (argumentNames env site 2, values) of
+        ([x, y], Just (leftName, rightName)) -> do
+            (beforeLeft, lhs) <- prepare x left
+            (beforeRight, rhs) <- prepare y right
+            pure
+                ( O.doE (beforeLeft ++ beforeRight) $
+                    primitiveBody
+                        operation
+                        destination
+                        (leftName, lhs)
+                        (rightName, rhs)
+                )
+        _ -> Left "primitive argument layout mismatch"
 
 expressionEvidence :: Env -> LHsExpr GhcRn -> Maybe (Type, O.Ty)
 expressionEvidence env expression = Map.lookup location evidence

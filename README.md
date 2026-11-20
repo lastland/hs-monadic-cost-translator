@@ -40,7 +40,9 @@ Each run writes a companion log to `OUTPUT.hs.log` with binding arities, call-si
 
 If typechecking succeeds, the translator atomically renames the candidate to `OUTPUT.hs`. If source validation or candidate typechecking fails, the translator records the diagnostic (and any rejected candidate) in `OUTPUT.hs.log`, exits with a non-zero status, and leaves any existing `OUTPUT.hs` untouched.
 
-Runnable example modules and GHCi walkthroughs with expected values and tick counts live in [`examples/`](examples/) and [`examples/README.md`](examples/README.md).
+Each source in [`examples/`](examples/) has a checked-in `*M.hs` translation.
+Run `make` from `examples/` to refresh them. The [examples guide](examples/README.md)
+includes GHCi walkthroughs with expected values and tick counts.
 
 ## Using Generated Code
 
@@ -125,6 +127,7 @@ Translated bindings express evaluation and sharing through the runtime's core mo
 
 - **Call-by-need suspension and reuse**: Function arguments, constructor fields, and local `let`/`where` value bindings are suspended with `lazy` and evaluated at most once per binding instance when demanded with `force`. Passing an existing thunk as an argument or field reuses it directly without allocating a wrapper thunk.
 - **Lazy pattern matching and guards**: Variable and wildcard (`_`) patterns preserve the subject thunk's identity without forcing it; in an `as`-pattern (`x@pat`), the alias `x` preserves the subject's thunk identity while matching `pat` forces whatever layers `pat` inspects. Constructor and literal patterns force only the layer they inspect, and untaken equations, guards, or conditional branches neither allocate thunks nor charge ticks. Local bang bindings without class contexts (`let !x = rhs in body`) force the outer value before continuing while leaving constructor fields lazy and sharing `x`.
+- **Reading generated decisions**: Adjacent equations whose next pattern inspects a constructor on the same argument share a `case`, even if the function has other arguments. Each branch tries its equations in source order. Guards that can return before the inspection stay before the `case`. A comparison used directly as a condition forces its operands and tests the result with `if`; a final Prelude `otherwise` supplies the alternative.
 - **Local polymorphic and dictionary-sensitive sharing**: Each function invocation allocates fresh local thunks. For supported structural result and constructor-payload shapes, unconstrained polymorphic local values share a single native thunk across type instantiations through pure structural views that preserve thunk identities and annotations without forcing unused fields. Constrained local values in supported scopes and shapes share when the type arguments determining their dictionaries agree—including GHC-proven closed scalar predicates such as `Integral Int` and `Integral Integer` when another quantified parameter varies without affecting dictionary choice—allocating one native thunk per distinct dictionary without extra `Typeable` constraints; remaining shapes fall back to the legacy helpers noted in [Limitations](#limitations).
 
 ## Supported Source Subset and Generated Support

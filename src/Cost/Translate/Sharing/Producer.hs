@@ -102,15 +102,16 @@ planWorker env owner match calls = do
 
 emitProducer ::
     (Env -> LHsExpr GhcRn -> Either String O.Expr) ->
+    (Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr) ->
     Env ->
     String ->
     O.Ty ->
     Producer ->
     Either String [O.Decl]
-emitProducer emit env public signature producer = do
+emitProducer emit branch env public signature producer = do
     let Producer worker formal outer inner argument payload = producer
         datatypes = sourceDatatypes env
-        parameter = readableBinder env formal
+        parameter = freshPrimed (occupiedNames env) (getOccString formal)
         scope = insertEnv formal (Thunk (O.v parameter)) env
         value = freshPrimed (Set.fromList [parameter, worker]) "payload"
         atVariable function = O.typeApp function . O.t . getOccString
@@ -120,7 +121,7 @@ emitProducer emit env public signature producer = do
     binders <- mapM (renderBinder datatypes) outer
     input <- renderType datatypes argument
     result <- payloadType env payload
-    action <- emitPayload (emit scope) scope payload
+    action <- emitPayload (emit scope) (branch scope) scope payload
     let bodyType = O.arrow (O.tc "M.Th" [input]) (monadicType result)
         workerType = O.forallT binders bodyType
     pure

@@ -6,20 +6,23 @@ module Cost.Translate.Frontend.NamePlan
 
 import Cost.Translate.Callable (expressions, spine)
 import Cost.Translate.Frontend.Allocation
-import Cost.Translate.Frontend.PatternPaths
+import Cost.Translate.Frontend.Match.Paths
 import Cost.Translate.Frontend.Syntax
+import Cost.Translate.Primitive (saturatedPrimitive)
 import Cost.Translate.Sharing (Specialization)
 import Cost.Translate.Sharing.Schema
 import Data.Data (Data)
-import Data.List (nub)
+import Data.List (mapAccumL, nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
+import GHC.Types.Name (getOccString, isVarName)
 
 data NamePlan = NamePlan
     { plannedLocals :: Map.Map Name String
     , plannedParameters :: Map.Map (Name, Int) String
     , plannedArguments :: Map.Map String [String]
+    , plannedOperands :: Map.Map String (String, String)
     , plannedActions :: Map.Map String String
     , plannedFields :: Map.Map String String
     , plannedMatches :: Map.Map String String
@@ -33,6 +36,7 @@ plannedTemporaryNames :: NamePlan -> [String]
 plannedTemporaryNames plan =
     Set.toList (nativeSchemaNames (plannedNativeSchemas plan))
         ++ concat (Map.elems (plannedArguments plan))
+        ++ concatMap (\(x, y) -> [x, y]) (Map.elems (plannedOperands plan))
         ++ Map.elems (plannedActions plan)
         ++ Map.elems (plannedFields plan)
         ++ Map.elems (plannedMatches plan)
@@ -58,7 +62,8 @@ planNames datatypes globalNames layouts specialized syntax =
         (locals, afterLocals) = assignBinders reserved binders
         (parameters, afterParameters) =
             assignParameters locals afterLocals (concatMap parametersFor binds)
-        sites = concatMap (expressionSites layouts) (expressions syntax)
+        exprs = expressions syntax
+        sites = concatMap (expressionSites layouts) exprs
         (arguments, afterArguments) = assignArguments afterParameters sites
         (actions, afterActions) =
             assignActions afterArguments Map.empty Map.empty $
@@ -73,7 +78,7 @@ planNames datatypes globalNames layouts specialized syntax =
             assignBindingNames "anchor" locals afterMatches names
         (bodies, afterBodies) =
             assignBindingNames "body" locals afterAnchors names
-        (specializations, _) =
+        (specializations, used) =
             assignSpecializations
                 locals
                 afterBodies
@@ -85,6 +90,7 @@ planNames datatypes globalNames layouts specialized syntax =
             locals
             parameters
             arguments
+            (planOperands used exprs)
             actions
             fields
             matches
@@ -92,6 +98,29 @@ planNames datatypes globalNames layouts specialized syntax =
             bodies
             specializations
             schemas
+
+planOperands ::
+    Set.Set String -> [LHsExpr GhcRn] -> Map.Map String (String, String)
+planOperands used exprs = Map.fromList (snd (mapAccumL allocate used sites))
+    where
+        sites =
+            [ (argumentKey expr, preferred "lhs" l, preferred "rhs" r)
+            | expr <- exprs
+            , Just (_, _, l, r) <- [saturatedPrimitive expr]
+            ]
+        allocate taken (site, l, r) =
+            let x = freshPrimed taken l
+                afterLeft = Set.insert x taken
+                y = freshPrimed afterLeft r
+             in (Set.insert y afterLeft, (site, (x, y)))
+        preferred fallback expr = case spine expr of
+            (L _ (HsVar _ n), [])
+                | isVarName (unLoc n)
+                , let source = getOccString (unLoc n)
+                , simpleIdentifier source ->
+                    let (primes, stem) = span (== '\'') (reverse source)
+                     in reverse stem ++ "Value" ++ primes
+            _ -> fallback
 
 sourceBinders :: (Data a) => a -> [LHsBind GhcRn] -> [Name]
 sourceBinders syntax binds =
@@ -103,14 +132,9 @@ sourceBinders syntax binds =
 
 parametersFor :: LHsBind GhcRn -> [((Name, Int), Maybe Name)]
 parametersFor (L _ (FunBind _ name matches)) =
-    [ ((unLoc name, i), patternName pattern')
-    | (i, pattern') <- zip [0 ..] (firstPatterns matches)
+    [ ((unLoc name, i), binder)
+    | (i, binder) <- zip [0 ..] (parameterBinders matches)
     ]
-    where
-        patternName (L _ (VarPat _ n)) = Just (unLoc n)
-        patternName (L _ (AsPat _ n _)) = Just (unLoc n)
-        patternName (L _ (ParPat _ nested)) = patternName nested
-        patternName _ = Nothing
 parametersFor _ = []
 
 expressionSites :: Map.Map Name [Name] -> LHsExpr GhcRn -> [(String, Int)]
