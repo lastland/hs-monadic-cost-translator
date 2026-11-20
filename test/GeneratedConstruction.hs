@@ -157,6 +157,11 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuantifiedDirect.hs"
     accepts "QuantifiedApplication.hs"
     accepts "QuantifiedPromoted.hs"
+    accepts "QuantifiedPromotedDemand.hs"
+    rejectsAt "QuantifiedPromotedEscape.hs"
+        [(13, reprFailure), (16, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (19, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (22, forbidden "Memorist.Data.Interface.Demand.usage")]
     accepts "ConcreteCaller.hs"
     accepts "RenamedProof.hs"
     rejectsAt "QuantifiedEscapes.hs"

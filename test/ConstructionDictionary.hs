@@ -13,7 +13,7 @@ import Control.Monad (guard)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType, typeKind)
-import GHC.Builtin.Types (eqDataCon, eqTyCon)
+import GHC.Builtin.Types (eqDataCon, eqTyCon, cTupleDataCon)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
 import GHC.Core.Coercion (Role(..), coercionLKind, coercionRKind, coercionRole)
@@ -75,6 +75,7 @@ trace env given seen expression = case expression of
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
+            | identifier == dataConWorkId (cTupleDataCon 0), null arguments -> UnitConstraint
             | identifier == dataConWorkId eqDataCon,
               [C.Type _, C.Type left, C.Type right, C.Coercion proof] <- arguments,
               nominalFamily proof, eqType left (coercionLKind proof), eqType right (coercionRKind proof) ->
@@ -117,6 +118,7 @@ renderEvidence (Application p f arg) = "apply " ++ pretty p ++ " {" ++ renderEvi
 renderEvidence (Lifted co source) = "lifted " ++ pretty (coercionRKind co) ++ " {" ++ renderEvidence source ++ "}"
 renderEvidence (Equality p _) = "boxed nominal equality " ++ pretty p
 renderEvidence (EqualityCase _ equality body) = "equality-case {" ++ renderEvidence equality ++ "} {" ++ renderEvidence body ++ "}"
+renderEvidence UnitConstraint = "builtin empty constraint"
 
 substitute :: T.Subst -> [(Name, Evidence)] -> Evidence -> Evidence
 substitute substitution env ev = case ev of
@@ -145,6 +147,7 @@ substitute substitution env ev = case ev of
     Lifted co source -> Lifted (T.substCo substitution co) (sub source)
     Equality p proof -> Equality (ty p) (T.substCo substitution proof)
     EqualityCase p equality body -> EqualityCase (ty p) (sub equality) (sub body)
+    UnitConstraint -> UnitConstraint
   where
     ty = T.substTy substitution
     sub = substitute substitution env
@@ -240,6 +243,7 @@ proofScoped = go
     go _ Equality{} = True
     go scope (EqualityCase p equality body) = maybe False (eqType p) (predicateOf body) &&
         go scope equality && go scope body
+    go _ UnitConstraint = True
     go _ _ = False
 
 hasApplication :: Evidence -> Bool
@@ -486,6 +490,7 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; Applicatio
         result <- normalize path body
         guard (maybe False (eqType p) (predicateOf result))
         pure result
+    normalize _ UnitConstraint = Just UnitConstraint
     progress sel df origin (prevSel, prevDf, prev) = sel /= prevSel || df /= prevDf || descendant origin prev
 projected _ ev = Just ev
 
@@ -523,6 +528,7 @@ sameEvidence (Equality p a) (Equality q b) = eqType p q &&
     eqType (coercionLKind a) (coercionLKind b) && eqType (coercionRKind a) (coercionRKind b)
 sameEvidence (EqualityCase p a d) (EqualityCase q b e) = eqType p q &&
     sameEvidence a b && sameEvidence d e
+sameEvidence UnitConstraint UnitConstraint = True
 sameEvidence _ _ = False
 
 sameArgument :: Argument -> Argument -> Bool

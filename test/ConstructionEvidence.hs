@@ -299,6 +299,7 @@ checkUse rules origin utility = check
             validSuper selector endpoint parent && supportEvidence parent
         supportEvidence ev@Application{} = proofScoped (const True) ev
         supportEvidence Equality{} = True
+        supportEvidence UnitConstraint = True
         supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
             tagMethod selected predicate && case getClassPredTys_maybe predicate of
@@ -417,6 +418,7 @@ checkUse rules origin utility = check
         resolved ev@EvidenceLambda{} = proofScoped (methodContext homes field) ev
         resolved ev@Lifted{} = proofScoped (methodContext homes field) ev
         resolved Equality{} = True
+        resolved UnitConstraint = True
         resolved ev@Application{} = ownedApplication ev ||
             maybe False (\actual -> case actual of Instance{} -> resolved actual; _ -> False) (projected homes ev)
         resolved ev@Super{}

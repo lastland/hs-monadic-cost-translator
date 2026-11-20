@@ -2,7 +2,9 @@
 module ConstructionEvidenceTypes (Evidence(..), Argument(..), predicateOf) where
 
 import GHC
+import GHC.Builtin.Types (cTupleTyCon)
 import GHC.Core.Coercion (Coercion, coercionRKind)
+import GHC.Core.Type (mkTyConTy)
 
 data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id Type Evidence
     | Transport Type Evidence | BuiltinTag Type Type Id | Unknown String
@@ -10,6 +12,7 @@ data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id 
     | Application Type Evidence Argument | Lifted Coercion Evidence
     | Equality Type Coercion
     | EqualityCase Type Evidence Evidence
+    | UnitConstraint
 data Argument = TypeArgument Type | EvidenceArgument Evidence
 
 predicateOf :: Evidence -> Maybe Type
@@ -24,4 +27,5 @@ predicateOf (Application predicate _ _) = Just predicate
 predicateOf (Lifted co _) = Just (coercionRKind co)
 predicateOf (Equality predicate _) = Just predicate
 predicateOf (EqualityCase predicate _ _) = Just predicate
+predicateOf UnitConstraint = Just (mkTyConTy (cTupleTyCon 0))
 predicateOf Unknown{} = Nothing
