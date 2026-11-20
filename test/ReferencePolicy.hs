@@ -926,6 +926,9 @@ reachesSyntax includeConstructors includeTypes target = value 300 []
     expressionUses fuel visited environment located = case unLoc located of
         HsVar _ name -> (includeConstructors || isVarOcc (rdrNameOcc (unLoc name))) &&
             variable fuel visited environment (unLoc name)
+        RecordCon { rcon_con = name, rcon_flds = fields } ->
+            (includeConstructors && variable fuel visited environment (unLoc name)) ||
+                generic (fuel - 1) visited environment fields
         HsLam _ _ (MG _ alternatives) -> any (matchUses fuel visited environment . unLoc) (unLoc alternatives)
         HsLet _ locals body -> expressionUses (fuel - 1) visited (extendBindings (localBindings locals) environment) body
         HsCase _ subject (MG _ alternatives) -> expressionUses (fuel - 1) visited environment subject ||
