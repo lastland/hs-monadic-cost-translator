@@ -3,7 +3,8 @@
 -- calling an ordinary home function does not turn that function into a property.
 module ConstructionOperandTransfers (ordinaryOperandTransfers) where
 
-import ConstructionAst (children, collectAst, pretty, strictConstructorOperands, typedVariable)
+import ConstructionAst (children, collectAst, pretty, strictConstructorOperands, strictNullaryRhs, typedVariable)
+import ConstructionQuickCheckUses (quickCheckOperand)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
 import Data.Data (Data, cast)
@@ -74,7 +75,8 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
             ++ " (operand in ordinary callee at this instantiation)"
         | e <- collectAst source, Just call@(location, name, _) <- [typedCall e],
           Just (key, body, sub) <- [instantiate call],
-          let becomes ty = not (result ty) && result (substTy sub ty),
+          let operand = quickCheckOperand result
+              becomes ty = not (operand ty) && operand (substTy sub ty),
           any becomes (forcedOperands body) || any (becomes . mkTyVarTy) (heads Map.! key)]
 
 rho :: Type -> Type
@@ -135,6 +137,8 @@ bodyUses qc = walk
                   ([scaledThing first | name == getName seqId,
                       first:_ <- [fst (splitFunTys (rho ty))]], [call])
             | Just pat@(L _ BangPat{}) <- cast node :: Maybe (LPat GhcTc) = ([hsLPatType pat], [])
+            | Just (FunBind _ _ matches) <- cast node :: Maybe (HsBind GhcTc), strictNullaryRhs matches =
+                ([mg_res_ty (mg_ext matches)], [])
             | Just e <- cast node, Just (_, _, operands) <- strictConstructorOperands e = (operands, [])
             | Just (ExpandedThingTc (OrigExpr RecordUpd{rupd_flds = RegularRecUpdFields parents _}) expanded) <- cast node =
                 (updatedStrictFields [greName f | parent <- toList parents, f <- toList (rnRecUpdLabels parent)] expanded, [])

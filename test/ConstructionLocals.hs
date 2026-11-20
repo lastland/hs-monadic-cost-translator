@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
     nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings, typedVariable)
+import ConstructionAst (bindingName, children, collectAst, nestedBindings, strictNullaryRhs, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
 import Control.Monad (zipWithM)
@@ -52,9 +52,7 @@ forcedBinder PatBind{pat_lhs = pat} = strictPat pat
     strictPat (L _ (ParPat _ p)) = strictPat p
     strictPat (L _ (BangPat _ p)) = simpleBinder p
     strictPat _ = False
-forcedBinder FunBind{fun_matches = matches} = case unLoc (mg_alts matches) of
-    [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True
-    _ -> False
+forcedBinder FunBind{fun_matches = matches} = strictNullaryRhs matches
 forcedBinder _ = False
 
 simpleBinder :: LPat (GhcPass p) -> Bool

@@ -1,5 +1,8 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, strictConstructorOperands, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst
+    ( collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
+    , strictConstructorOperands, call, bindingName, strictNullaryRhs, plainPattern, constructorPattern, oneRhs, equations
+    ) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
@@ -111,6 +114,12 @@ bindingName :: HsBind GhcRn -> Maybe Name
 bindingName (FunBind _ name _) = Just (unLoc name)
 bindingName PatBind{pat_lhs = pat} = plainPattern pat
 bindingName _ = Nothing
+
+-- GHC retains `let !y = rhs` as a strict equation with no arguments.
+strictNullaryRhs :: MatchGroup (GhcPass p) (LHsExpr (GhcPass p)) -> Bool
+strictNullaryRhs matches = case unLoc (mg_alts matches) of
+    [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True
+    _ -> False
 
 plainPattern :: LPat GhcRn -> Maybe Name
 plainPattern (L _ (VarPat _ name)) = Just (unLoc name)

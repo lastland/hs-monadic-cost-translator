@@ -1,7 +1,7 @@
 -- | A parameter has no declaration role. Its ordinary uses still have a
 -- checked type, including the instantiation selected at each occurrence.
 module ConstructionQuickCheckUses
-    (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
+    (quickCheckPackage, quickCheckResult, quickCheckOperand, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
 import ConstructionAst (collectAst, strictConstructorOperands, typedVariable)
 import ConstructionRuntime (resolveType)
@@ -27,6 +27,10 @@ quickCheckResult = do
         Just (constructor, _) -> constructor `elem` constructors
         Nothing -> False
 
+-- Forcing a function to WHNF does not evaluate its result.
+quickCheckOperand :: (Type -> Bool) -> Type -> Bool
+quickCheckOperand result ty = null (fst (splitPiTys ty)) && result ty
+
 data QuickCheckUses = QuickCheckUses
     { valueAt :: SrcSpan -> Name -> Bool
     , strictPatternAt :: SrcSpan -> Bool
@@ -49,14 +53,13 @@ quickCheckUses result = inModule
         -- bare specialization there is no source operand to report.
         applied = Set.fromList [key | HsApp _ f _ <- collectAst source :: [HsExpr GhcTc],
             Just key <- [variableSite f]]
-        operand ty = null (fst (splitPiTys ty)) && result ty
-        site expression | Just (loc, name, fields) <- strictConstructorOperands expression, any operand fields =
+        site expression | Just (loc, name, fields) <- strictConstructorOperands expression, any (quickCheckOperand result) fields =
             (,name) <$> inputSpan loc
         site expression = do
             key@(_, name) <- variableSite expression
             let ty = lhsExprType expression
                 bareSeq = name == getName seqId && Set.notMember key applied && case fst (splitFunTys (snd (splitForAllTyVars ty))) of
-                    arg:_ -> operand (scaledThing arg)
+                    arg:_ -> quickCheckOperand result (scaledThing arg)
                     [] -> False
             if result ty || bareSeq then Just key else Nothing
     variableSite expression = do
