@@ -181,7 +181,7 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
         _ -> False
     permits AbstractMethod role = role `elem` [AbstractMethod, Payload]
     permits FullMethod role = role `elem` [FullMethod, Payload]
-    permits UsageMethod role = role `elem` [UsageMethod, EmptyAccounting, UnionAccounting]
+    permits UsageMethod role = role `elem` [UsageMethod, ThunkAccounting, EmptyAccounting, UnionAccounting]
     permits _ _ = False
     permitted name | name `elem` restrictedViews support = False
     permitted name = case nameModule_maybe name of

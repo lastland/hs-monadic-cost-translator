@@ -25,7 +25,7 @@ import GHC.Iface.Syntax (ifDFun)
 
 data Role
     = Primitive | Derived | Representation | DemandData
-    | View | Payload | EmptyAccounting | UnionAccounting | Annotation
+    | View | Payload | ThunkAccounting | EmptyAccounting | UnionAccounting | Annotation
     | ReprMethod | AbstractMethod | FullMethod | UsageMethod | MinimumMethod | DemandArbitraryMethod
     deriving (Eq, Show)
 
@@ -149,6 +149,7 @@ summaries =
     [("Memorist.Data.List", name, DemandData) | name <- ["NilD", "ConsD"]] ++
     [ ("Memorist.Base.Thunk", "Th", View)
     , ("Memorist.Base.Thunk", "tval", Payload)
+    , ("Memorist.Base.Thunk", "useThunk", ThunkAccounting)
     , ("Memorist.Base.Thunk", "empty", EmptyAccounting)
     , ("Memorist.Base.Thunk", "union", UnionAccounting)
     , ("Memorist.Base.Core", "Annotated", Annotation)
