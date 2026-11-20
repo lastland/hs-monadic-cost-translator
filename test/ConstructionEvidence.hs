@@ -267,6 +267,7 @@ checkUse rules origin utility = check
                 UnknownMethod -> Just "unknown executable method/default dependency"
             _ -> Just "unsaturated selector has no selected instance evidence"
         root (Super _ _ parent) = root parent
+        root (Transport _ parent) = root parent
         root evidence = evidence
         concreteMethod active obligation
             | Just (method, obligations) <- selectedMethod rt (methodFacts rules) obligation,
@@ -284,6 +285,7 @@ checkUse rules origin utility = check
         utilityMethod _ = False
         supportEvidence Given{} = True
         supportEvidence (Instance _ _ _ ds) = all supportEvidence ds
+        supportEvidence (Transport _ parent) = supportEvidence parent
         supportEvidence ev@Super{} = maybe False supportEvidence (projected homes ev)
         supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
@@ -352,6 +354,7 @@ checkUse rules origin utility = check
             _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
                 getName cls == reprClass && eqType argument ty
             Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
+            Transport{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
             Instance owner predicate instantiation dependencies | Just (method, context) <- selectedHome homes field (getName owner) instantiation ty,
                     Just (cls, [argument]) <- getClassPredTys_maybe predicate ->
                 getName cls == reprClass && eqType argument ty && length context == length dependencies &&
@@ -399,6 +402,7 @@ checkUse rules origin utility = check
         -- An inert dictionary confers no method permission, even at a source
         -- site erased from Core. It must still have a fully selected origin.
         resolved (Instance _ _ _ children') = all resolved children'
+        resolved (Transport _ parent) = resolved parent
         resolved ev@Super{}
             | fieldSlot (root ev) = True
             | Just actual@Instance{} <- projected homes ev = resolvedProjection ev actual
