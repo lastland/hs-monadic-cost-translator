@@ -12,11 +12,13 @@ import qualified Data.Map.Strict as Map
 import GHC
 import GHC.Builtin.Types (intTyCon, integerTyCon, boolTyCon, charTyCon, floatTyCon, doubleTyCon, unitTyCon, unitDataCon, nilDataCon, consDataCon)
 import GHC.Core.ConLike (ConLike(..))
+import GHC.Core.DataCon (dataConRepArity)
 import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (mkTyConApp, splitTyConApp_maybe, splitForAllTyVars, splitFunTys)
 import GHC.Fingerprint.Type (Fingerprint(..))
+import GHC.Data.FastString (mkFastString)
 import GHC.Types.Name (getOccString, nameModule_maybe)
 import GHC.Iface.Syntax (ifDFun)
 
@@ -88,9 +90,24 @@ runtime = do
         name <- resolveExport actual occurrence
         pure (label ++ "." ++ occurrence, name)
     standard <- standardInstances ordinary
+    proxy <- proxyWitness
     pure (Runtime (moduleUnit root) (Map.fromList entries) (Map.fromList types)
         (Map.fromList (standard ++ concat [is | (_, _, is) <- owners]))
-        (("syntax.()", getName unitDataCon) : ("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : ordinary))
+        (("syntax.()", getName unitDataCon) : ("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : proxy : ordinary))
+
+-- Proxy witnesses carry neither a value nor a dictionary. Resolve the actual
+-- base constructor and check its runtime arity, rather than trusting its name.
+proxyWitness :: Ghc (String, Name)
+proxyWitness = do
+    owner <- findModule (mkModuleName "Data.Proxy") (Just (mkFastString "base"))
+    constructor <- resolveExport owner "Proxy"
+    ty <- resolveType owner "Proxy"
+    thing <- lookupName constructor
+    case thing of
+        Just (AConLike (RealDataCon actual))
+            | dataConTyCon actual == ty, dataConRepArity actual == 0 ->
+                pure ("Data.Proxy.Proxy", constructor)
+        _ -> fail "construction setup: Proxy witness is not the nullary base constructor"
 
 -- Select closed standard instance heads, not all definitions in a base unit.
 -- The compiler version is pinned; each use must still match the selected class,
