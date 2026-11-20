@@ -156,6 +156,7 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "QuantifiedDirect.hs"
     accepts "QuantifiedApplication.hs"
+    accepts "QuantifiedPromoted.hs"
     accepts "ConcreteCaller.hs"
     accepts "RenamedProof.hs"
     rejectsAt "QuantifiedEscapes.hs"
