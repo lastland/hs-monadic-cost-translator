@@ -59,6 +59,7 @@ forcedBinder _ = False
 
 simpleBinder :: LPat (GhcPass p) -> Bool
 simpleBinder (L _ (ParPat _ p)) = simpleBinder p
+simpleBinder (L _ (SigPat _ p _)) = simpleBinder p
 simpleBinder (L _ VarPat{}) = True
 simpleBinder (L _ WildPat{}) = True
 simpleBinder _ = False

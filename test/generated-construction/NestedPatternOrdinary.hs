@@ -83,3 +83,9 @@ independentAction t =
             ( M.tval t
             , M.tval t `seq` (pure True :: M.MemoristM Bool) )
     in Q.property (seen && M.value (M.eval1 act))
+
+annotatedNumber :: forall a. Num a => a -> Q.Property
+annotatedNumber _ =
+    let (seen :: Bool, _) =
+            (True, 1 :: a)
+    in Q.property seen

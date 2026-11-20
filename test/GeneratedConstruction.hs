@@ -112,7 +112,8 @@ checkGeneratedConstructionSpecimens = do
          (15, forbidden tval), (21, forbidden tval), (28, forbidden tval),
          (34, forbidden tval), (39, forbidden tval), (44, forbidden tval),
          (49, forbidden tval), (54, forbidden tval), (60, forbidden tval), (61, protectedEq),
-         (67, forbidden tval), (72, forbidden tval), (77, forbidden tval), (84, forbidden tval)]
+         (67, forbidden tval), (72, forbidden tval), (77, forbidden tval), (84, forbidden tval),
+         (90, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num")]
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
@@ -295,7 +296,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "LexicalValueControl.hs"
     mixed "IndependentTypedLocals.hs" [TopBinding "run", TopBinding "lawful"] "IndependentTypedLocals.hs"
         [(9, forbidden tval), (14, selected "GHC.Internal.Enum.maxBound: unknown executable method/default dependency [given Bounded"),
-         (15, forbidden tval), (24, forbidden tval), (36, forbidden tval)]
+         (15, forbidden tval), (24, forbidden tval), (36, forbidden tval), (43, forbidden tval)]
     rejectsAt "NestedOrdinaryView.hs" [(11, view "preserve")]
     mixed "NestedOrdinaryPattern.hs" [TopBinding "law"] "NestedOrdinaryPattern.hs"
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]

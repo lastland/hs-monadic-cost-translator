@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, TypeApplications, TypeFamilies #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, TypeApplications, TypeFamilies #-}
 module IndependentTypedLocals where
 
 import LexicalFamilyEvidence (Opaque)
@@ -34,6 +34,13 @@ data Shape a where
 refined :: Shape a -> M.Th a -> Q.Property
 refined shape t =
     let observed = M.tval t
+    in case shape of
+        Flag -> Q.property observed
+        Observe -> Q.property (observed 3)
+
+refinedPattern :: forall a. Shape a -> M.Th a -> Q.Property
+refinedPattern shape t =
+    let (observed :: a, _) = (M.tval t, ())
     in case shape of
         Flag -> Q.property observed
         Observe -> Q.property (observed 3)
