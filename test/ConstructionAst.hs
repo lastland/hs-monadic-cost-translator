@@ -1,12 +1,12 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, appliedDataCon, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, maybeToList)
 import GHC
 import qualified GHC.Core as C
-import GHC.Core.ConLike (ConLike)
+import GHC.Core.ConLike (ConLike(..))
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
 import GHC.Types.SrcLoc (getBufSpan, srcSpanToRealSrcSpan)
 import GHC.Utils.Outputable (Outputable, ppr, showSDocUnsafe)
@@ -76,6 +76,18 @@ typedVariable expression = at (getLocA expression) (unLoc expression)
     at _ (ExprWithTySig _ function _) = typedVariable function
     at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
     at _ _ = Nothing
+
+-- Keep the written term arguments in constructor order, across type wrappers.
+appliedDataCon :: HsExpr GhcTc -> Maybe (DataCon, [LHsExpr GhcTc])
+appliedDataCon = go []
+  where
+    go args (XExpr (ConLikeTc (RealDataCon con) _ _)) = Just (con, args)
+    go args (XExpr (WrapExpr (HsWrap _ f))) = go args f
+    go args (HsApp _ f x) = go (x : args) (unLoc f)
+    go args (HsAppType _ f _) = go args (unLoc f)
+    go args (HsPar _ f) = go args (unLoc f)
+    go args (ExprWithTySig _ f _) = go args (unLoc f)
+    go _ _ = Nothing
 
 call :: [Name] -> LHsExpr GhcRn -> Maybe [LHsExpr GhcRn]
 call names expression = case spine expression of

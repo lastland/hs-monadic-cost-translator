@@ -3,17 +3,20 @@
 module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
-import ConstructionAst (collectAst, typedVariable)
+import ConstructionAst (appliedDataCon, collectAst, typedVariable)
 import ConstructionRuntime (resolveType)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
+import GHC.Core.DataCon (dataConImplBangs, isBanged)
+import GHC.Core.TyCon (isDataTyCon)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Id.Make (seqId)
+import GHC.Types.Name (isInternalName)
 import GHC.Types.SrcLoc (getBufSpan)
 
 quickCheckPackage :: String
@@ -40,7 +43,13 @@ quickCheckUses result = inModule
     inModule checked = QuickCheckUses used forced
       where
         source = tm_typechecked_source checked
-        sites = Set.fromList (mapMaybe site (collectAst source))
+        expressions = collectAst source
+        sites = Set.fromList (mapMaybe site expressions)
+        -- Passing a local value unchanged into a lazy field does not force it.
+        -- The field's expression and every later consumer are still checked.
+        forwarded = Set.fromList [key | L _ e <- expressions, Just (con, args) <- [appliedDataCon e],
+            isDataTyCon (dataConTyCon con), (bang, x) <- zip (dataConImplBangs con) args, not (isBanged bang),
+            Just key@(_, n) <- [variableSite x], isInternalName n, null (fst (splitPiTys (lhsExprType x)))]
         bangs = Set.fromList [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
             result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]]
         used location name = maybe False (\span' -> Set.member (span', name) sites) (inputSpan location)
@@ -55,7 +64,7 @@ quickCheckUses result = inModule
                 bareSeq = name == getName seqId && Set.notMember key applied && case fst (splitFunTys (snd (splitForAllTyVars ty))) of
                     arg:_ -> let operand = scaledThing arg in null (fst (splitPiTys operand)) && result operand
                     [] -> False
-            if result ty || bareSeq then Just key else Nothing
+            if (result ty && Set.notMember key forwarded) || bareSeq then Just key else Nothing
     variableSite expression = do
         (location, name) <- typedVariable expression
         (,name) <$> inputSpan location
