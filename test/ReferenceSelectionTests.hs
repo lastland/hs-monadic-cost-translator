@@ -92,7 +92,7 @@ checkSelection = do
                 not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"])) $
             fail ("setup errors must be fatal, not reported as reference regressions\n" ++ childResult status out err)
     checkInterrupted executable
-    checkCandidateCompilerCrashes executable
+    checkCompilerCrashes executable
     checkMissingRuntimeCompilerCrash executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
 
@@ -197,23 +197,33 @@ checkNegativeComparerCrash executable =
                 childResult status out err)
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
-checkCandidateCompilerCrashes :: FilePath -> IO ()
-checkCandidateCompilerCrashes executable =
-    mapM_ check
+data CompilerStage = CandidateCompiler | ObserverCompiler
+
+checkCompilerCrashes :: FilePath -> IO ()
+checkCompilerCrashes executable = do
+    check ObserverCompiler versionedPanic
+    mapM_ (check CandidateCompiler)
         [("signal", "kill -TERM \"$$\"")
         ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
-        ,("versioned exit-1 panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")]
+        ,versionedPanic]
   where
-    check (label, crash) =
+    versionedPanic =
+        ("versioned exit-1 panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")
+    check stage (label, crash) =
         withSystemTempDirectory "reference-selection-crash-" $ \root -> do
             realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
             environment <- getEnvironment
-            let wrapper = root </> "ghc"
+            let (target, context, diagnostic) = case stage of
+                    CandidateCompiler ->
+                        ("Generated.hs", "candidate", "setup error: generated module compiler crashed")
+                    ObserverCompiler ->
+                        ("Observe.hs", "observer", "reference setup error:")
+                wrapper = root </> "ghc"
                 injected =
                     [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
                     ,("REFERENCE_REAL_GHC", realGhc)]
             writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
-                ["case \"$*\" in *Generated.hs*)", "  " ++ crash ++ " ;; esac"]
+                ["case \"$*\" in *" ++ target ++ "*)", "  " ++ crash ++ " ;; esac"]
                 ["exec \"$0.real\" \"$@\""])
             permissions <- getPermissions wrapper
             setPermissions wrapper permissions {executable = True}
@@ -221,12 +231,12 @@ checkCandidateCompilerCrashes executable =
                 (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
                     {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
             unless (status /= ExitSuccess &&
-                    "setup error: generated module compiler crashed" `isInfixOf` err &&
+                    diagnostic `isInfixOf` err &&
                     not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
                     length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
-                fail ("candidate compiler " ++ label ++ " must stop the suite before later cases\n" ++
+                fail (context ++ " compiler " ++ label ++ " must stop the suite before later cases\n" ++
                     childResult status out err)
-            putStrLn ("PASS: reference-selection / candidate compiler " ++ label ++ " is fatal")
+            putStrLn ("PASS: reference-selection / " ++ context ++ " compiler " ++ label ++ " is fatal")
 
 checkMissingRuntimeCompilerCrash :: FilePath -> IO ()
 checkMissingRuntimeCompilerCrash executable =
