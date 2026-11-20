@@ -11,6 +11,7 @@ import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionDemandMethods (StockMethods, stockMethods)
+import ConstructionStockRequests (stockProvenance)
 import ConstructionStock (stockUse)
 import ConstructionTag (tagMethod, validTag, tagHomeType)
 import ConstructionHomeRepr
@@ -119,6 +120,7 @@ collectEvidence original rt utilities locals homes program support checked sourc
         rootSites = bindingSites (constraintAliases environment) environment givens (C.flattenBinds program)
     session <- getSession
     flags <- getSessionDynFlags
+    stockDFuns <- if original then pure Set.empty else stockProvenance rt checked
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
         typed = atSourceSpan [(at, (name, e)) | e <- collectAst (tm_typechecked_source checked),
@@ -169,7 +171,7 @@ collectEvidence original rt utilities locals homes program support checked sourc
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    stock = stockMethods rt checked env (uses qc aliases selected env allGivens)
+                    stock = stockMethods rt stockDFuns checked env (uses qc aliases selected env allGivens)
                     rawSites = DictionaryFacts rawEnv : TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
                          StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc aliases selected env allGivens)) :
                          DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites aliases env allGivens raw

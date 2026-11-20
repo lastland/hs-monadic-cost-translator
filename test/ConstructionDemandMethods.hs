@@ -2,26 +2,23 @@
 -- never a permission for a type or for a caller-supplied dictionary.
 module ConstructionDemandMethods (runtimeDemandMethod, StockMethods(..), Stock(..), StockMethod(..), stockMethods, safeHomeType, standardMethod) where
 
-import ConstructionAst (collectAst)
 import ConstructionDictionary (Environment, Evidence(..), Use(..), sameEvidence)
 import ConstructionRuntime
+import ConstructionStockRequests (stockHead)
 import Control.Monad (guard)
-import Data.List (nub)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import GHC hiding (exprType, typeKind)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon)
-import GHC.Builtin.Types (liftedTypeKind)
 import GHC.Core.DataCon (dataConInstOrigArgTys, dataConWorkId)
 import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe, mkClassPred)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (isPredTy, mkTyVarTy, mkVisFunTyMany, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
+import GHC.Core.Type (isPredTy, mkTyVarTy, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
 import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
-import GHC.Types.Name (nameOccName)
-import GHC.Types.Name.Occurrence (isTvOcc)
 import GHC.Types.Var (isId, isTyVar, varType)
 import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_insts)
@@ -97,24 +94,19 @@ data StockMethod = StockMethod Name (Maybe Name) Id [TyVar] [Id] [Use] (Maybe Na
 data Stock = Stock Id [TyVar] [Id] Type [StockMethod]
 data StockMethods = StockMethods Environment [Stock]
 
-stockMethods :: Runtime -> TypecheckedModule -> Environment -> (C.CoreExpr -> [Use]) -> StockMethods
-stockMethods rt checked env collect = StockMethods env stocks
+stockMethods :: Runtime -> Set.Set Name -> TypecheckedModule -> Environment -> (C.CoreExpr -> [Use]) -> StockMethods
+stockMethods rt provenance checked env collect = StockMethods env stocks
   where
     stocks = do
         inst <- tcg_insts (fst (tm_internals_ checked))
         let df = is_dfun inst
-        guard (isDFunId df)
+        guard (isDFunId df && Set.member (getName df) provenance)
         dictionary <- maybe [] pure (Map.lookup (getName df) env)
+        guard (eqType (exprType dictionary) (idType df))
         let (bs, body) = C.collectBinders dictionary
             (vars, slots) = span isTyVar bs
         guard (all (\v -> isId v && isPredTy (idType v)) slots)
-        (cls, [operand]) <- maybe [] pure (getClassPredTys_maybe (exprType body))
-        (tc, args) <- maybe [] pure (splitTyConApp_maybe operand)
-        guard (isDataTyCon tc && not (isNewTyCon tc) && not (isFamInstTyCon tc) &&
-            isLiftedTypeKind (tyConResKind tc) && all (stockKind . varType) vars &&
-            length args == length (tyConTyVars tc) && sameTypes args (map mkTyVarTy vars) &&
-            all isVanillaDataCon (tyConDataCons tc) &&
-            (getName cls, getName tc, length args) `elem` requests)
+        (cls, _, _, _) <- maybe [] pure (stockHead vars (exprType body))
         (C.Var worker, supplied) <- [C.collectArgs body]
         guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)))
         let fields = filter (not . C.isTyCoArg) supplied
@@ -135,6 +127,7 @@ stockMethods rt checked env collect = StockMethods env stocks
             methodSlots = take (length slots) afterTypes
             ty = substTyWith vars (map mkTyVarTy methodVars)
         guard (length methodVars == length vars && length methodSlots == length slots &&
+            sameTypes (map (ty . varType) vars) (map varType methodVars) &&
             all isId methodSlots && sameTypes (map idType methodSlots) (map (ty . idType) slots))
         let obligations = collect rhs
             self = Instance df (ty predicate) (map mkTyVarTy methodVars)
@@ -147,39 +140,6 @@ stockMethods rt checked env collect = StockMethods env stocks
                     eqType t target, sameEvidence d self -> Just selected
                 _ -> Nothing
         pure (StockMethod (getName selector) def implementation methodVars methodSlots obligations inherited)
-    -- Bound parameter kinds structurally, without widening root or field proofs.
-    stockKind kind = isLiftedTypeKind kind ||
-        eqType kind (mkVisFunTyMany liftedTypeKind liftedTypeKind)
     sameTypes xs ys = length xs == length ys && and (zipWith eqType xs ys)
     sameVar (C.Var actual) expected = actual == expected
     sameVar _ _ = False
-    -- Only stock requests on fully generic ordinary data heads qualify.
-    requests = case tm_renamed_source checked of
-        Nothing -> []
-        Just (group, _, _, _, _) ->
-            [(cls, unLoc target, length (hsQTvExplicit variables)) |
-                DataDecl{tcdLName = target, tcdTyVars = variables, tcdDataDefn = definition} <-
-                    collectAst group :: [TyClDecl GhcRn],
-                L _ clause <- dd_derivs definition, stock (deriv_clause_strategy clause),
-                L _ HsSig{sig_body = sig} <- collectAst (deriv_clause_tys clause) :: [LHsSigType GhcRn],
-                Just (cls, []) <- [typeApps sig]] ++
-            [(cls, target, length vars) |
-                declaration <- collectAst group :: [DerivDecl GhcRn], stock (deriv_strategy declaration),
-                L _ HsSig{sig_body = sig} <- collectAst (deriv_type declaration) :: [LHsSigType GhcRn],
-                Just (cls, [operand]) <- [typeApps (unqualified sig)],
-                Just (target, arguments) <- [typeApps operand],
-                Just vars <- [mapM typeVariable arguments], length (nub vars) == length vars]
-    stock :: Maybe (LDerivStrategy GhcRn) -> Bool
-    stock Nothing = True
-    stock (Just (L _ StockStrategy{})) = True
-    stock _ = False
-    unqualified (L _ (HsForAllTy _ _ body)) = unqualified body
-    unqualified (L _ (HsQualTy _ _ body)) = unqualified body
-    unqualified body = body
-    typeApps (L _ (HsTyVar _ _ n)) = Just (unLoc n, [])
-    typeApps (L _ (HsAppTy _ f x)) = do (n, xs) <- typeApps f; pure (n, xs ++ [x])
-    typeApps (L _ (HsParTy _ t)) = typeApps t
-    typeApps _ = Nothing
-    typeVariable (L _ (HsTyVar _ _ n)) | isTvOcc (nameOccName (unLoc n)) = Just (unLoc n)
-    typeVariable (L _ (HsParTy _ t)) = typeVariable t
-    typeVariable _ = Nothing

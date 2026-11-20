@@ -6,6 +6,7 @@ import Cost.Translate (translateFile)
 import Cost.Publication (Publication, verifyOrigin)
 import Control.Monad.IO.Class (liftIO)
 import ConstructionOrigin (originReferences)
+import ConstructionStockMetadata (checkTHStockMetadata)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAllocation (checkPhantomAllocation)
@@ -157,6 +158,7 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "StockIndexed.hs"
     accepts "QuantifiedDirect.hs"
     accepts "QuantifiedApplication.hs"
     accepts "QuantifiedPromoted.hs"
@@ -203,10 +205,23 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "StockHigherSpecialized.hs"
         [(line, selected "GHC.Classes.==") | line <- [13, 15, 22, 24]]
     rejectsAt "StockHigherVia.hs" [(14, selected "GHC.Classes.==")]
-    rejectsAt "StockHigherPoly.hs"
-        [(10, selected "GHC.Classes.=="), (12, selected "GHC.Internal.Show.show"),
-         (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show"),
-         (22, selected "GHC.Classes.=="), (24, selected "GHC.Internal.Show.show")]
+    accepts "StockHigherPoly.hs"
+    mapM_ accepts ["PolyAttached.hs", "PolyStandalone.hs", "PolyRepresentations.hs",
+        "DependentStandalone.hs", "PolyExplicitKinds.hs", "DefaultStockStrategy.hs"]
+    rejectsAt "PolyEscapes.hs"
+        ([(line, selected "GHC.Classes.==") | line <- [8, 12, 16, 20, 22, 24, 28, 37, 43, 50]] ++
+         [(line, selected "GHC.Internal.Show.show") | line <- [10, 14, 18, 26, 30, 39, 45, 52]] ++
+         [(56, unknown "PolyEscapes.firstOrder")])
+    rejectsAt "PolyHeads.hs"
+        [(line, selected "GHC.Classes.==") | line <- [13, 15, 23, 25, 33, 35, 41, 48]]
+    rejectsAt "ContextSpecialized.hs" [(14, selected "GHC.Classes.==")]
+    rejectsAt "AnyClassDefaults.hs"
+        [(12, selected "GHC.Classes.=="), (19, selected "GHC.Internal.Show.show"),
+         (27, selected "AnyClassDefaults.local")]
+    checksStockVia
+    mapM_ checksStockTH ["THConstant.hs", "THFields.hs"]
+    checksStockWildcard
+    mapM_ checksStockDuplicate ["DuplicateGeneric.hs", "THDuplicateGeneric.hs", "DuplicateStockRequests.hs"]
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"
@@ -240,6 +255,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "StockGrowth.hs"
         [(9, selected "GHC.Classes.=="), (11, selected "GHC.Internal.Show.show"),
          (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show")]
+    checksStockGrowthBoundary
     rejectsAt "StockSpecialized.hs"
         [(7, selected "GHC.Classes.=="), (10, selected "GHC.Classes.==")]
     accepts "CallerScalarEquality.hs"
@@ -614,6 +630,43 @@ checkGeneratedConstructionSpecimens = do
     putStrLn "PASS: generated-construction / nominal observer support and standalone demand shrinkers, checked ordinary computations / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
+    checksStockGrowthBoundary = do
+        output <- specimen "StockGrowth.hs"
+        diagnostics <- rejection output
+        reports <- siteReports output diagnostics
+        unless (length reports == 32) $
+            fail ("stock growth must retain its 32-report boundary:\n" ++ diagnostics)
+    checksStockVia = do
+        output <- specimen "ViaSelf.hs"
+        typechecks output
+        diagnostics <- rejection output
+        requireAt diagnostics output [(13, selected "GHC.Classes.==")]
+        reports <- siteReports output diagnostics
+        unless (length [() | (at, _) <- reports, srcSpanStartLine at == 13] == 3) $
+            fail ("via Eq must retain all three public caller reports:\n" ++ diagnostics)
+    checksStockTH name = do
+        output <- specimen name
+        typechecks output
+        diagnostics <- rejection output
+        unless (length (filter (isInfixOf "unsupported executable form: Template Haskell") (lines diagnostics)) == 2) $
+            fail ("the whole TH home graph must remain rejected:\n" ++ diagnostics)
+        -- Qualified supplemental check: the public TH gate never reaches methods.
+        checkTHStockMetadata output
+    checksStockWildcard = do
+        output <- specimen "WildcardRequest.hs"
+        typechecks output
+        first <- rejection output
+        second <- rejection output
+        unless (first == second && "stock request metadata unavailable" `isInfixOf` first) $
+            fail ("wildcard metadata must fail closed deterministically:\n" ++ first ++ second)
+    checksStockDuplicate name = do
+        output <- specimen name
+        withSystemTempDirectory "stock-duplicate-head-" $ \objects -> do
+            (status, out, err) <- readProcessWithExitCode "ghc"
+                ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
+                 "-outputdir", objects, "-package", "MemoristANT", output] ""
+            unless (status /= ExitSuccess && "Duplicate instance declarations" `isInfixOf` err) $
+                fail ("generic stock/manual heads must conflict even with different contexts or overlap flags:\n" ++ out ++ err)
     tval = "Memorist.Base.Thunk.tval"
     eval1 = "Memorist.Base.Core.eval1"
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
@@ -649,19 +702,9 @@ checkGeneratedConstructionSpecimens = do
             [(8, selected "GHC.Classes.=="), (10, selected "GHC.Internal.Show.show")]
     checksParameterizedTags = do
         accepts "TagClosed.hs"
-        output <- specimen "TagParameterized.hs"
-        -- Inspect through the public pre-caller guard. The separate closed
-        -- stock-method proof still rejects generic Eq/default obligations.
-        result <- try @IOException (checkGeneratedConstruction output)
-        case result of
-            Left problem -> do
-                let diagnostics = ioeGetErrorString problem
-                    reports = filter (isInfixOf "unapproved ") (lines diagnostics)
-                when ("GHC.Magic.dataToTag#" `isInfixOf` diagnostics) $
-                    fail ("outer tags need exact parameterized builtin evidence:\n" ++ diagnostics)
-                unless (length reports == 2 && all (isInfixOf "GHC.Classes.") reports) $
-                    fail ("only the two independent Eq/default obligations should remain:\n" ++ diagnostics)
-            Right () -> fail "parameterized stock Eq permission is not part of the outer-tag certificate"
+        -- Its inferred kind binder is covered by the separate full stock proof;
+        -- explicit source tag operations still have no ordinary-call permission.
+        accepts "TagParameterized.hs"
     checksSelectedTags = do
         output <- specimen "TagSelected.hs"
         typechecks output
