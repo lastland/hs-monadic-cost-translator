@@ -197,10 +197,14 @@ checkNegativeComparerCrash executable =
                 childResult status out err)
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
-data CompilerStage = CandidateCompiler | ObserverCompiler
+data CompilerStage = CandidateCompiler | ObserverCompiler | AllocatorCompiler
 
 checkCompilerCrashes :: FilePath -> IO ()
 checkCompilerCrashes executable = do
+    check AllocatorCompiler
+        ("versioned panic resembling rejection",
+         "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
+         "echo 'No instance for MonadState' >&2; exit 1")
     check ObserverCompiler versionedPanic
     mapM_ (check CandidateCompiler)
         [("signal", "kill -TERM \"$$\"")
@@ -213,11 +217,16 @@ checkCompilerCrashes executable = do
         withSystemTempDirectory "reference-selection-crash-" $ \root -> do
             realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
             environment <- getEnvironment
-            let (target, context, diagnostic) = case stage of
+            let (target, context, arguments, diagnostic, artifactMessage) = case stage of
                     CandidateCompiler ->
-                        ("Generated.hs", "candidate", "setup error: generated module compiler crashed")
+                        ("Generated.hs", "candidate", ["--all-references", "anf-scoped-renaming", "identity"],
+                         "setup error: generated module compiler crashed", "Reference fixtures and logs:")
                     ObserverCompiler ->
-                        ("Observe.hs", "observer", "reference setup error:")
+                        ("Observe.hs", "observer", ["--all-references", "anf-scoped-renaming", "identity"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                    AllocatorCompiler ->
+                        ("/Get.hs", "allocator rejection", ["runtime-allocator"],
+                         "reference setup error:", "Allocator contract clients and logs:")
                 wrapper = root </> "ghc"
                 injected =
                     [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
@@ -228,12 +237,12 @@ checkCompilerCrashes executable = do
             permissions <- getPermissions wrapper
             setPermissions wrapper permissions {executable = True}
             (status, out, err) <- readCreateProcessWithExitCode
-                (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
+                (proc executable arguments)
                     {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
             unless (status /= ExitSuccess &&
                     diagnostic `isInfixOf` err &&
                     not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
-                    length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
+                    length (filter (artifactMessage `isPrefixOf`) (lines out)) == 1) $
                 fail (context ++ " compiler " ++ label ++ " must stop the suite before later cases\n" ++
                     childResult status out err)
             putStrLn ("PASS: reference-selection / " ++ context ++ " compiler " ++ label ++ " is fatal")
