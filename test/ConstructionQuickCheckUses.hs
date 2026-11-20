@@ -3,8 +3,9 @@
 module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
-import ConstructionAst (appliedDataCon, collectAst, typedVariable)
+import ConstructionAst (appliedDataCon, collectAst, spine, typedVariable)
 import ConstructionRuntime (resolveType)
+import Data.Foldable (toList)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
@@ -15,11 +16,12 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
 import GHC.Data.FastString (mkFastString)
 import qualified GHC.Data.Strict as Strict
-import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
+import GHC.Hs.Syn.Type (hsExprType, hsLPatType, lhsExprType)
 import GHC.Types.Basic (Boxity(Boxed))
 import GHC.Types.FieldLabel (flSelector)
 import GHC.Types.Id.Make (seqId)
 import GHC.Types.Name (isInternalName)
+import GHC.Types.Name.Reader (greName)
 import GHC.Types.SrcLoc (getBufSpan)
 
 quickCheckPackage :: String
@@ -50,8 +52,9 @@ quickCheckUses result = inModule
         sites = Set.fromList (mapMaybe site expressions)
         -- Passing a local value unchanged into a lazy field does not force it.
         -- The field's expression and every later consumer are still checked.
-        forwarded = Set.fromList [key | L _ e <- expressions, x <- lazyFields e,
-            Just key@(_, n) <- [variableSite x], isInternalName n, null (fst (splitPiTys (lhsExprType x)))]
+        forwarded = Set.fromList $ concatMap (mapMaybe variableSite . lazyFields . unLoc) expressions ++
+            [(bytes, unLoc n) | e <- concatMap lazyUpdateFields (collectAst source),
+                (L _ (HsVar _ n), []) <- [spine e], Just bytes <- [inputSpan (getLocA n)]]
         bangs = Set.fromList [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
             result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]]
         used location name = maybe False (\span' -> Set.member (span', name) sites) (inputSpan location)
@@ -63,10 +66,11 @@ quickCheckUses result = inModule
         site expression = do
             key@(_, name) <- variableSite expression
             let ty = lhsExprType expression
+                stored = isInternalName name && null (fst (splitPiTys ty)) && Set.member key forwarded
                 bareSeq = name == getName seqId && Set.notMember key applied && case fst (splitFunTys (snd (splitForAllTyVars ty))) of
                     arg:_ -> let operand = scaledThing arg in null (fst (splitPiTys operand)) && result operand
                     [] -> False
-            if (result ty && Set.notMember key forwarded) || bareSeq then Just key else Nothing
+            if (result ty && not stored) || bareSeq then Just key else Nothing
     variableSite expression = do
         (location, name) <- typedVariable expression
         (,name) <$> inputSpan location
@@ -83,8 +87,23 @@ lazyFields RecordCon{rcon_con = L _ (RealDataCon con), rcon_flds = fields}
     | isDataTyCon (dataConTyCon con) =
         [hfbRHS field | L _ field <- rec_flds fields,
             let name = getName (foExt (unLoc (hfbLHS field))),
-            Just bang <- [lookup name (zip (map flSelector (dataConFieldLabels con)) (dataConImplBangs con))],
+            Just bang <- [lookup name (fieldBangs con)],
             not (isBanged bang)]
 lazyFields e | Just (con, args) <- appliedDataCon e, isDataTyCon (dataConTyCon con) =
     [x | (bang, x) <- zip (dataConImplBangs con) args, not (isBanged bang)]
 lazyFields _ = []
+
+fieldBangs :: DataCon -> [(Name, HsImplBang)]
+fieldBangs con = zip (map flSelector (dataConFieldLabels con)) (dataConImplBangs con)
+
+-- A shared record label can be strict in one constructor and lazy in another.
+-- The typechecked update selects the parent; require the actual selector to be
+-- lazy in every constructor of that parent in which it occurs.
+lazyUpdateFields :: XXExprGhcTc -> [LHsExpr GhcRn]
+lazyUpdateFields (ExpandedThingTc (OrigExpr RecordUpd{rupd_flds = RegularRecUpdFields parents fields}) expanded)
+    | Just (tc, _) <- splitTyConApp_maybe (hsExprType expanded), isDataTyCon tc =
+        [hfbRHS (unLoc field) | parent <- toList parents, let labels = toList (rnRecUpdLabels parent),
+            length labels == length fields, (field, label) <- zip fields labels,
+            let bangs = mapMaybe (lookup (greName label) . fieldBangs) (tyConDataCons tc),
+            not (null bangs), not (any isBanged bangs)]
+lazyUpdateFields _ = []
