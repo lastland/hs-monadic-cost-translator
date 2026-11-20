@@ -146,6 +146,21 @@ checkTestSelection = do
     checkAccepted executable
         ["generated-module-name-diagnostic", "whole-module-failure", "generated-module-name-diagnostic", "whole-module-failure"]
         [wholeModulePass, moduleNamePass]
+    (referenceStatus, referenceOut, referenceErr) <- readProcessWithExitCode executable
+        ["anf-scoped-renaming", "identity", "anf-scoped-renaming"] ""
+    let referenceKeys =
+            ["anf-scoped-renaming:test/cases/anf-scoped-renaming/Shadowed.hs"
+            ,"anf-scoped-renaming:test/cases/anf-scoped-renaming/Renamed.hs"
+            ,"identity:test/cases/identity/Example.hs"]
+        reports = filter (\line -> any (`isInfixOf` line) referenceKeys &&
+            any (`isPrefixOf` line) ["PASS: ", "FAIL: "]) (lines referenceOut)
+    unless (referenceStatus /= ExitSuccess &&
+            map (\key -> length (filter (key `isInfixOf`) reports)) referenceKeys == [1,1,1] &&
+            ("PASS: " ++ last referenceKeys) `elem` reports &&
+            "Reference summary: 1 passed, 2 failed" `isInfixOf` referenceOut &&
+            "Artifacts:" `isInfixOf` (referenceOut ++ referenceErr)) $
+        fail ("reference selection must isolate every source, continue after failure and retain strict status\n" ++
+            childResult ["anf-scoped-renaming", "identity"] referenceStatus referenceOut referenceErr)
     putStrLn "PASS: test-selection / unknown and mixed selectors rejected / requested groups run once in registry order / no unrelated groups"
   where
     checkRejected executable selectors unknowns =
