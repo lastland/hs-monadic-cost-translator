@@ -154,6 +154,19 @@ checkGeneratedConstructionSpecimens = do
          (10, supportUse "StandaloneDemandShrink.standalone"),
          (13, supportUse "StandaloneDemandShrink.shrinkField")]
     accepts "BoxSupport.hs"
+    accepts "FamilySupport.hs"
+    rejectsAt "FamilyEscape.hs"
+        [(9, reprFailure), (12, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (15, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (18, forbidden "Memorist.Data.Interface.Demand.usage"), (23, forbidden tval)]
+    rejectsAt "FamilyDead.hs"
+        [(14, forbidden "Memorist.Data.Interface.Data.abstract"), (17, forbidden tval)]
+    rejectsAt "FamilyOpen.hs"
+        [(17, reprFailure), (18, selected "Memorist.Data.Interface.Data.abstract: runtime observation/accounting methods have no construction permission")]
+    rejectsAt "FamilyEquality.hs"
+        [(15, reprFailure), (16, selected "Memorist.Data.Interface.Data.abstract: runtime observation/accounting methods have no construction permission")]
+    rejectsAt "FamilyAmbiguous.hs"
+        [(17, reprFailure), (18, selected "Memorist.Data.Interface.Data.abstract: runtime observation/accounting methods have no construction permission")]
     rejectsAt "BoxSupportBypass.hs"
         [(7, forbidden tval), (10, forbidden "Memorist.Data.Interface.Data.abstract"),
          (13, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
@@ -216,6 +229,8 @@ checkGeneratedConstructionSpecimens = do
          (96, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq"), (101, forbidden tval)]
     checksDiagnosticSites
     checksCompleteBox
+    checksFamilyArtifact "paper-strict-scalars" "Packet"
+    checksFamilyArtifact "lazy-datatype-primitive-field" "Box"
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
@@ -663,6 +678,27 @@ checkGeneratedConstructionSpecimens = do
                 writeFile shiftedOutput ("\n" ++ before ++ "\n" ++ replicate (srcSpanEndCol location - 1) ' ' ++ after)
             _ -> fail (output ++ ": missing source offset of abstract")
         parseHaskellModule shiftedOutput >>= checkBox shiftedOutput . definitionSpans
+    checksFamilyArtifact label datatype = do
+        (directory, _, output) <- completeArtifact label (label </> "Example.hs")
+        typechecks output
+        diagnostics <- rejection output
+        writeFile (directory </> "construction-reports.txt") diagnostics
+        -- The full emitted graph still rejects contextual stock Eq/Show.
+        -- Family transport closes only Repr and Demand support obligations.
+        reports <- siteReports output diagnostics
+        let stock report = any (`isInfixOf` report)
+                ["unapproved selected method GHC.Classes.==:",
+                 "unapproved selected method GHC.Classes.$dm/=:",
+                 "unapproved selected method GHC.Internal.Show.show:",
+                 "unapproved selected method GHC.Internal.Show.showsPrec:",
+                 "unapproved selected method GHC.Internal.Show.$dmshow:",
+                 "unapproved selected method GHC.Internal.Show.$dmshowList:"]
+        unless (length reports == 10 && all (stock . snd) reports) $
+            fail (label ++ ": expected only the ten residual stock Eq/Show reports:\n" ++ diagnostics)
+        cleanDefinitions diagnostics output
+            [InstanceMethod "Repr" [datatype, "a"] method | method <- ["reprM", "abstract"]]
+        cleanDefinitions diagnostics output
+            [InstanceMethod "Demand" [datatype ++ "T", "a"] method | method <- ["fullDemand", "usage"]]
     checkBox output definitions = do
         typechecks output
         reports <- constructionReports output >>= siteReports output . unlines

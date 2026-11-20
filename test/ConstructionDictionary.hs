@@ -27,7 +27,7 @@ import GHC.Types.Id (isDFunId, realIdUnfolding)
 import GHC.Types.Var (isId, isTyVar)
 
 data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id Type Evidence
-    | BuiltinTag Type Type Id | Unknown String
+    | Transport Type Evidence | BuiltinTag Type Type Id | Unknown String
 data Use = Use Name Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
@@ -39,6 +39,10 @@ trace env given seen expression = case expression of
             let source = trace env given seen body, Just predicate <- predicateOf source, eqType predicate (coercionLKind co) ->
         Super sel (coercionRKind co) source
     C.Cast body co | Just source <- traceTransport co (trace env given seen body) -> source
+    C.Cast body co | constraintTransport co,
+            let source = trace env given seen body, Just predicate <- predicateOf source,
+            eqType predicate (coercionLKind co) ->
+        Transport (coercionRKind co) source
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
@@ -56,11 +60,13 @@ renderEvidence (Given _ ty) = "given " ++ pretty ty
 renderEvidence (Instance name ty _ dependencies) = describeName (getName name) ++ " :: " ++ pretty ty ++
     concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super _ ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
+renderEvidence (Transport ty parent) = "transport " ++ pretty ty ++ " of " ++ renderEvidence parent
 renderEvidence (Unknown why) = "unresolved " ++ why
 renderEvidence (BuiltinTag p _ op) = "builtin " ++ describeName (getName op) ++ " :: " ++ pretty p
 
 predicateOf :: Evidence -> Maybe Type
 predicateOf (Super _ predicate _) = Just predicate
+predicateOf (Transport predicate _) = Just predicate
 predicateOf (Given _ predicate) = Just predicate
 predicateOf (Instance _ predicate _ _) = Just predicate
 predicateOf (BuiltinTag predicate _ _) = Just predicate
@@ -74,6 +80,7 @@ substitute ty env ev = case ev of
         Nothing -> Given name (ty t)
     Instance df p ts ds -> Instance df (ty p) (map ty ts) (map sub ds)
     Super sel p d -> Super sel (ty p) (sub d)
+    Transport p d -> Transport (ty p) (sub d)
     Unknown{} -> ev
     BuiltinTag p t op -> BuiltinTag (ty p) (ty t) op
   where sub = substitute ty env
@@ -105,7 +112,7 @@ closedFamilyStep ty = do
     _ <- isClosedSynFamilyTyConWithAxiom_maybe tc
     reductionReducedType <$> reduceTyFamApp_maybe (emptyFamInstEnv, emptyFamInstEnv) Nominal tc args
 
--- The only transport we peel is a class lifted over the reverse equation.
+-- This transport peels a class lifted over the reverse equation.
 -- Keep the selected DFun as evidence rather than looking up a replacement.
 familyTransport :: Coercion -> Bool
 familyTransport co@(TyConAppCo Representational tc [SymCo step@(AxiomInstCo ax _ _)]) =
@@ -115,6 +122,26 @@ familyTransport co@(TyConAppCo Representational tc [SymCo step@(AxiomInstCo ax _
             maybe False (eqType (coercionRKind step)) (closedFamilyStep (coercionLKind step))
         _ -> False
 familyTransport _ = False
+
+-- Retain both predicates for exact context-slot substitution. Only the actual
+-- nominal closed-family equation with reflexive arguments may transport a
+-- constraint; endpoint equality alone does not establish its provenance.
+constraintTransport :: Coercion -> Bool
+constraintTransport (SubCo step) = nominal step
+  where
+    nominal (SymCo inner) = equationStep inner
+    nominal inner = equationStep inner
+    equationStep equation@(AxiomInstCo ax _ xs) = case splitTyConApp_maybe (coercionLKind equation) of
+        Just (tc, _) -> isPredTy (coercionLKind equation) && isPredTy (coercionRKind equation) &&
+            isClosedSynFamilyTyConWithAxiom_maybe tc == Just ax && all reflexive xs &&
+            maybe False (eqType (coercionRKind equation)) (closedFamilyStep (coercionLKind equation))
+        _ -> False
+    equationStep _ = False
+    reflexive Refl{} = True
+    reflexive (GRefl Nominal _ MRefl) = True
+    reflexive _ = False
+constraintTransport (SymCo (SubCo step)) = constraintTransport (SubCo step)
+constraintTransport _ = False
 
 traceTransport :: Coercion -> Evidence -> Maybe Evidence
 traceTransport co source = do
@@ -154,7 +181,7 @@ superclassAxiom direction co = do
 -- Follow the selected superclass field of the actual DFun. Never certify a
 -- superclass method merely because the parent instance was registered.
 projected :: HomeReprs -> Evidence -> Maybe Evidence
-projected homes ev@Super{} = normalize [] ev
+projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False = normalize [] ev
   where
     normalize path (Super sel predicate parent) = do
         origin@(Instance df p ts ds) <- normalize path parent
@@ -201,6 +228,14 @@ projected homes ev@Super{} = normalize [] ev
             _ -> False)
         pure result
     normalize path (Instance df ty ts ds) = Instance df ty ts <$> mapM (normalize path) ds
+    normalize path (Transport ty source) = do
+        result <- normalize path source
+        -- Both wrappers were validated when traced. After exact substitution,
+        -- a forward/inverse pair recovers the original selected dictionary.
+        pure $ case result of
+            Transport _ parent | maybe False (eqType ty) (predicateOf parent) -> parent
+            _ | maybe False (eqType ty) (predicateOf result) -> result
+              | otherwise -> Transport ty result
     normalize _ given@Given{} = Just given
     normalize _ Unknown{} = Nothing
     normalize _ builtin@BuiltinTag{} = Just builtin
@@ -212,12 +247,14 @@ projected _ ev = Just ev
 descendant :: Evidence -> Evidence -> Bool
 descendant target (Instance _ _ _ ds) = any (\d -> sameEvidence target d || descendant target d) ds
 descendant target (Super _ _ parent) = sameEvidence target parent || descendant target parent
+descendant target (Transport _ parent) = sameEvidence target parent || descendant target parent
 descendant _ _ = False
 
 sameEvidence :: Evidence -> Evidence -> Bool
 sameEvidence (Instance a p as ds) (Instance b q bs es) = a == b && eqType p q && sameList eqType as bs && sameList sameEvidence ds es
 sameEvidence (Given a p) (Given b q) = a == b && eqType p q
 sameEvidence (Super a p d) (Super b q e) = a == b && eqType p q && sameEvidence d e
+sameEvidence (Transport p d) (Transport q e) = eqType p q && sameEvidence d e
 sameEvidence (Unknown x) (Unknown y) = x == y
 sameEvidence (BuiltinTag p t op) (BuiltinTag q u other) = eqType p q && eqType t u && op == other
 sameEvidence _ _ = False
