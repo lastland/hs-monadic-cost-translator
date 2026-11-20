@@ -6,6 +6,8 @@ module Cost.Translate.Typed
     , FunctionType (..)
     , functionTypes
     , AllocationScope (..)
+    , emptyAllocationScope
+    , extendAllocationScope
     , functionGivens
     , scopedVariables
     , hasFreeVariables
@@ -209,6 +211,23 @@ data AllocationScope = AllocationScope
     , checkedGivens :: [Type]
     , nameableDeclaredGivens :: Maybe [Type]
     }
+
+emptyAllocationScope :: AllocationScope
+emptyAllocationScope = AllocationScope [] [] (Just [])
+
+extendAllocationScope ::
+    Bool -> AllocationScope -> AllocationScope -> AllocationScope
+extendAllocationScope signed owner outer = AllocationScope vars givens named
+    where
+        vars = ownerVariables outer ++ ownerVariables owner
+        givens = checkedGivens outer ++ checkedGivens owner
+        declared = nameableDeclaredGivens
+        named
+            | null (ownerVariables owner) = declared outer
+            | signed
+            , Set.size (Set.fromList (map getOccString vars)) == length vars =
+                (++) <$> declared outer <*> declared owner
+            | otherwise = Nothing
 
 functionGivens :: (Type -> Type) -> FunctionType -> AllocationScope
 functionGivens adjust info = case tcMatchTy body (functionBodyType info) of

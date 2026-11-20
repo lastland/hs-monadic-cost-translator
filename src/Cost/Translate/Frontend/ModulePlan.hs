@@ -20,7 +20,7 @@ import Cost.Translate.Sharing
     , constrainedVariables
     , planSpecializations
     )
-import Cost.Translate.Typed (AllocationScope (..))
+import Cost.Translate.Typed (AllocationScope)
 import Cost.Translate.Typed qualified as Typed
 import Data.Data (Data, cast, gmapQ)
 import Data.Map.Strict qualified as Map
@@ -28,7 +28,6 @@ import Data.Set qualified as Set
 import GHC
 import GHC.Data.Bag (bagToList)
 import GHC.Types.Basic (RecFlag (..))
-import GHC.Types.Name (getOccString)
 
 moduleEnvironment ::
     Set.Set Name ->
@@ -142,34 +141,22 @@ specializedLocals datatypes types hints checkedScopes topNames group =
                 | expression@(L _ (HsVar _ name)) <- sourceExpressions
                 ]
         allocationEvidence = Map.fromList (allocationScopes owners root group)
-        root = Just (AllocationScope [] [] (Just []))
-        owners = Map.mapWithKey named checkedScopes
+        root = Just Typed.emptyAllocationScope
+        owners = Map.mapWithKey extend checkedScopes
+        extend name = Typed.extendAllocationScope (name `Set.member` signatures)
         signatures = Set.union topNames (Set.fromList signed)
         signed =
             [unLoc n | TypeSig _ ns _ <- collect group :: [Sig GhcRn], n <- ns]
-        named owner s
-            | null (ownerVariables s) = s {nameableDeclaredGivens = Just []}
-            | owner `Set.member` signatures = s
-            | otherwise = s {nameableDeclaredGivens = Nothing}
 
 allocationScopes ::
     (Data a) =>
-    Map.Map Name AllocationScope ->
+    Map.Map Name (AllocationScope -> AllocationScope) ->
     Maybe AllocationScope ->
     a ->
     [(Name, Maybe AllocationScope)]
 allocationScopes known scope value = case source of
     Just (L _ (FunBind _ name matches)) ->
-        let nested = do
-                AllocationScope vars givens outer <- scope
-                AllocationScope vs ps inner <- Map.lookup (unLoc name) known
-                let variables = vars ++ vs
-                    names = Set.fromList (map getOccString variables)
-                    visible
-                        | Set.size names == length variables =
-                            (++) <$> outer <*> inner
-                        | otherwise = Nothing
-                pure (AllocationScope variables (givens ++ ps) visible)
+        let nested = Map.lookup (unLoc name) known <*> scope
          in (unLoc name, scope)
                 : allocationScopes known nested matches
     _ -> concat (gmapQ (allocationScopes known scope) value)

@@ -15,7 +15,7 @@ import Cost.Translate.Sharing.Specialization
     , scopedGivenClasses
     , specializedSharing
     )
-import Cost.Translate.Typed (AllocationScope (..))
+import Cost.Translate.Typed (AllocationScope (..), emptyAllocationScope)
 import Data.Either (fromRight)
 import Data.List (nubBy)
 import Data.Map.Strict qualified as Map
@@ -66,7 +66,7 @@ planSpecializations datatypes evidence ty uses =
             residualSharing datatypes scope ty uses
     where
         AllocationScope variables givens _ =
-            fromMaybe (AllocationScope [] [] Nothing) evidence
+            fromMaybe emptyAllocationScope evidence
 
 residualSharing ::
     [TyCon] ->
