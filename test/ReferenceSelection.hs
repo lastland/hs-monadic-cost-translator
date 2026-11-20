@@ -29,10 +29,13 @@ referenceCases groups = [ReferenceCase label source | (label, sources) <- groups
 caseKey :: ReferenceCase -> String
 caseKey item = caseLabel item ++ ":" ++ caseSource item
 
--- Pending the independently reviewed receipt at e5d4652. This is not populated
--- from test results, historical counts, or the outcome of the current run.
+-- Reviewed source-level failures at e5d4652. Additions require fresh evidence
+-- and explicit review, never the outcome of the current test run.
 knownFailures :: [KnownFailure]
-knownFailures = []
+knownFailures =
+    [KnownFailure "anf-scoped-renaming:test/cases/anf-scoped-renaming/Renamed.hs"
+        "Repeated scoped factory calls spend 24/32/56 ticks instead of 17/18/35"
+        ".scratch/reference-failures/issues/01-source-global-sharing.md"]
 
 knownFailure :: ReferenceCase -> Maybe KnownFailure
 knownFailure item = case filter ((== caseKey item) . failureKey) knownFailures of

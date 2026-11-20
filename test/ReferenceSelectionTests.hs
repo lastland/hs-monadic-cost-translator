@@ -52,6 +52,15 @@ checkReferenceSelection = do
     checkAccepted executable ["--success", "identity", "identity"]
         ["PASS: identity:test/cases/identity/Example.hs"]
     checkAccepted executable ["--known-failures", "identity"] []
+    (knownStatus, knownOut, knownErr) <- readProcessWithExitCode executable
+        ["--known-failures", renamedKey] ""
+    unless (knownStatus /= ExitSuccess &&
+            filter ("FAIL: " `isPrefixOf`) (lines knownOut) == ["FAIL: " ++ renamedKey] &&
+            "Reference summary: 0 passed, 1 failed" `isInfixOf` knownOut &&
+            "1 known failures remain" `isInfixOf` knownOut &&
+            "Known failure remains:" `isInfixOf` knownErr) $
+        fail ("known failures must execute unchanged assertions and retain nonzero status\n" ++
+            childResult knownStatus knownOut knownErr)
     (sourceStatus, sourceOut, sourceErr) <- readProcessWithExitCode executable
         ["--all-references", renamedKey, identityKey, renamedKey] ""
     unless (sourceStatus /= ExitSuccess &&

@@ -17,6 +17,7 @@ import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
 import GeneratedFunctions (checkAcceptedFunctions)
+import GHC.Settings.Config (cProjectVersion)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
@@ -45,6 +46,9 @@ prepareReferenceEnvironment :: IO ReferenceEnvironment
 prepareReferenceEnvironment = do
     forM_ ["ghc", "hlint"] $ \command ->
         findExecutable command >>= maybe (fail ("reference setup error: missing " ++ command)) (const (pure ()))
+    (compilerStatus, compilerOut, compilerErr) <- readProcessWithExitCode "ghc" ["--numeric-version"] ""
+    unless (compilerStatus == ExitSuccess && words compilerOut == [cProjectVersion]) $
+        fail ("reference setup error: expected GHC " ++ cProjectVersion ++ "\n" ++ compilerOut ++ compilerErr)
     (runtimeStatus, runtimeOut, runtimeErr) <- readProcessWithExitCode "ghc-pkg" ["latest", "MemoristANT"] ""
     unless (runtimeStatus == ExitSuccess) $
         fail ("reference setup error: runtime unavailable\n" ++ runtimeOut ++ runtimeErr)
