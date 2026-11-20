@@ -82,3 +82,10 @@ sh scripts/stack-test.sh --test-arguments=polymorphic-vacuous-quantification
   Their catalog entries are explicitly removed in the promotion checkpoint;
   the remaining three cases in this issue stay deferred. The historical
   `e5d4652` audit remains unchanged.
+- `higher-kinded-demands` is subsequently recovered by exact builtin empty
+  constraint handling in stock field evidence. The Nat-indexed public specimen
+  fails before the fix and passes afterward. The integrated unchanged full case
+  passes guards, ordinary callers, O0/O2 boundary cases and 200 randomized
+  value/cost comparisons. Its catalog entry is explicitly removed; the two
+  growing-recursion cases remain deferred. No runtime, oracle or recursion rule
+  changes are part of this fix.
