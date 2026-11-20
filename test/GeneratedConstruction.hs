@@ -481,11 +481,28 @@ checkGeneratedConstructionSpecimens = do
                     putStrLn ("PASS: " ++ label ++ " / exported viewsM requires only Integral a")
             _ -> fail (output ++ ": exported viewsM must require only Integral a; found " ++ pretty signature)
     checksPhantomProducer = do
-        (_, _, output) <- completeArtifact "phantom producer" ("polymorphic-phantom-producer" </> "Example.hs")
+        (directory, input, output) <- completeArtifact "phantom producer" ("polymorphic-phantom-producer" </> "Example.hs")
         diagnostics <- constructionReports output
         withLoadedGenerated output $ \summary ->
             parseModule summary >>= typecheckModule >>= checkPhantomAllocation
         cleanDefinitions (unlines diagnostics) output (map TopBinding ["viewsM", "inferredM", "makeM", "workM", "mapThunk"])
+        mutant <- createTempDirectory directory "discarded-pair-"
+        copyFile input (mutant </> "Example.hs")
+        text <- readFile output
+        let original = "in pure (M.PairT shared shared)"
+            replacement = "in do { _ <- pure (M.PairT shared shared); first <- M.lazy (M.force shared); second <- M.lazy (M.force shared); pure (M.PairT first second) }"
+            mutate line = case stripPrefix original (dropWhile (== ' ') line) of
+                Just suffix -> takeWhile (== ' ') line ++ replacement ++ suffix
+                Nothing -> line
+            changed = map mutate (lines text)
+            broken = mutant </> "Generated.hs"
+        unless (length (filter id (zipWith (/=) (lines text) changed)) == 2) $
+            fail "phantom allocation mutant must replace both returned shared pairs"
+        writeFile broken (unlines changed)
+        typechecks broken
+        expectAssertionFailure "viewsM must suspend one producer invocation" $
+            withLoadedGenerated broken $ \summary ->
+                parseModule summary >>= typecheckModule >>= checkPhantomAllocation
         putStrLn "PASS: phantom producer / one suspended invocation, checked view, original constructor and fields"
     rejectsCompleteBox = do
         (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")
