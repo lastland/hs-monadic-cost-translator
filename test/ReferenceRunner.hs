@@ -196,13 +196,18 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
             all (`isInfixOf` err) ((generated </> "Generated.hs") : expected)) $
         fail ("global " ++ label ++ " guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
               out ++ err ++ "\nArtifacts: " ++ root)
-    when (label `elem` ["origin-term", "origin-helper"] &&
+    when (label `elem` ["origin-term", "origin-helper", "origin-section"] &&
             (generated </> "Example.hs:") `isInfixOf` err) $
         fail ("origin uses must not restore original-body obligations\n" ++ err)
     when (label == "origin-term") $
         unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 15 &&
                 not ("unapproved " `isInfixOf` err)) $
             fail ("expected exactly fifteen term uses, not structural field labels or original-body reports\n" ++ err)
+    when (label == "origin-section") $
+        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 4 &&
+                length (filter ("colliding-origin-section.hs:100:" `isInfixOf`) (lines err)) == 2 &&
+                not ("unapproved " `isInfixOf` err)) $
+            fail ("section diagnostics must count physical written uses, including LINE collisions\n" ++ err)
   where
     prefix = "Reference fixtures and logs: "
 
@@ -248,6 +253,11 @@ checkSourceScopeLifecycle environment = do
          "OriginHelper.hs:22:", "OriginHelper.hs:25:", "OriginHelper.hs:31:",
          "OriginHelper.hs:37:", "OriginHelper.hs:43:"]
     checkChangedInclude environment
+    checkPublicationGuardFor environment "source-map" "origin-section"
+        ("generated-construction" </> "OriginSectionPublication.hs")
+        ["Generated.hs:13:", "Generated.hs:16:", "colliding-origin-section.hs:100:",
+         "ordinary originating-source term reference Example.keep",
+         "ordinary originating-source term reference Example.partial"]
     putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
 
 checkSourceOptimizations :: ReferenceEnvironment -> [Artifacts] -> IO ()
