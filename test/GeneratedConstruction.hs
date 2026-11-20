@@ -127,6 +127,8 @@ checkGeneratedConstructionSpecimens = do
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
          (27, qcValue "OperandEquations.pairAlias")]
     accepts "OperandIgnored.hs"
+    mixed "OperandFieldSyntax.hs" (map TopBinding ["labelled", "boxed", "paired"]) "OperandFieldSyntax.hs"
+        [(17, qcValue "<local>.p"), (20, qcValue "<local>.p")]
     mixed "OperandForceSites.hs" (map TopBinding ["prop_first", "prop_lazy", "prop_second", "prop_rebound"]) "OperandForceSites.hs"
         [(33, qcValue "OperandForceSites.first"), (36, qcValue "OperandForceSites.strictId"),
          (37, qcValue "OperandForceSites.bangFirst")]
