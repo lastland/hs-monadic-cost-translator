@@ -96,8 +96,8 @@ data RetainedEvidence = RetainedEvidence
     , patternBindings :: [Maybe [(Id, C.CoreExpr)]], componentBodies :: [Maybe C.CoreExpr]
     , retainedActions :: [C.CoreExpr] }
 
-collectEvidence :: Runtime -> Support -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
-collectEvidence rt utilities locals homes program support checked sourceSites = do
+collectEvidence :: Bool -> Runtime -> Support -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
+collectEvidence original rt utilities locals homes program support checked sourceSites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
@@ -115,7 +115,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                      Just _ <- [role], (v, body) <- allBindings [C.NonRec binder rhs],
                      getName v /= getName binder, sourceBinding utilities (getName v),
                      not (shrinkSupport role) || independentBinding locals (getName v), not (isQuickCheckBinding qc v)]
-            | (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
+            | not original, (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
         rootSites = bindingSites (constraintAliases environment) environment givens (C.flattenBinds program)
     session <- getSession
     flags <- getSessionDynFlags

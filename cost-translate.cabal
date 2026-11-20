@@ -60,10 +60,17 @@ common settings
 
 library
     import:           settings
+    hs-source-dirs:   public
+    exposed-modules:  Cost.Translate
+    build-depends:    base, cost-translate:translator-internal
+
+library translator-internal
+    import:           settings
     hs-source-dirs:   src
     exposed-modules:
-        Cost.Translate
+        Cost.Publication
     other-modules:
+        Cost.AcceptedSource
         Cost.Translate.Frontend
         Cost.Translate.Frontend.Allocation
         Cost.Translate.Frontend.Emit
@@ -198,7 +205,8 @@ test-suite cost-translate-test
                      ConstructionRoles
                      ConstructionQuickCheckTypes
                      ConstructionQuickCheckUses
-                     ConstructionOperandTransfers
+                      ConstructionOperandTransfers
+                      ConstructionOrigin
                      ConstructionSyntax
                      ConstructionViews
                      GeneratedFunctions
@@ -210,7 +218,7 @@ test-suite cost-translate-test
                      RuntimeAllocator
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate
-    build-depends:
+    build-depends:    cost-translate:translator-internal,
         base,
         cost-translate,
         containers,

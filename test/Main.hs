@@ -14,6 +14,7 @@ import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverR
 import ReferenceRunner
     ( ReferenceEnvironment, checkGeneratedConstructionLifecycle, checkGeneratedFunctionLifecycle, checkReferenceHarness
     , prepareReferenceEnvironment, runReferenceCase, checkOptimizedReferenceCases
+    , checkSourceScopeLifecycle
     )
 import RuntimeAllocator (checkRuntimeAllocator)
 import ScalarComparisonChecks (checkScalarComparisonCallers)
@@ -40,6 +41,7 @@ data Group
     | RuntimeAllocator
     | ProducerSharing
     | CapturedKeySharing
+    | SourceScope
 
 groupName :: Group -> String
 groupName (Semantic label _) = label
@@ -54,6 +56,7 @@ groupName GeneratedConstruction = "generated-construction"
 groupName RuntimeAllocator = "runtime-allocator"
 groupName ProducerSharing = "opaque-producer-sharing"
 groupName CapturedKeySharing = "captured-key-sharing"
+groupName SourceScope = "source-scope"
 
 main :: IO ()
 main = do
@@ -65,7 +68,7 @@ main = do
     selected <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
-            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing, CapturedKeySharing]
+            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing, CapturedKeySharing, SourceScope]
         names = map groupName registry
         unknown = nub (filter (`notElem` names) selected)
     unless (null unknown) $ do
@@ -88,6 +91,7 @@ needsReferenceEnvironment GeneratedFunctions = True
 needsReferenceEnvironment GeneratedConstruction = True
 needsReferenceEnvironment ProducerSharing = True
 needsReferenceEnvironment CapturedKeySharing = True
+needsReferenceEnvironment SourceScope = True
 needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
@@ -115,6 +119,7 @@ runGroup environment GeneratedConstruction = do
 runGroup _ RuntimeAllocator = checkRuntimeAllocator
 runGroup environment ProducerSharing = requireEnvironment environment >>= checkProducerSharing
 runGroup environment CapturedKeySharing = requireEnvironment environment >>= checkCapturedKeySharing
+runGroup environment SourceScope = requireEnvironment environment >>= checkSourceScopeLifecycle
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure

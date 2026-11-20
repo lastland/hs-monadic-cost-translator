@@ -1,8 +1,11 @@
-module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
+module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (forM, unless, void, when)
 import Cost.Translate (translateFile)
+import Cost.Publication (Publication, verifyOrigin)
+import Control.Monad.IO.Class (liftIO)
+import ConstructionOrigin (originReferences)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAllocation (checkPhantomAllocation)
@@ -22,9 +25,9 @@ import GeneratedFunctions (parseHaskellModule)
 import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
-    , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary, SuccessFlag(..), TyThing(AnId)
+    , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary(..), SuccessFlag(..), TyThing(AnId)
     , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
-    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
+    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , tm_renamed_source, unLoc, ghcLink
@@ -33,6 +36,10 @@ import GHC.Builtin.Names (integralClassName, numClassName)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Type (getTyVar_maybe)
 import GHC.Data.FastString (mkFastString)
+import GHC.Data.StringBuffer (hGetStringBuffer)
+import GHC.Driver.Make qualified as Make
+import GHC.Types.Error (mkUnknownDiagnostic)
+import GHC.Unit.Module.Graph (ModuleGraph, mapMG)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Type (getLHsInstDeclHead, ignoreParens)
 import GHC.Unit.Module.ModGuts (mg_binds)
@@ -59,24 +66,33 @@ checkGeneratedConstruction output = do
     problems <- constructionReports output
     unless (null problems) (fail (unlines problems))
 
+checkGeneratedConstructionWithOrigin :: Publication -> FilePath -> IO ()
+checkGeneratedConstructionWithOrigin publication output = do
+    problems <- constructionReportsWithOrigin (Just publication) output
+    unless (null problems) (fail (unlines problems))
+
 constructionReports :: FilePath -> IO [String]
-constructionReports output =
+constructionReports = constructionReportsWithOrigin Nothing
+
+constructionReportsWithOrigin :: Maybe Publication -> FilePath -> IO [String]
+constructionReportsWithOrigin publication output =
     runGhc (Just libdir) $ do
         configureArtifact output
         rt <- runtime
         target <- guessTarget output Nothing Nothing
         setTargets [target]
-        graph <- depanal [] False
+        graph <- depanal [] False >>= pinConstructionGraph
         let summaries = mgModSummaries graph
             homes = map ms_mod summaries
             optionProblems = concatMap checkCompilerOptions summaries
         unless (null optionProblems) (fail (unlines optionProblems))
+        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output summaries) publication
         parsedModules <- mapM parseModule summaries
         let parsedProblems = concatMap checkParsedSyntax parsedModules
         unless (null parsedProblems) (fail (unlines parsedProblems))
         -- A home import is not an opaque dependency certificate. Inspect every
         -- body in the complete loaded home graph, even an unused imported wrapper.
-        loaded <- load LoadAllTargets
+        loaded <- Make.load' Nothing LoadAllTargets mkUnknownDiagnostic Nothing graph
         case loaded of
             Failed -> fail (output ++ ": cannot load generated module for name resolution")
             Succeeded -> pure ()
@@ -94,10 +110,12 @@ constructionReports output =
             locals = localBindings rt qc roles checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt utilities locals uses homes methods views checked
-            evidence <- collectEvidence rt utilities locals representations program (coreViewNames views checked) checked sites
+            let original = checkedHome checked `elem` origins
+                (syntaxProblems, sites) = checkSyntax original rt utilities locals uses homes methods views checked
+            evidence <- collectEvidence original rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
-        pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
+        pure (originReferences origins checkedModules ++ concatMap fst reports ++
+            ordinaryOperandTransfers origins qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules)
                 (scalarComparisonFacts output checkedModules) (concatMap snd reports))
 
@@ -112,6 +130,19 @@ configureArtifact output = do
     unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
     void $ setSessionDynFlags configured
         { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
+
+-- Verification, parsing, and load' consume this same graph and these same buffers.
+-- Do not reread a source file after assigning its ordinary-body scope.
+pinConstructionGraph :: ModuleGraph -> Ghc ModuleGraph
+pinConstructionGraph graph = do
+    pinned <- forM (mgModSummaries graph) $ \summary -> do
+        buffer <- liftIO $ maybe (hGetStringBuffer (ms_hspp_file summary)) pure (ms_hspp_buf summary)
+        pure (summary { ms_hspp_buf = Just buffer })
+    pure (mapMG (\summary -> case
+        [candidate | candidate <- pinned, ms_mod candidate == ms_mod summary,
+            ms_hsc_src candidate == ms_hsc_src summary] of
+        [candidate] -> candidate
+        _ -> summary) graph)
 
 withLoadedGenerated :: FilePath -> (ModSummary -> Ghc a) -> IO a
 withLoadedGenerated output inspect = runGhc (Just libdir) $ do

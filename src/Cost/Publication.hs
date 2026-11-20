@@ -1,32 +1,72 @@
-module Cost.Translate (translateFile, generatedName) where
+module Cost.Publication
+    ( translateFile
+    , generatedName
+    , Publication
+    , stageAndTranslate
+    , verifyOrigin
+    ) where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (IOException, SomeException, displayException, try)
+import Control.Monad (void)
+import Cost.AcceptedSource
 import Cost.Translate.Diagnostic (renderDiagnostic)
 import Cost.Translate.Frontend (generate)
 import Cost.Translate.Names (generatedName)
 import Data.List (isInfixOf)
-import System.Directory (renameFile)
+import GHC qualified
+import System.Directory (canonicalizePath, copyFile, renameFile)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeBaseName, takeDirectory, (</>))
+import System.FilePath (takeBaseName, takeDirectory, takeFileName, (</>))
 import System.IO.Temp (withTempDirectory)
 import System.Process (readProcessWithExitCode)
 
 translateFile :: FilePath -> FilePath -> IO (Either String ())
-translateFile source output = do
+translateFile source output =
+    fmap void (translateAccepted source output)
+
+translateAccepted :: FilePath -> FilePath -> IO (Either String AcceptedSource)
+translateAccepted source output = do
     result <- try (generate source (takeBaseName output))
     case result of
         Left (e :: SomeException) ->
             failure ("source error: " ++ displayException e)
         Right (Left diagnostic, logText) ->
             failure (logText ++ renderDiagnostic diagnostic)
-        Right (Right code, logText) -> do
+        Right (Right (code, accepted), logText) -> do
             writeFile logPath logText
-            withTempDirectory (takeDirectory output) ".cost-translate-" $
-                publishCandidate source output code
+            published <-
+                withTempDirectory (takeDirectory output) ".cost-translate-" $
+                    publishCandidate source output code
+            pure (accepted <$ published)
     where
         logPath = output ++ ".log"
         failure message =
             writeFile logPath (message ++ "\n") >> pure (Left message)
+
+data Publication = Publication FilePath [FilePath] AcceptedSource
+
+stageAndTranslate :: FilePath -> FilePath -> IO (Either String Publication)
+stageAndTranslate fixture output = do
+    let source = takeDirectory output </> "Example.hs"
+        companion = takeDirectory output </> takeFileName fixture
+        paths = if source == companion then [source] else [source, companion]
+    mapM_ (copyFile fixture) paths
+    physical <- mapM canonicalizePath paths
+    result <- translateAccepted source output
+    published <- canonicalizePath output
+    pure (Publication published physical <$> result)
+
+verifyOrigin :: Publication -> FilePath -> [GHC.ModSummary] -> IO [GHC.Module]
+verifyOrigin (Publication published paths accepted) output summaries = do
+    actual <- canonicalizePath output
+    if actual /= published
+        then fail (output ++ ": origin publication path mismatch")
+        else do
+            result <- try (verifyAccepted paths accepted summaries)
+            case result of
+                Left (err :: IOException) ->
+                    fail (output ++ ": " ++ displayException err)
+                Right origins -> pure origins
 
 publishCandidate ::
     FilePath -> FilePath -> String -> FilePath -> IO (Either String ())
