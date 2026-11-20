@@ -11,6 +11,7 @@ import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
+import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, homeDemandTypes)
 import ConstructionRuntime (resolveExport, resolveValue, runtime)
@@ -83,9 +84,9 @@ constructionReports output =
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
-        qcResult <- quickCheckResult
+        qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
-        let uses = quickCheckUses qcResult
+        let uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
             locals = localBindings rt qc checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
@@ -146,6 +147,9 @@ checkGeneratedConstructionSpecimens = do
          (34, "strict binding forces a QuickCheck value outside a generator or property")]
     mixed "OperandUpdateAlternatives.hs" (map TopBinding ["prop_other", "changeOther"]) "OperandUpdateAlternatives.hs"
         [(17, qcValue "OperandUpdateAlternatives.changeMixed")]
+    mixed "OperandWrappedProperty.hs" (map TopBinding ["draw", "prop_own", "prop_scalar"]) "OperandWrappedProperty.hs"
+        [(10, wrappedForce "law"), (11, wrappedForce "relay")]
+    checksFamilyOperands
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
@@ -338,6 +342,7 @@ checkGeneratedConstructionSpecimens = do
     forbidden op = "unapproved runtime operation " ++ op ++ " is forbidden in generated code"
     external op = "unapproved external operation " ++ op ++ " is forbidden in generated code"
     qcValue name = "QuickCheck value used outside a generator or property: " ++ name
+    wrappedForce wrapper = qcValue ("OperandPropertyLaws." ++ wrapper) ++ " (operand in ordinary callee OperandPropertyLaws.strict at this instantiation)"
     selected op = "unapproved selected method " ++ op
     unknown op = selected (op ++ ": unknown executable method/default dependency")
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
@@ -373,6 +378,18 @@ checkGeneratedConstructionSpecimens = do
         -- Only the ordinary callee is at fault; the same property observes a
         -- thunk and constructs its generator on the very same source line.
         onlySite output (12, qcValue "OperandPropertyCall.strict") diagnostics
+    checksFamilyOperands = do
+        output <- specimen "OperandFamilyCalls.hs"
+        upstream <- specimen "OperandFamilies.hs"
+        typechecks output
+        reports <- rejection output
+        requireAt reports output [(13, qcValue "OperandFamilies.h"), (14, qcValue "OperandFamilies.law"),
+            (15, qcValue "OperandFamilies.forceOpen"), (23, qcValue "OperandFamilies.generic"),
+            (24, qcValue "OperandFamilies.strip"), (27, qcValue "OperandFamilies.routed"),
+            (30, payloadForce "payloadLaw"), (33, payloadForce "recursiveLaw")]
+        requireAt reports upstream [(24, forbidden tval)]
+        cleanDefinitions reports output (map TopBinding ["draw", "prop_scalar", "local"])
+      where payloadForce wrapper = qcValue ("OperandFamilies." ++ wrapper) ++ " (operand in ordinary callee OperandFamilies.forcePayload at this instantiation)"
     checksNestedInstanceRoles = do
         output <- specimen "NestedInstanceRoles.hs"
         typechecks output

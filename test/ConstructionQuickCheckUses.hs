@@ -4,8 +4,8 @@ module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, quickCheckOperand, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
 import ConstructionAst (appliedDataCon, collectAst, spine, strictConstructorOperands, strictNullaryRhs, typedVariable, updateAlternatives)
-import ConstructionRuntime (resolveType)
 import Data.Foldable (toList)
+import ConstructionQuickCheckTypes (quickCheckPackage, quickCheckResult)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
@@ -13,8 +13,7 @@ import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.DataCon (dataConImplBangs, isBanged)
 import GHC.Core.TyCon (isDataTyCon)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
-import GHC.Data.FastString (mkFastString)
+import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Basic (Boxity(Boxed))
@@ -23,17 +22,6 @@ import GHC.Types.Id.Make (seqId)
 import GHC.Types.Name (isInternalName)
 import GHC.Types.Name.Reader (greName)
 import GHC.Types.SrcLoc (getBufSpan)
-
-quickCheckPackage :: String
-quickCheckPackage = "QuickCheck"
-
-quickCheckResult :: Ghc (Type -> Bool)
-quickCheckResult = do
-    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (mkFastString quickCheckPackage))
-    constructors <- mapM (resolveType qc) ["Gen", "Property"]
-    pure $ \ty -> case splitTyConApp_maybe (snd (splitPiTys ty)) of
-        Just (constructor, _) -> constructor `elem` constructors
-        Nothing -> False
 
 -- Forcing a function to WHNF does not evaluate its result.
 quickCheckOperand :: (Type -> Bool) -> Type -> Bool
