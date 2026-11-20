@@ -95,7 +95,7 @@ jobs:
               let emit source = do
                     let output = dropExtension source ++ "M.hs"
                     (candidate, _) <- generate source (takeBaseName output)
-                    either (fail . Cost.Translate.Diagnostic.renderDiagnostic) (writeFile output) candidate
+                    either (fail . Cost.Translate.Diagnostic.renderDiagnostic) (writeFile output . fst) candidate
               in getContents >>= mapM_ emit . lines'
           git add -Af -- ':(glob)examples/*M.hs'
           git diff --cached --exit-code -- ':(glob)examples/*M.hs'
