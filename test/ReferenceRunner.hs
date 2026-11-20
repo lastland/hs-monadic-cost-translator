@@ -4,6 +4,7 @@ module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
     , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
     , checkGeneratedConstructionLifecycle
+    , buildObserver, comparer
     ) where
 
 import Control.Monad (forM, forM_, unless, when)

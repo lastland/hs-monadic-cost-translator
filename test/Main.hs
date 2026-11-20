@@ -82,6 +82,7 @@ needsReferenceEnvironment Semantic{} = True
 needsReferenceEnvironment ReferenceHarness = True
 needsReferenceEnvironment GeneratedFunctions = True
 needsReferenceEnvironment GeneratedConstruction = True
+needsReferenceEnvironment ProducerSharing = True
 needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
@@ -104,7 +105,7 @@ runGroup environment GeneratedConstruction = do
     checkGeneratedConstructionSpecimens
     requireEnvironment environment >>= checkGeneratedConstructionLifecycle
 runGroup _ RuntimeAllocator = checkRuntimeAllocator
-runGroup _ ProducerSharing = checkProducerSharing
+runGroup environment ProducerSharing = requireEnvironment environment >>= checkProducerSharing
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure

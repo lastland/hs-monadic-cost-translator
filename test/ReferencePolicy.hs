@@ -87,6 +87,7 @@ sourceAliases =
     ,("constrained-local-disjoint-scoped", ["constrained-local-disjoint-scoped/Example.hs", "constrained-local-disjoint-scoped/ClosedIntegral.hs"])
     ,("constrained-local-superclass-scoped", ["constrained-local-superclass-scoped/Example.hs", "constrained-local-superclass-scoped/AtIntegralOwner.hs"])
     ,("anf-scoped-renaming", ["anf-scoped-renaming/Shadowed.hs", "anf-scoped-renaming/Renamed.hs"])
+    ,("polymorphic-opaque-producer", ["polymorphic-opaque-producer/Example.hs", "polymorphic-opaque-producer/HelperCollision.hs"])
     ,("top-level-function-interface", ["top-level-function-interface/Control.hs", "top-level-function-interface/WithValue.hs"])
     ,("generated-warnings-minimal", ["generated-warnings/Minimal.hs"])]
 
