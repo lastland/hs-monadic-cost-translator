@@ -48,7 +48,7 @@ class CompilerPinTests(unittest.TestCase):
         self.assertEqual(["".join(value.split()) for value in tested], ["GHC==" + PIN])
         # Check only these stanzas' direct compiler dependencies, not a Cabal parser.
         for heading, required in (
-            ("library", {"ghc", "ghc-boot-th"}),
+            ("library translator-internal", {"ghc", "ghc-boot-th"}),
             ("test-suite cost-translate-test", {"ghc"}),
         ):
             with self.subTest(stanza=heading):
@@ -210,7 +210,9 @@ class CompilerPreflightTests(unittest.TestCase):
             return
         self.assertEqual(
             self.calls("python3"),
-            [[str(self.tools / "python3"), str(ROOT / "test" / name),
+            [[str(self.tools / "python3"), str(ROOT / "test" / "compiler_preflight.py"),
+              str(compiler)]]
+            + [[str(self.tools / "python3"), str(ROOT / "test" / name),
               "--ghc", str(compiler), "--self-test", *options, str(compiler)]
              for name, options in (
                  ("source_policy.py", []), ("staged_policy.py", []),
@@ -224,7 +226,7 @@ class CompilerPreflightTests(unittest.TestCase):
         )
         self.assertEqual(
             [call[0] for call in self.calls() if call[0] in ("sh", "python3", "cabal")],
-            ["sh"] * 3 + ["python3"] * 3 + ["cabal"] * 3,
+            ["sh"] * 3 + ["python3"] * 4 + ["cabal"] * 3,
         )
         self.assertEqual([call[4] for call in calls], ["build", "list-bin", "test"])
         flags: list[str] = [
@@ -416,6 +418,17 @@ class CompilerPreflightTests(unittest.TestCase):
                 self.assertEqual(self.calls("python3"), [])
                 self.assertEqual(self.calls("cabal"), [])
 
+    def test_compiler_preflight_failure_stops_validation_before_build(self) -> None:
+        self.env["GHC"] = str(self.installation())
+        self.env["POLICY_FAIL"] = str(ROOT / "test" / "compiler_preflight.py")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
+        self.assertEqual(
+            [call[1] for call in self.calls("python3")],
+            [str(ROOT / "test" / "compiler_preflight.py")],
+        )
+        self.assertEqual(self.calls("cabal"), [])
+
     def test_source_and_staged_regression_failures_stop_before_build(self) -> None:
         self.env["GHC"] = str(self.installation())
         for index, name in enumerate(("source_policy.py", "staged_policy.py")):
@@ -424,7 +437,7 @@ class CompilerPreflightTests(unittest.TestCase):
                 self.env["POLICY_FAIL"] = str(ROOT / "test" / name)
                 result = self.run_script()
                 self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
-                self.assertEqual(len(self.calls("python3")), index + 1)
+                self.assertEqual(len(self.calls("python3")), index + 2)
                 self.assertEqual(self.calls("cabal"), [])
 
     def test_comment_policy_failure_stops_validation_before_cabal(self) -> None:
@@ -432,7 +445,7 @@ class CompilerPreflightTests(unittest.TestCase):
         self.env["POLICY_FAIL"] = str(ROOT / "test" / "comment_policy.py")
         result = self.run_script()
         self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
-        self.assertEqual(len(self.calls("python3")), 3)
+        self.assertEqual(len(self.calls("python3")), 4)
         self.assertEqual(self.calls("cabal"), [])
 
     def test_full_validation_requires_python(self) -> None:

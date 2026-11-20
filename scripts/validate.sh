@@ -95,6 +95,7 @@ cd "$root"
 sh "$root/scripts/check-source.sh"
 sh "$root/scripts/check-shell.sh"
 sh "$root/scripts/check-hlint.sh"
+python3 "$root/test/compiler_preflight.py"
 python3 "$root/test/source_policy.py" --ghc "$compiler" --self-test
 python3 "$root/test/staged_policy.py" --ghc "$compiler" --self-test
 python3 "$root/test/comment_policy.py" --ghc "$compiler" --self-test --check
