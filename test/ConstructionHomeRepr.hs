@@ -1,13 +1,14 @@
 -- | Link a home Repr dictionary to its actual reprM implementation.
 -- These are conditional certificates: every module body and retained source
 -- site is checked, and every caller must supply the audited carrier.
-module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, dictionaryBindings, Field(..)) where
+module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, contextDeclaration, dictionaryBindings, Field(..)) where
 
-import ConstructionAst (collectAst)
+import ConstructionAst (collectAst, checkedModule)
 import ConstructionRuntime
 import Control.Monad (guard)
 import Data.Foldable (toList)
 import qualified Data.Map.Strict as Map
+import qualified GHC.Data.Strict as Strict
 import GHC
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classTyCon)
@@ -22,11 +23,12 @@ import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Types.Id (isDFunId)
 import GHC.Types.Var (isId, isTyVar)
 import GHC.Types.Var.Set (emptyVarSet, mkVarSet, subVarSet)
+import GHC.Types.SrcLoc (BufSpan, getBufSpan)
 
 data Scheme = Scheme [TyVar] [Type] Type
 -- Only this field, not its sibling abstract, may use the DFun's context.
 data Field = Field { implementation :: Name, parameters :: [TyVar], slots :: [[Name]], carrierBinder :: Id }
-data Scope = Scope Field SrcSpan
+data Scope = Scope Field Module SrcSpan
 data HomeReprs = HomeReprs (Map.Map Name (Scheme, Field)) (Map.Map Name Scope) (Map.Map Name C.CoreExpr)
 
 homeReprs :: Runtime -> [(TypecheckedModule, [C.CoreBind])] -> HomeReprs
@@ -35,7 +37,7 @@ homeReprs rt programs = HomeReprs (Map.fromList (map fst entries)) (Map.fromList
     -- A packed superclass may name a floated dictionary instead of its DFun.
     dictionaries = Map.fromList [(getName v, rhs) | (_, program) <- programs, (v, rhs) <- C.flattenBinds program,
         isDFunId v || isPredTy (idType v)]
-    entries = [((getName owner, (scheme, field)), (getName carrier, Scope field span')) |
+    entries = [((getName owner, (scheme, field)), (getName carrier, Scope field (checkedModule checked) span')) |
         (checked, program) <- programs, let bindings = C.flattenBinds program, let sources = sourceFields rt checked,
         (owner, dictionary) <- bindings, Just (scheme, method) <- [homeField rt owner dictionary],
         (source, sourceSlots, carrier, span') <- sources, source == method,
@@ -118,7 +120,7 @@ selectedHome (HomeReprs heads scopes _) lexicalField owner arguments ty = do
     pure (field, map instantiate context)
   where
     scope = case lexicalField >>= (`Map.lookup` scopes) of
-        Just (Scope field _) -> mkVarSet (parameters field)
+        Just (Scope field _ _) -> mkVarSet (parameters field)
         Nothing -> emptyVarSet
     inScope t = tyCoVarsOfType t `subVarSet` scope
 
@@ -126,15 +128,23 @@ methodCarrier :: HomeReprs -> Name -> Bool
 methodCarrier (HomeReprs _ scopes _) = (`Map.member` scopes)
 
 contextSite :: HomeReprs -> Either Name SrcSpan -> Maybe Name
-contextSite (HomeReprs _ scopes _) site = case [carrier | (carrier, Scope field span') <- Map.toList scopes,
+contextSite (HomeReprs _ scopes _) site = case [carrier | (carrier, Scope field _ span') <- Map.toList scopes,
         either (== implementation field) (`isSubspanOf` span') site] of
     [carrier] -> Just carrier
     _ -> Nothing
 
 methodContext :: HomeReprs -> Maybe Name -> Name -> Bool
 methodContext (HomeReprs _ scopes _) caller ev = case caller >>= (`Map.lookup` scopes) of
-    Just (Scope field _) -> any (ev `elem`) (slots field)
+    Just (Scope field _ _) -> any (ev `elem`) (slots field)
     Nothing -> False
+
+contextDeclaration :: HomeReprs -> Maybe (Module, BufSpan) -> Maybe Name
+contextDeclaration (HomeReprs _ scopes _) (Just (owner, region)) =
+    case [carrier | (carrier, Scope _ home span') <- Map.toList scopes,
+        home == owner, getBufSpan span' == Strict.Just region] of
+            [carrier] -> Just carrier
+            _ -> Nothing
+contextDeclaration _ _ = Nothing
 
 dictionaryBindings :: HomeReprs -> Map.Map Name C.CoreExpr
 dictionaryBindings (HomeReprs _ _ dictionaries) = dictionaries

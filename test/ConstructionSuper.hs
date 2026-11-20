@@ -1,7 +1,7 @@
 -- | Exact nominal superclass edges; validation grants no method permission.
 module ConstructionSuper (validSuper) where
 
-import ConstructionDictionary (Evidence, predicateOf)
+import ConstructionEvidenceTypes (Evidence, predicateOf)
 import GHC
 import GHC.Core.Class (classSCSelIds, classTyVars)
 import GHC.Core.Predicate (getClassPredTys_maybe)

@@ -169,7 +169,8 @@ test-suite cost-translate-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
-    other-modules:    ConditionChecks
+    other-modules:    ConstructionEvidenceTypes
+                     ConditionChecks
                      GeneratedSyntax
                      PaperScalarChecks
                      FixturePolicy

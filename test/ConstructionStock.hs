@@ -3,6 +3,7 @@ module ConstructionStock (stockUse) where
 
 import ConstructionDemandMethods
 import ConstructionDictionary
+import qualified GHC.Core.TyCo.Subst as T
 import ConstructionHomeRepr (HomeReprs)
 import ConstructionMethods (MethodSite(..))
 import ConstructionRuntime hiding (runtime)
@@ -96,7 +97,7 @@ stockUse rt homes programs origin tag use =
                             (all (progress own evidence) active &&
                             let ty = substTyWith variables args
                                 bindings = zip (map getName context) ds
-                                apply (Use n c f ts es) = Use n c f (map ty ts) (map (substitute ty bindings) es)
+                                apply (Use n c f ts es) = Use n c f (map ty ts) (map (substitute (T.zipTvSubst variables args) bindings) es)
                             in all (prove ((getName implementation, evidence) : active) own . apply) obligations)
                     _ -> False
             _ -> False
@@ -192,7 +193,7 @@ stockUse rt homes programs origin tag use =
                             guard (length fields == length (classAllSelIds cls))
                             field <- lookup sel (zip (classAllSelIds cls) fields)
                             template <- fieldEvidence env [] (Set.fromList (map getName slots)) field
-                            result <- resolve (getName df : path) (substitute ty (zip (map getName slots) ds) template)
+                            result <- resolve (getName df : path) (substitute (T.zipTvSubst vs ts) (zip (map getName slots) ds) template)
                             actual <- predicateOf result
                             guard (eqType actual predicate)
                             pure result
@@ -202,6 +203,7 @@ stockUse rt homes programs origin tag use =
     resolve _ e@Given{} = Just e
     resolve _ e@BuiltinTag{} = Just e
     resolve _ Unknown{} = Nothing
+    resolve _ _ = Nothing
     -- Open only the actual selected superclass field. Helpers may abstract over
     -- types and evidence, never ordinary executable arguments. trace validates
     -- original coercions before any type/context substitution is performed.
@@ -224,7 +226,7 @@ stockUse rt homes programs origin tag use =
             template <- fieldEvidence local (getName helper : seen) (Set.union given (Set.fromList (map getName slots))) body
             let ty = substTyWith vs ts
             guard (and (zipWith (\v d -> maybe False (eqType (ty (idType v))) (predicateOf d)) slots values))
-            let result = substitute ty (zip (map getName slots) values) template
+            let result = substitute (T.zipTvSubst vs ts) (zip (map getName slots) values) template
             guard (maybe False (eqType (exprType expression)) (predicateOf result))
             pure result
         evidence -> Just evidence

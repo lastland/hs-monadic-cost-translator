@@ -291,6 +291,7 @@ checkUse rules origin utility = check
         supportEvidence (Transport _ parent) = supportEvidence parent
         supportEvidence (Super selector endpoint parent) =
             validSuper selector endpoint parent && supportEvidence parent
+        supportEvidence ev@Application{} = proofScoped (const True) ev
         supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
             tagMethod selected predicate && case getClassPredTys_maybe predicate of
@@ -329,6 +330,9 @@ checkUse rules origin utility = check
         memorist ty evidence = selectedPredicate ty evidence && (conditional ty evidence || auditedCarrier ty evidence)
         -- Neither a home nor an audited runtime reprM grants its abstract field.
         concreteRepr ty evidence = case evidence of
+            _ | hasApplication evidence && ownedApplication evidence,
+                    Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
+                getName cls == reprClass && eqType argument ty
             _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
                 getName cls == reprClass && eqType argument ty
             Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
@@ -348,6 +352,21 @@ checkUse rules origin utility = check
                 _ -> False
             _ -> False
         reprClass = runtimeName rt "Memorist.Data.Interface.Data" "Repr"
+        ownedApplication ev = proofField == field && appliedRoot ev && proofScoped (methodContext homes proofField) ev
+        proofField = case origin of
+            MethodBinding name -> contextSite homes (Left name)
+            MethodDeclaration declaration -> contextDeclaration homes declaration
+        appliedRoot (Application _ f _) = appliedRoot f
+        appliedRoot (Super _ _ parent) = appliedRoot parent
+        appliedRoot (Transport _ parent) = appliedRoot parent
+        appliedRoot (Lifted _ parent) = appliedRoot parent
+        appliedRoot given@Given{} = fieldSlot given
+        appliedRoot _ = False
+        hasApplication Application{} = True
+        hasApplication (Super _ _ parent) = hasApplication parent
+        hasApplication (Transport _ parent) = hasApplication parent
+        hasApplication (Lifted _ parent) = hasApplication parent
+        hasApplication _ = False
         -- Contexts are arguments, not method calls. Check their exact predicates
         -- and provenance here; replay decides which fields are executed.
         contextChild predicate child = case predicateOf child of
