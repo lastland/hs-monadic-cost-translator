@@ -48,7 +48,7 @@ import GHC.Core.Type
 import GHC.Core.Unify (tcMatchTy, typesCantMatch)
 import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 import GHC.Types.Var (binderVar, isTyVar, tyVarKind)
-import GHC.Types.Var.Set (elemVarSet, isEmptyVarSet)
+import GHC.Types.Var.Set (elemVarSet)
 
 data Specialization = Specialization
     { allocationType :: Type
@@ -102,7 +102,6 @@ residualSharing datatypes evidence ty uses = do
             | [formal] <- constrained
             , Just owner <- getTyVar_maybe key =
                 not (nameableType evidence key)
-                    && isEmptyVarSet (tyCoVarsOfType ty)
                     && owner `elem` ownerVariables evidence
                     && visibleIn formal result
         inferKey _ = False
