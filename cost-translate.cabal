@@ -200,6 +200,7 @@ test-suite cost-translate-test
                      ConstructionDefaults
                      ConstructionDemandMethods
                      ConstructionStockRequests
+                     ConstructionStockMetadata
                      ConstructionStock
                      ConstructionSuper
                      ConstructionTag

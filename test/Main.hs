@@ -106,6 +106,9 @@ runGroup environment (Semantic label sources) = do
         (checkOptimizedReferenceCases "acyclic runtime demand bundle" context artifacts)
     when (label == "higher-kinded-stock-context")
         (checkOptimizedReferenceCases "higher-kinded stock context" context artifacts)
+    when (label `elem` ["higher-kinded-datatype-field", "higher-kinded-polykinded-field",
+            "polymorphic-checked-payload-kinds", "polymorphic-dependent-payload-kinds"])
+        (checkOptimizedReferenceCases label context artifacts)
     mapM_ (checkGeneratedArtifacts label) artifacts
     putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
 runGroup _ Diagnostics = checkDiagnostics
