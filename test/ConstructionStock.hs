@@ -70,6 +70,7 @@ stockUse rt homes programs origin tag use =
     -- every free evidence Name AND predicate against this implementation.
     contextOrigin own ev = proofScoped (const True) ev && exactScope own ev
     exactScope own (Given name predicate) = owned own name predicate
+    exactScope _ UnitConstraint = True
     exactScope own (Instance _ _ _ children) = all (exactScope own) children
     exactScope own (Transport _ parent) = exactScope own parent
     exactScope own (Super _ _ parent) = exactScope own parent
@@ -224,6 +225,7 @@ stockUse rt homes programs origin tag use =
             _ -> Nothing
     resolve _ e@Given{} = Just e
     resolve _ e@BuiltinTag{} = Just e
+    resolve _ UnitConstraint = Just UnitConstraint
     resolve _ Unknown{} = Nothing
     resolve _ _ = Nothing
     -- Reuse the backend's typed application and GHC coercion push rules.
