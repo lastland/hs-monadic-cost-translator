@@ -157,6 +157,7 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "StockIndexed.hs"
     accepts "QuantifiedDirect.hs"
     accepts "QuantifiedApplication.hs"
     accepts "QuantifiedPromoted.hs"
