@@ -145,10 +145,22 @@ job runs compiler preflight and `sh scripts/validate.sh`, then checks the
 committed `examples/*M.hs` translations against fresh generator output.
 
 Two independent Stack runs build the [patched `hs-pbt/` submodule](../patches/README.md).
-One runs the full handwritten-reference suite; the other runs all four integration
-suites. To reproduce them locally after setting up the runtime:
+One runs passing handwritten references plus infrastructure checks; the other
+runs all four integration suites. To reproduce them locally after setting up the
+runtime:
 
 ```sh
 sh scripts/stack-test.sh
 sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration
 ```
+
+The default reference run excludes the explicit known-failure catalog. To run
+the complete reference inventory, including those cases with unchanged assertions:
+
+```sh
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments=--all-references
+```
+
+This command continues after ordinary case failures and exits nonzero while any
+selected reference fails. See the [testing guide](../README.md#testing-and-validation)
+for known-failure-only runs, listings and individual source selectors.
