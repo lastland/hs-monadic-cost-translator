@@ -147,6 +147,8 @@ checkGeneratedConstructionSpecimens = do
         [(11, selected "GHC.Classes.==")]
     rejectsAt "StockGrowth.hs"
         [(9, selected "GHC.Classes.=="), (11, selected "GHC.Internal.Show.show")]
+    rejectsAt "StockSpecialized.hs"
+        [(7, selected "GHC.Classes.=="), (10, selected "GHC.Classes.==")]
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
     accepts "ConcreteFoldableClosure.hs"
