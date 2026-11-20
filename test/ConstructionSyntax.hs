@@ -7,6 +7,7 @@ import ConstructionAst
 import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitSource, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
+import ConstructionRoles (Support, supportAt)
 import ConstructionRuntime
 import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
@@ -67,8 +68,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
-checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> Support -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
+checkSyntax rt utilities locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> ([pretty at ++ ": no retained action operand" | at <- missingActions actions], []) `plus`
         foldr (plus . walk noSrcSpan)
             (foldr (plus . nested noSrcSpan) (walk noSrcSpan group) (implicitSource locals checked group))
@@ -172,9 +173,14 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
     checkName location name | isQuickCheckBinding qc name =
         ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
     checkName location name = checkOperation location name
-    checkOperation location name = if permitted name then ([], []) else
+    checkOperation location name = if permitted name || utilityOperation location name then ([], []) else
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
-          " operation " ++ describeName name ++ " is forbidden in generated code"], [])
+           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
+    utilityOperation location name = case (supportAt utilities location, roleOf rt name) of
+        (Just AbstractMethod, Just role) -> role `elem` [AbstractMethod, Payload]
+        (Just FullMethod, Just role) -> role == FullMethod
+        (Just UsageMethod, Just role) -> role `elem` [UsageMethod, EmptyAccounting, UnionAccounting]
+        _ -> False
     permitted name | name `elem` restrictedViews support = False
     permitted name = case nameModule_maybe name of
         Nothing -> True

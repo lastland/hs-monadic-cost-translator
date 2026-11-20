@@ -13,8 +13,8 @@ ordinary = do
 data Box = Box Int
 data BoxT = BoxT (M.Th Int)
 
--- An actual Repr.abstract body has no payload-observation permission.
--- Its pure result type does not change the construction contract.
+-- The nominal abstract field may observe its represented thunk.
+-- This does not authorize observations in reprM or ordinary computations.
 instance M.Repr Box where
     type Rep Box = BoxT
     reprM (Box number) = BoxT <$> M.lazy (M.reprM number)

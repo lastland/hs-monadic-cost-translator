@@ -13,7 +13,7 @@ import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
 import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
-import ConstructionRoles (quickCheckRoles, homeDemandTypes)
+import ConstructionRoles (quickCheckRoles, homeDemandTypes, supportRoles)
 import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (coreViewNames, viewSupport)
@@ -84,14 +84,15 @@ constructionReports output =
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
+            utilities = supportRoles rt checkedPrograms
         qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
         let uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
             locals = localBindings rt qc checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
-            let (syntaxProblems, sites) = checkSyntax rt locals uses homes methods views checked
-            evidence <- collectEvidence rt locals representations program (coreViewNames views checked) checked sites
+            let (syntaxProblems, sites) = checkSyntax rt utilities locals uses homes methods views checked
+            evidence <- collectEvidence rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
@@ -318,11 +319,10 @@ checkGeneratedConstructionSpecimens = do
     rejectsDespiteImport "DatatypeGeneratorEscape.hs" 7 "DatatypeGeneratorControl.hs" 18 sized
     rejects "DatatypeGeneratorDead.hs" [(18, eval1)]
     mixed "DemandDerivingEscape.hs" [TopBinding "ordinary"] "DemandDerivingEscape.hs" [(11, demandEq)]
-    mixed "DemandManualInstance.hs" [InstanceMethod "Eq" ["Observation"] "=="] "DemandManualInstance.hs"
-        [(12, forbidden "Memorist.Data.Interface.Demand.usage")]
+    mixed "DemandManualInstance.hs" (InstanceMethod "Eq" ["Observation"] "==" : demandProducer)
+        "DemandManualInstance.hs" [(14, demandEq)]
     rejectsAt "DemandProtectedDeriving.hs" [(13, protectedEq)]
-    mixed "SumGeneratorMissing.hs" [InstanceMethod "Arbitrary" ["Observation"] "arbitrary"]
-        "SumGeneratorMissing.hs" [(9, defaultUsage)]
+    accepts "SumGeneratorMissing.hs"
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
     rejectsAt "SumTagEscape.hs" [(8, external "GHC.Types.I#"), (8, external "GHC.Magic.dataToTag#")]
@@ -337,22 +337,20 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "ForallClosureChanged.hs" [(10, view "preserve"), (13, view "preserve")]
     rejects "ConstraintWrapperEscape.hs" [(11, tval)]
     rejectsIn "ConstraintWrapperEscape.hs" "DemandControl.hs" [(19, forbidden tval)]
-    rejects "ConstraintWrapperAltered.hs" [(16, tval)]
-    rejects "ConstraintWrapperWrongProtocol.hs" [(17, tval)]
+    -- abstract's permission does not depend on a constraint-wrapper protocol.
+    accepts "ConstraintWrapperAltered.hs"
+    accepts "ConstraintWrapperWrongProtocol.hs"
     rejects "ConstraintWrapperDead.hs" [(15, eval1)]
-    rejects "Construction.hs" [(21, "Memorist.Data.Interface.Data.abstract"), (21, "Memorist.Base.Thunk.tval")]
+    accepts "Construction.hs"
     rejectsAt "MethodControl.hs" [(19, carrier ">>=" ++ "; generic dictionaries confer no permission")]
     mixed "DemandControl.hs" [TopBinding "generateField"] "DemandControl.hs" [(19, forbidden tval)]
-    mixed "SizedDemandControl.hs" charGenerators "SizedDemandControl.hs" [(8, defaultUsage)]
-    rejects "DatatypeGeneratorControl.hs"
-        [(13, "Memorist.Data.Interface.Demand.fullDemand"), (14, "Memorist.Data.Interface.Demand.usage"),
-         (14, "Memorist.Base.Thunk.union"), (14, "Memorist.Base.Thunk.empty")]
-    rejectsAt "DemandDerivingControl.hs" [(12, forbidden "Memorist.Data.Interface.Demand.usage")]
-    rejects "SumGeneratorControl.hs"
-        [(15, "Memorist.Base.Thunk.empty"), (16, "Memorist.Data.Interface.Demand.usage"), (16, "Memorist.Base.Thunk.union")]
-    rejects "ConstraintWrapperControl.hs"
-        [(19, "Memorist.Data.Interface.Data.abstract"), (19, "Memorist.Base.Thunk.tval"),
-         (25, "Memorist.Data.Interface.Demand.usage"), (25, "Memorist.Base.Thunk.union"), (25, "Memorist.Base.Thunk.empty")]
+    mixed "SizedDemandControl.hs" charGenerators "DemandControl.hs" [(19, forbidden tval)]
+    mixed "DatatypeGeneratorControl.hs" demandProducer "DatatypeGeneratorControl.hs" [(18, sized)]
+    accepts "DemandDerivingControl.hs"
+    mixed "SumGeneratorControl.hs" demandProducer "SumGeneratorControl.hs" [(25, oneof)]
+    mixed "ConstraintWrapperControl.hs"
+        [InstanceMethod "Repr" ["Source"] "abstract", InstanceMethod "Demand" ["Target"] "fullDemand",
+         InstanceMethod "Demand" ["Target"] "usage"] "DemandControl.hs" [(19, forbidden tval)]
     mapM_ accepts
         ["ImportAliasControl.hs", "LocalShadowing.hs", "ConcreteConstructionControl.hs", "RecordUpdateControl.hs", "AnnotatedPatternControl.hs",
           "StructuralViewControl.hs", "SchemaViewControl.hs", "SectionExpansionControl.hs", "TypeOnlyControl.hs",
@@ -393,7 +391,7 @@ checkGeneratedConstructionSpecimens = do
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
     protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
     demandEq = selected "GHC.Classes.==: demand-data methods have no observation exemption"
-    defaultUsage = selected "Memorist.Data.Interface.Demand.$dmusage: runtime observation/accounting methods have no construction permission"
+    demandProducer = [InstanceMethod "Demand" ["Producer"] method | method <- ["fullDemand", "usage"]]
     view op = "unchecked structural view use/escape: " ++ op
     sized = external "Test.QuickCheck.Gen.sized"
     oneof = external "Test.QuickCheck.Gen.oneof"
@@ -526,10 +524,9 @@ checkGeneratedConstructionSpecimens = do
         diagnostics <- constructionReports output
         writeFile (directory </> "construction-reports.txt") (unlines diagnostics)
         -- These are actual generated dictionaries, not a model of the emitter.
-        -- Observer/accounting and shrinker obligations deliberately remain.
-        unless (not (null diagnostics) && any (isInfixOf "Test.QuickCheck.Arbitrary.liftShrink") diagnostics &&
-                any (isInfixOf (forbidden "Memorist.Data.Interface.Demand.usage")) diagnostics) $
-            fail ("anf-demand must retain observer/accounting and shrinker rejections:\n" ++ unlines diagnostics)
+        -- Shrinker obligations remain; nominal support fields are not computations.
+        unless (not (null diagnostics) && any (isInfixOf "Test.QuickCheck.Arbitrary.liftShrink") diagnostics) $
+            fail ("anf-demand must retain shrinker rejections:\n" ++ unlines diagnostics)
         let pureMethod report = any (`isInfixOf` report)
                 ["unapproved selected method GHC.Classes.==:", "unapproved selected method GHC.Classes.$dm/=:",
                  "unapproved selected method GHC.Internal.Show.show:", "unapproved selected method GHC.Internal.Show.showsPrec:",
@@ -600,9 +597,9 @@ checkGeneratedConstructionSpecimens = do
         reports <- rejection output >>= siteReports output
         let check = checkDefinition output definitions reports
         mapM_ check
-            [(InstanceMethod "Repr" ["Box"] "abstract", map forbidden [tval, "Memorist.Data.Interface.Data.abstract"]),
-             (InstanceMethod "Demand" ["BoxT"] "fullDemand", [forbidden "Memorist.Data.Interface.Demand.fullDemand"]),
-             (InstanceMethod "Demand" ["BoxT"] "usage", map forbidden ["Memorist.Data.Interface.Demand.usage", "Memorist.Base.Thunk.empty", "Memorist.Base.Thunk.union"]),
+            [(InstanceMethod "Repr" ["Box"] "abstract", []),
+              (InstanceMethod "Demand" ["BoxT"] "fullDemand", []),
+              (InstanceMethod "Demand" ["BoxT"] "usage", []),
              (TopBinding "shrinkField", [forbidden tval, external "Test.QuickCheck.Arbitrary.liftShrink"])]
         mapM_ (\key -> check (key, []))
             [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
