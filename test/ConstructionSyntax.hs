@@ -2,8 +2,9 @@
 -- including unused ones, start in the construction role.
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
+import ConstructionActionFields (missingActions, sourceActions)
 import ConstructionAst
-import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), implicitBodies, nestedSource, quickCheckBindings)
+import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitBodies, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -68,10 +69,12 @@ checkParsedSyntax parsed =
 
 checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
 checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
-    Just (group, _, _, _, _) -> foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group)
+    Just (group, _, _, _, _) -> ([pretty at ++ ": no retained action operand" | at <- missingActions actions], []) `plus`
+        foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group ++ sourceActions actions)
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     qc = quickCheckBindings locals
+    actions = checkedActions locals checked
     exempt = quickCheckBody qc checked
     qcUses = uses checked
     (views, isViewCall) = moduleViews support checked

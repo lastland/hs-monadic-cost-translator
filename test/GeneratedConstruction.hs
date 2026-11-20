@@ -118,6 +118,10 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     checksPhantomProducer
+    rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
+    accepts "BoxedActionControl.hs"
+    rejectsAt "ActionContainer.hs" [(16, forbidden tval), (25, forbidden tval), (34, forbidden tval)]
+    rejectsAt "ActionFieldEvidence.hs" [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance")]
     checksImplicitForcing
     checkIntegralContext ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
