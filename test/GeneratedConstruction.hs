@@ -20,7 +20,7 @@ import GeneratedFunctions (parseHaskellModule)
 import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
-    , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..), TyThing(AnId)
+    , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary, SuccessFlag(..), TyThing(AnId)
     , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
@@ -105,6 +105,14 @@ configureArtifact output = do
     unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
     void $ setSessionDynFlags configured
         { backend = noBackend, ghcLink = NoLink, importPaths = [takeDirectory output] }
+
+withLoadedGenerated :: FilePath -> (ModSummary -> Ghc a) -> IO a
+withLoadedGenerated output inspect = runGhc (Just libdir) $ do
+    configureArtifact output
+    target <- guessTarget output Nothing Nothing
+    setTargets [target]
+    Succeeded <- load LoadAllTargets
+    getModSummary (mkModuleName "Generated") >>= inspect
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
@@ -455,12 +463,7 @@ checkGeneratedConstructionSpecimens = do
     checkIntegralContext fixture = do
         let label = takeBaseName fixture
         (_, _, output) <- completeArtifact label fixture
-        signature <- runGhc (Just libdir) $ do
-            configureArtifact output
-            target <- guessTarget output Nothing Nothing
-            setTargets [target]
-            Succeeded <- load LoadAllTargets
-            summary <- getModSummary (mkModuleName "Generated")
+        signature <- withLoadedGenerated output $ \summary -> do
             checked <- parseModule summary >>= typecheckModule
             Just (group, _, _, _, _) <- pure (tm_renamed_source checked)
             core <- findModule (mkModuleName "Memorist.Base.Core") (Just (mkFastString "MemoristANT"))
@@ -479,12 +482,7 @@ checkGeneratedConstructionSpecimens = do
     checksPhantomProducer = do
         (_, _, output) <- completeArtifact "phantom producer" ("polymorphic-phantom-producer" </> "Example.hs")
         diagnostics <- constructionReports output
-        runGhc (Just libdir) $ do
-            configureArtifact output
-            target <- guessTarget output Nothing Nothing
-            setTargets [target]
-            Succeeded <- load LoadAllTargets
-            summary <- getModSummary (mkModuleName "Generated")
+        withLoadedGenerated output $ \summary ->
             parseModule summary >>= typecheckModule >>= checkPhantomAllocation
         cleanDefinitions (unlines diagnostics) output (map TopBinding ["viewsM", "inferredM", "makeM", "workM", "mapThunk"])
         putStrLn "PASS: phantom producer / one suspended invocation, checked view, original constructor and fields"

@@ -7,6 +7,11 @@ import ConstructionRuntime (resolveExport, resolveType)
 import Data.Maybe (isJust)
 import GHC
 
+data AllocationNames = AllocationNames
+    { allocationProducer, allocationLazy, allocationView, allocationPair, allocationPure :: Name
+    , allocationConstructors :: [Name]
+    }
+
 checkPhantomAllocation :: TypecheckedModule -> Ghc ()
 checkPhantomAllocation checked = do
     let owner = ms_mod (pm_mod_summary (tm_parsed_module checked))
@@ -18,17 +23,20 @@ checkPhantomAllocation checked = do
     view <- resolveExport owner "mapThunk"
     ret <- findModule (mkModuleName "Prelude") Nothing >>= (`resolveExport` "pure")
     Just (group, _, _, _, _) <- pure (tm_renamed_source checked)
-    let constructors = map getName (tyConDataCons parcel)
+    let names = AllocationNames
+            { allocationProducer = producer, allocationLazy = allocate, allocationView = view
+            , allocationPair = pair, allocationPure = ret, allocationConstructors = map getName (tyConDataCons parcel)
+            }
         inspect name = do
             ownerName <- resolveExport owner name
             [binding] <- pure [b | b <- collectAst group, bindingName b == Just ownerName]
-            if singleRoot producer allocate view pair ret constructors binding then pure () else
+            if singleRoot names binding then pure () else
                 fail (name ++ " must suspend one producer invocation and return both instantiations of that root with every original field thunk")
     mapM_ inspect ["viewsM", "inferredM"]
 
-singleRoot :: Name -> Name -> Name -> Name -> Name -> [Name] -> HsBind GhcRn -> Bool
-singleRoot producer allocate view pair ret constructors owner = case allocators of
-    [allocator] | uses producer == 1, uses allocator == 1, [root] <- roots allocator,
+singleRoot :: AllocationNames -> HsBind GhcRn -> Bool
+singleRoot names owner = case allocators of
+    [allocator] | uses (allocationProducer names) == 1, uses allocator == 1, [root] <- roots allocator,
                   [alias] <- aliases root -> (Just alias, Just alias) `elem` pairs
     _ -> False
   where
@@ -36,25 +44,26 @@ singleRoot producer allocate view pair ret constructors owner = case allocators 
     uses target = length [() | HsVar _ name <- collectAst owner :: [HsExpr GhcRn], unLoc name == target]
     allocators = [name | binding <- bindings, Just name <- [bindingName binding],
         Just [([parameter], body)] <- [equations binding], Just input <- [plainPattern parameter],
-        Just [action] <- [call [allocate] body], retagsResult ret input constructors action]
+        Just [action] <- [call [allocationLazy names] body], retagsResult names input action]
     roots allocator = [root | L _ (BindStmt _ pat rhs) <- collectAst owner :: [ExprLStmt GhcRn],
         Just root <- [plainPattern pat], Just [action] <- [call [allocator] rhs], returnsProducer action]
     aliases root = [alias | binding <- bindings, Just alias <- [bindingName binding], Just [([], rhs)] <- [equations binding],
-        Just [_, input] <- [call [view] rhs], variable input == Just root]
+        Just [_, input] <- [call [allocationView names] rhs], variable input == Just root]
     pairs = [(variable a, variable b) | e <- collectAst owner :: [LHsExpr GhcRn],
-        Just [value] <- [call [ret] e], Just [a,b] <- [call [pair] value]]
+        Just [value] <- [call [allocationPure names] e], Just [a,b] <- [call [allocationPair names] value]]
     returnsProducer expression = case spine expression of
         (L _ (HsDo _ (DoExpr Nothing) (L _ statements)), [])
             | L _ (LastStmt _ terminal _ _) : _ <- reverse statements -> returnsProducer terminal
-        _ -> isJust (call [producer] expression)
+        _ -> isJust (call [allocationProducer names] expression)
 
-retagsResult :: Name -> Name -> [Name] -> LHsExpr GhcRn -> Bool
-retagsResult ret producer constructors action = case spine action of
+retagsResult :: AllocationNames -> Name -> LHsExpr GhcRn -> Bool
+retagsResult names producerArgument action = case spine action of
     (L _ (HsDo _ (DoExpr Nothing) (L _ [L _ (BindStmt _ pat rhs), L _ (LastStmt _ end _ _)])), [])
-        | variable rhs == Just producer, Just result <- plainPattern pat,
-          Just [value] <- call [ret] end, (L _ (HsCase _ scrutinee branches), []) <- spine value,
+        | variable rhs == Just producerArgument, Just result <- plainPattern pat,
+          Just [value] <- call [allocationPure names] end, (L _ (HsCase _ scrutinee branches), []) <- spine value,
           variable scrutinee == Just result ->
             let alternatives = map unLoc (unLoc (mg_alts branches))
+                constructors = allocationConstructors names
             in length alternatives == length constructors && all (forwards alternatives) constructors
     _ -> False
   where
