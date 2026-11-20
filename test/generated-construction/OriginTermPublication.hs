@@ -10,7 +10,7 @@ keepM x = do
     pure (CallerDatatype.keep value)
 
 partialM :: M.Th a -> M.MemoristM a
-partialM xs = M.tick >> M.force xs
+partialM xs = let discarded = CallerDatatype.partial [] in M.tick >> M.force xs
 
 unusedLive :: Int -> Int
 unusedLive x = CallerDatatype.keep x
@@ -50,3 +50,24 @@ valueEscape = CallerDatatype.zero
 
 patternLabel :: CallerDatatype.Box -> Int
 patternLabel CallerDatatype.Box { CallerDatatype.payload = x } = x
+
+partialCallback :: ([Int] -> [Int]) -> [Int]
+partialCallback f = f []
+
+passedPartial :: [Int]
+passedPartial = partialCallback CallerDatatype.partial
+
+passedPartialDead :: [Int]
+passedPartialDead = if True then [] else partialCallback CallerDatatype.partial
+
+class ConcretePartial a where
+    concretePartial :: a -> [Int]
+
+instance ConcretePartial Bool where
+    concretePartial _ = CallerDatatype.partial []
+
+class ConcretePartialDead a where
+    concretePartialDead :: a -> [Int]
+
+instance ConcretePartialDead Bool where
+    concretePartialDead x = if x then [] else if True then [] else CallerDatatype.partial []

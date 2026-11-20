@@ -99,8 +99,13 @@ trace env given seen expression = case expression of
     applyArguments = foldl (\function argument -> case argument of
         C.Type ty -> apply function (TypeArgument ty)
         _ | not (C.isTyCoArg argument), isPredTy (exprType argument) ->
-            apply function (EvidenceArgument (trace env given seen argument))
+            retainApplication function (EvidenceArgument (trace env given seen argument))
         _ -> Unknown "non-evidence application")
+    -- Type substitution preserves evidence occurrences. Evidence application
+    -- must retain even an unused argument until its owner checks scope.
+    retainApplication function argument = case predicateOf function >>= (`resultType` argument) of
+        Just target -> Application target function argument
+        Nothing -> Unknown "quantified evidence argument/type mismatch"
 
 renderEvidence :: Evidence -> String
 renderEvidence (Given _ ty) = "given " ++ pretty ty
@@ -413,9 +418,9 @@ superclassAxiom direction co = do
 projected :: HomeReprs -> Evidence -> Maybe Evidence
 projected homes ev | case ev of Super{} -> True; Transport{} -> True; Application{} -> True; Lifted{} -> True; _ -> False = normalize [] ev
   where
-    normalize path (Super sel predicate parent) = do
-        guard (validSuper sel predicate parent)
-        origin@(Instance df p ts ds) <- normalize path parent
+    -- An abstract checked superclass remains a proof edge, not permission.
+    -- This lets beta reduction proceed after the caller's original scope check.
+    project path sel predicate origin@(Instance df p ts ds) = do
         (cls, _) <- getClassPredTys_maybe p
         guard (sel `elem` classSCSelIds cls && all (progress sel df origin) path)
         let constructor = tyConSingleDataCon (classTyCon cls)
@@ -460,6 +465,13 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; Applicatio
                 wanted == found && maybe False (eqType ty) (closedFamilyStep operand)
             _ -> False)
         pure result
+    project _ _ _ _ = Nothing
+    normalize path (Super sel predicate parent) = do
+        guard (validSuper sel predicate parent)
+        source <- normalize path parent
+        case source of
+            Instance{} -> project path sel predicate source
+            _ -> pure (Super sel predicate source)
     normalize path (Instance df ty ts ds) = Instance df ty ts <$> mapM (normalize path) ds
     normalize path (Application target function argument) = do
         guard (validApplication target function argument)

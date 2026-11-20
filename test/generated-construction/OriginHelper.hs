@@ -17,3 +17,27 @@ originLive x = Source.keep x
 
 originDead :: Int -> Int
 originDead x = if True then x else Source.keep x
+
+partialLive :: [Int] -> [Int]
+partialLive xs = Source.partial xs
+
+partialDead :: [Int] -> [Int]
+partialDead xs = if True then xs else Source.partial xs
+
+partialCallback :: ([Int] -> [Int]) -> [Int]
+partialCallback f = f []
+
+passedPartial :: [Int]
+passedPartial = partialCallback Source.partial
+
+class ConcretePartial a where
+    concretePartial :: a -> [Int]
+
+instance ConcretePartial Bool where
+    concretePartial _ = Source.partial []
+
+class ConcretePartialDead a where
+    concretePartialDead :: a -> [Int]
+
+instance ConcretePartialDead Bool where
+    concretePartialDead _ = if True then [] else Source.partial []

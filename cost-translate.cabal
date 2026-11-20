@@ -70,6 +70,7 @@ library translator-internal
     exposed-modules:
         Cost.Publication
     other-modules:
+        Cost.AcceptedOptions
         Cost.AcceptedSource
         Cost.Translate.Frontend
         Cost.Translate.Frontend.Allocation
@@ -179,6 +180,7 @@ test-suite cost-translate-test
     other-modules:    ConstructionEvidenceTypes
                      ConstructionConstraintAliases
                      ConditionChecks
+                     AcceptedOptionsChecks
                      GeneratedSyntax
                      PaperScalarChecks
                      FixturePolicy

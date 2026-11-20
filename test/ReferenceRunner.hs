@@ -8,12 +8,13 @@ module ReferenceRunner
     , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
     ) where
 
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when, void)
+import AcceptedOptionsChecks (checkAcceptedOptions)
 import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
-import GeneratedFunctions (checkTopLevelFunctions)
+import GeneratedFunctions (checkAcceptedFunctions)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
@@ -65,7 +66,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
     source <- fixturePath fixture
     result <- stageAndTranslate source (generated </> "Generated.hs")
     publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
-    checkTopLevelFunctions (generated </> "Example.hs") (generated </> "Generated.hs")
+    checkAcceptedFunctions publication (generated </> "Generated.hs")
     checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
     copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
     actual <- buildObserver environment generated
@@ -195,18 +196,25 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
             all (`isInfixOf` err) ((generated </> "Generated.hs") : expected)) $
         fail ("global " ++ label ++ " guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
               out ++ err ++ "\nArtifacts: " ++ root)
-    when (label `elem` ["origin-term", "origin-helper"] &&
+    when (label `elem` ["origin-term", "origin-helper", "origin-section"] &&
             (generated </> "Example.hs:") `isInfixOf` err) $
         fail ("origin uses must not restore original-body obligations\n" ++ err)
     when (label == "origin-term") $
-        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 10 &&
+        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 15 &&
                 not ("unapproved " `isInfixOf` err)) $
-            fail ("expected exactly ten term uses, not structural field labels or original-body reports\n" ++ err)
+            fail ("expected exactly fifteen term uses, not structural field labels or original-body reports\n" ++ err)
+    when (label == "origin-section") $
+        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 4 &&
+                length (filter ("colliding-origin-section.hs:100:" `isInfixOf`) (lines err)) == 2 &&
+                not ("unapproved " `isInfixOf` err)) $
+            fail ("section diagnostics must count physical written uses, including LINE collisions\n" ++ err)
   where
     prefix = "Reference fixtures and logs: "
 
 checkSourceScopeLifecycle :: ReferenceEnvironment -> IO ()
 checkSourceScopeLifecycle environment = do
+    checkAcceptedOptions
+    checkPackageEnvironmentLifecycle environment
     artifacts <- runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"])
     forM_ artifacts $ \artifact -> do
         result <- try (checkGeneratedConstruction (generatedDirectory artifact </> "Generated.hs"))
@@ -216,18 +224,8 @@ checkSourceScopeLifecycle environment = do
                     "GHC.Internal.Base.map" `isInfixOf` ioeGetErrorString err)
                     (fail ("strict standalone rejected for the wrong reason: " ++ show err))
             Right () -> fail "standalone construction checking must remain strict"
-        forM_ ["-O0", "-O2"] $ \optimization -> do
-            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
-            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
-            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-            unless (status == ExitSuccess) (fail (out ++ err))
     manual <- runReferenceCase environment ("manual-thunk-arguments", ["examples/ThunkArguments.hs"])
-    forM_ manual $ \artifact ->
-        forM_ ["-O0", "-O2"] $ \optimization -> do
-            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
-            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
-            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-            unless (status == ExitSuccess) (fail (out ++ err))
+    checkSourceOptimizations environment (artifacts ++ manual)
     checkPublicationGuardFor environment "source-map" "origin-term"
         ("generated-construction" </> "OriginTermPublication.hs")
         ("ordinary originating-source term reference Example.keep" :
@@ -235,7 +233,7 @@ checkSourceScopeLifecycle environment = do
          "ordinary originating-source term reference Example.payload" :
          "ordinary originating-source term reference Example.zero" :
          [ "Generated.hs:" ++ show line ++ ":"
-         | line <- [10, 16, 19, 25, 28, 31, 37, 43, 46, 49 :: Int] ])
+         | line <- [10, 13, 16, 19, 25, 28, 31, 37, 43, 46, 49, 58, 61, 67, 73 :: Int] ])
     forM_ [("snapshot", "accepted origin snapshot mismatch"),
            ("options", "accepted origin snapshot mismatch"),
            ("path", "origin loaded from an unrecorded path")] $ \(mutation, diagnostic) ->
@@ -250,9 +248,39 @@ checkSourceScopeLifecycle environment = do
         ["Generated.hs:14:", "OriginHelper.hs:10:", "GHC.Internal.Base.map",
          "OriginHelper.hs:13:", "Memorist.Base.Thunk.tval",
          "OriginHelper.hs:16:", "OriginHelper.hs:19:",
-         "ordinary originating-source term reference Example.keep"]
+         "ordinary originating-source term reference Example.keep",
+         "ordinary originating-source term reference Example.partial",
+         "OriginHelper.hs:22:", "OriginHelper.hs:25:", "OriginHelper.hs:31:",
+         "OriginHelper.hs:37:", "OriginHelper.hs:43:"]
     checkChangedInclude environment
+    checkAcceptedCPP environment
+    checkPublicationGuardFor environment "source-map" "origin-section"
+        ("generated-construction" </> "OriginSectionPublication.hs")
+        ["Generated.hs:13:", "Generated.hs:16:", "colliding-origin-section.hs:100:",
+         "ordinary originating-source term reference Example.keep",
+         "ordinary originating-source term reference Example.partial"]
     putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
+
+checkSourceOptimizations :: ReferenceEnvironment -> [Artifacts] -> IO ()
+checkSourceOptimizations environment artifacts = forM_ artifacts $ \artifact ->
+    forM_ ["-O0", "-O2"] $ \optimization -> do
+        actual <- buildObserverAt optimization environment (generatedDirectory artifact)
+        expected <- buildObserverAt optimization environment (referenceDirectory artifact)
+        (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+        unless (status == ExitSuccess) (fail (out ++ err))
+
+checkPackageEnvironmentLifecycle :: ReferenceEnvironment -> IO ()
+checkPackageEnvironmentLifecycle environment = do
+    root <- createTempDirectory (environmentRoot environment) "origin-package-environment-"
+    let packageEnvironment = root </> "packages"
+    (status, out, err) <- readProcessWithExitCode "ghc-pkg" ["field", "base", "id", "--simple-output"] ""
+    unless (status == ExitSuccess && length (words out) == 1)
+        (fail ("cannot identify the actual base package for the lifecycle: " ++ err))
+    writeFile packageEnvironment ("package-id " ++ unwords (words out) ++ "\n")
+    previous <- lookup "GHC_ENVIRONMENT" <$> getEnvironment
+    bracket_ (setEnv "GHC_ENVIRONMENT" packageEnvironment)
+        (maybe (unsetEnv "GHC_ENVIRONMENT") (setEnv "GHC_ENVIRONMENT") previous) $
+        void (runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"]))
 
 checkChangedInclude :: ReferenceEnvironment -> IO ()
 checkChangedInclude environment = do
@@ -281,7 +309,7 @@ checkChangedInclude environment = do
         try (runReferenceCase environment ("source-map", [fixture]))
     case result of
         Left (err :: IOException) ->
-            unless ("Example.hs: cannot parse Haskell" `isInfixOf` ioeGetErrorString err)
+            unless ("accepted origin snapshot mismatch: frontend buffer" `isInfixOf` ioeGetErrorString err)
                 (fail ("changed include rejected for the wrong reason: " ++ show err))
         Right _ -> fail "changed CPP inputs must not inherit original-source authority"
     candidate <- readFile marker
@@ -299,6 +327,38 @@ checkChangedInclude environment = do
             unless ("preprocessed source" `isInfixOf` ioeGetErrorString err)
                 (fail ("construction CPP boundary rejected for the wrong reason: " ++ show err))
         Right () -> fail "construction checking must not accept preprocessed home sources"
+
+checkAcceptedCPP :: ReferenceEnvironment -> IO ()
+checkAcceptedCPP environment = do
+    root <- createTempDirectory (environmentRoot environment) "accepted-cpp-"
+    let header = root </> "include.h"
+        included = root </> "IncludedCPP.hs"
+        identity = root </> "IdentityCPP.hs"
+    writeFile header "#define IDENTITY(x) x\n"
+    writeFile included (unlines
+        ["{-# LANGUAGE CPP #-}", "module Example where",
+         "#include " ++ show header, "f :: a -> a", "f x = IDENTITY(x)"])
+    writeFile identity (unlines
+        ["{-# LANGUAGE CPP #-}", "module Example where",
+         "#define IDENTITY(x) x", "#define HIDDEN hidden",
+         "f :: a -> a", "f x = IDENTITY(x)",
+         "HIDDEN :: a -> a", "HIDDEN x = x",
+         "(%%) :: a -> b -> a", "x %% y = x"])
+    artifacts <- runReferenceCase environment ("identity", [included])
+    pureArtifacts <- runReferenceCase environment ("identity", [identity])
+    checkSourceOptimizations environment (artifacts ++ pureArtifacts)
+    let pureOutput = root </> "PureGenerated.hs"
+    purePublication <- stageAndTranslate identity pureOutput >>= either fail pure
+    writeFile (root </> "Example.hs") "module Example where\n"
+    writeFile pureOutput "module PureGenerated where\n"
+    missing <- try (checkAcceptedFunctions purePublication pureOutput)
+    case missing of
+        Left (err :: IOException) ->
+            unless (all (`isInfixOf` ioeGetErrorString err)
+                    ["binding fM", "binding hiddenM", "binding operatorM_37_37"])
+                (fail ("accepted CPP syntax lost original obligations: " ++ show err))
+        Right () -> fail "accepted CPP syntax must retain hidden and operator obligations"
+    putStrLn "PASS: pure accepted CPP / actual parsed syntax, hidden/operator obligations / independent O0/O2 references"
 
 -- These are infrastructure specimens, not translator correctness evidence.
 -- They deliberately inject known mistakes and must be rejected by the same

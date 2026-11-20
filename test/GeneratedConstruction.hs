@@ -26,9 +26,9 @@ import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
     , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary(..), SuccessFlag(..), TyThing(AnId)
-    , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
-    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries
-    , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
+    , backend, findModule, getLocA, getModSummary, getName, idType, lookupName, mkModuleName
+    , getSession, getSessionDynFlags, guessTarget, importPaths, mgModSummaries
+    , coreModule, desugarModule, load, noBackend, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , tm_renamed_source, unLoc, ghcLink
     )
@@ -38,6 +38,7 @@ import GHC.Core.Type (getTyVar_maybe)
 import GHC.Data.FastString (mkFastString)
 import GHC.Data.StringBuffer (hGetStringBuffer)
 import GHC.Driver.Make qualified as Make
+import GHC.Driver.Session (parseDynamicFlagsCmdLine)
 import GHC.Types.Error (mkUnknownDiagnostic)
 import GHC.Unit.Module.Graph (ModuleGraph, mapMG)
 import qualified GHC.Data.Strict as Strict
@@ -84,9 +85,10 @@ constructionReportsWithOrigin publication output =
         graph <- depanal [] False >>= pinConstructionGraph
         let summaries = mgModSummaries graph
             homes = map ms_mod summaries
-            optionProblems = concatMap checkCompilerOptions summaries
+        session <- getSession
+        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output session summaries) publication
+        let optionProblems = concatMap checkCompilerOptions summaries
         unless (null optionProblems) (fail (unlines optionProblems))
-        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output summaries) publication
         parsedModules <- mapM parseModule summaries
         let parsedProblems = concatMap checkParsedSyntax parsedModules
         unless (null parsedProblems) (fail (unlines parsedProblems))
@@ -122,9 +124,10 @@ constructionReportsWithOrigin publication output =
 configureArtifact :: FilePath -> Ghc ()
 configureArtifact output = do
     flags <- getSessionDynFlags
-    logger <- getLogger
     -- Inspect the imported DFun fields selected by superclass projections.
-    (configured, leftovers, _) <- parseDynamicFlags logger flags
+    -- Like the frontend, use the session's package databases without importing a
+    -- second, ambient package environment during this inspection-only setup.
+    (configured, leftovers, _) <- parseDynamicFlagsCmdLine flags
         (map noLoc ["-fno-ignore-interface-pragmas", "-package", "MemoristANT", "-package", quickCheckPackage,
             "-package", "ghc-prim"])
     unless (null leftovers) (fail "cannot configure generated-construction runtime packages")
@@ -177,6 +180,34 @@ checkGeneratedConstructionSpecimens = do
     quantifiedCollision <- specimen "QuantifiedCollision.hs"
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
+    accepts "ShapeStock.hs"
+    accepts "ShapeStockSum.hs"
+    accepts "RenamedStock.hs"
+    rejectsAt "ShapeStockEscapes.hs"
+        ([(line, selected "GHC.Classes.==") | line <- [11, 15, 19, 23, 28, 38, 46]] ++
+         [(line, selected "GHC.Internal.Show.show") | line <- [13, 17, 30, 40, 48]])
+    shapeCollision <- specimen "ShapeStockCollision.hs"
+    typechecks shapeCollision
+    rejection shapeCollision >>= \diagnostics ->
+        requireAt diagnostics "Collision.hs" [(324, selected "GHC.Classes.==")]
+    accepts "StockHigher.hs"
+    accepts "StockHigherSum.hs"
+    accepts "StockHigherStandalone.hs"
+    rejectsAt "StockHigherEscapes.hs"
+        ([(line, selected "GHC.Classes.==: unknown concrete scalar instance") | line <- [8, 12, 16, 20, 22, 29, 39]] ++
+         [(line, selected "GHC.Internal.Show.show: unknown concrete scalar instance") | line <- [10, 14, 18, 31, 41]] ++
+         [(25, protectedEq), (27, selected "GHC.Internal.Show.show: protected thunk/annotation/accounting operand"),
+          (35, forbidden tval), (37, forbidden tval),
+          (61, unknown "StockHigherEscapes.firstOrder")] ++
+         [(line, demandEq) | line <- [46, 54]] ++
+         [(line, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption") | line <- [48, 56]])
+    rejectsAt "StockHigherSpecialized.hs"
+        [(line, selected "GHC.Classes.==") | line <- [13, 15, 22, 24]]
+    rejectsAt "StockHigherVia.hs" [(14, selected "GHC.Classes.==")]
+    rejectsAt "StockHigherPoly.hs"
+        [(10, selected "GHC.Classes.=="), (12, selected "GHC.Internal.Show.show"),
+         (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show"),
+         (22, selected "GHC.Classes.=="), (24, selected "GHC.Internal.Show.show")]
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"

@@ -49,23 +49,36 @@ stockUse rt homes programs origin tag use =
     stockOwner df = any (\(Stock owner _ _ _ _) -> df == owner) stocks
     prove _ _ obligation | tag obligation = True
     prove active own (Use method expected ScalarMethod [operand] [e])
-        | not (isProtected rt operand), Just ev <- resolve [] e,
+        | not (isProtected rt operand), contextOrigin own e, Just ev <- resolve [] e,
           Just (cls, [actual]) <- predicateOf ev >>= getClassPredTys_maybe,
           getName cls == expected, eqType actual operand =
             (scalarType operand && ordinary ev) ||
             (standardMethod rt method cls &&
                 (conditional own ev || runtime active own method ev || selected active own method ev))
     prove _ _ _ = False
-    conditional own (Given name predicate) = any (\v -> getName v == name && eqType (idType v) predicate) own
-    conditional own (Transport _ parent) = conditional own parent
-    conditional own (Super sel predicate parent) = validSuper sel predicate parent && conditional own parent
-    conditional _ _ = False
+    owned own name predicate = any (\v -> getName v == name && eqType (idType v) predicate) own
+    conditional own ev = owningRoot ev && contextOrigin own ev
+      where
+        owningRoot (Given name predicate) = owned own name predicate
+        owningRoot (Transport _ parent) = owningRoot parent
+        owningRoot (Super _ _ parent) = owningRoot parent
+        owningRoot (Lifted _ parent) = owningRoot parent
+        owningRoot (Application _ function _) = owningRoot function
+        owningRoot _ = False
     -- Even an inert ordinary-call context needs a fully selected origin.
-    contextOrigin own ev@Given{} = conditional own ev
-    contextOrigin own (Instance _ _ _ children) = all (contextOrigin own) children
-    contextOrigin own (Transport _ parent) = contextOrigin own parent
-    contextOrigin own (Super sel predicate parent) = validSuper sel predicate parent && contextOrigin own parent
-    contextOrigin _ _ = False
+    -- The backend checks typed proof edges; stock scope additionally checks
+    -- every free evidence Name AND predicate against this implementation.
+    contextOrigin own ev = proofScoped (const True) ev && exactScope own ev
+    exactScope own (Given name predicate) = owned own name predicate
+    exactScope own (Instance _ _ _ children) = all (exactScope own) children
+    exactScope own (Transport _ parent) = exactScope own parent
+    exactScope own (Super _ _ parent) = exactScope own parent
+    exactScope own (Lifted _ parent) = exactScope own parent
+    exactScope own (Application _ function argument) = exactScope own function &&
+        case argument of TypeArgument _ -> True; EvidenceArgument d -> exactScope own d
+    exactScope own (TypeLambda _ _ body) = exactScope own body
+    exactScope own (EvidenceLambda _ binder body) = exactScope (binder : own) body
+    exactScope _ _ = False
     ordinary (Instance df predicate [] []) =
         not (runtimeOwns rt (getName df)) && case (boundInstance rt (getName df), getClassPredTys_maybe predicate) of
             (Just (cls, args), Just (actual, selected')) -> cls == getName actual && sameTypes args selected'
@@ -173,6 +186,10 @@ stockUse rt homes programs origin tag use =
             _ | maybe False (eqType target) (predicateOf actual) -> actual
               | otherwise -> Transport target actual
     resolve path (Instance df p ts ds) = Instance df p ts <$> mapM (resolve path) ds
+    resolve path evidence@Application{} = resolveProof path evidence
+    resolve path evidence@Lifted{} = resolveProof path evidence
+    resolve _ evidence@TypeLambda{} = Just evidence
+    resolve _ evidence@EvidenceLambda{} = Just evidence
     resolve path evidence@(Super sel predicate parent) = do
         guard (validSuper sel predicate parent)
         source <- resolve path parent
@@ -180,6 +197,8 @@ stockUse rt homes programs origin tag use =
             Given{} -> pure (Super sel predicate source)
             Transport{} -> pure (Super sel predicate source)
             Super{} -> pure (Super sel predicate source)
+            Application{} -> pure (Super sel predicate source)
+            Lifted{} -> pure (Super sel predicate source)
             Instance df p ts ds | getName df `notElem` path ->
                 case Map.lookup (getName df) env of
                     Just rhs -> case C.collectArgs (snd (C.collectBinders rhs)) of
@@ -207,6 +226,14 @@ stockUse rt homes programs origin tag use =
     resolve _ e@BuiltinTag{} = Just e
     resolve _ Unknown{} = Nothing
     resolve _ _ = Nothing
+    -- Reuse the backend's typed application and GHC coercion push rules.
+    -- Abstract roots cannot project to a DFun: retain their checked syntax
+    -- for exact owning-context validation, not as unconditional permission.
+    resolveProof path evidence = do
+        guard (proofScoped (const True) evidence)
+        case projected homes evidence of
+            Just result | not (sameEvidence result evidence) -> resolve path result
+            _ -> Just evidence
     -- Open only the actual selected superclass field. Helpers may abstract over
     -- types and evidence, never ordinary executable arguments. trace validates
     -- original coercions before any type/context substitution is performed.

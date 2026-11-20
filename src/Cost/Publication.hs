@@ -4,6 +4,7 @@ module Cost.Publication
     , Publication
     , stageAndTranslate
     , verifyOrigin
+    , publicationSyntax
     ) where
 
 import Control.Exception (IOException, SomeException, displayException, try)
@@ -45,6 +46,9 @@ translateAccepted source output = do
 
 data Publication = Publication FilePath [FilePath] AcceptedSource
 
+publicationSyntax :: Publication -> GHC.HsModule GHC.GhcPs
+publicationSyntax (Publication _ _ accepted) = acceptedSyntax accepted
+
 stageAndTranslate :: FilePath -> FilePath -> IO (Either String Publication)
 stageAndTranslate fixture output = do
     let source = takeDirectory output </> "Example.hs"
@@ -56,13 +60,18 @@ stageAndTranslate fixture output = do
     published <- canonicalizePath output
     pure (Publication published physical <$> result)
 
-verifyOrigin :: Publication -> FilePath -> [GHC.ModSummary] -> IO [GHC.Module]
-verifyOrigin (Publication published paths accepted) output summaries = do
+verifyOrigin ::
+    Publication ->
+    FilePath ->
+    GHC.HscEnv ->
+    [GHC.ModSummary] ->
+    IO [GHC.Module]
+verifyOrigin (Publication published paths accepted) output session modules = do
     actual <- canonicalizePath output
     if actual /= published
         then fail (output ++ ": origin publication path mismatch")
         else do
-            result <- try (verifyAccepted paths accepted summaries)
+            result <- try (verifyAccepted session paths accepted modules)
             case result of
                 Left (err :: IOException) ->
                     fail (output ++ ": " ++ displayException err)
