@@ -6,8 +6,11 @@ module ReferenceRunner
     , checkGeneratedConstructionLifecycle
     , checkSourceScopeLifecycle
     , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
+    , retainReferenceFailure
+    , checkProcessCrash
     ) where
 
+import Control.Exception (IOException, catch, throwIO, try, bracket_)
 import Control.Monad (forM, forM_, unless, when, void)
 import AcceptedOptionsChecks (checkAcceptedOptions)
 import Cost.Publication (stageAndTranslate)
@@ -15,7 +18,9 @@ import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
 import GeneratedFunctions (checkAcceptedFunctions)
+import GHC.Settings.Config (cProjectVersion)
 import Paths_cost_translate (getDataFileName)
+import ReferenceFailure (fatalSetupFailure, ExternalDiagnostic(..), externalFailure)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
     , getPermissions, getTemporaryDirectory, setPermissions
@@ -24,8 +29,7 @@ import System.Environment (getEnvironment, getExecutablePath, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeDirectory, takeFileName, isAbsolute)
 import System.IO.Temp (createTempDirectory)
-import System.IO.Error (ioeGetErrorString)
-import Control.Exception (IOException, try, bracket_)
+import System.IO.Error (ioeGetErrorString, ioeSetErrorString)
 import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 
 data ReferenceEnvironment = ReferenceEnvironment
@@ -42,6 +46,14 @@ data Artifacts = Artifacts
 
 prepareReferenceEnvironment :: IO ReferenceEnvironment
 prepareReferenceEnvironment = do
+    forM_ ["ghc", "hlint"] $ \command ->
+        findExecutable command >>= maybe (fatalSetupFailure ("missing " ++ command)) (const (pure ()))
+    (compilerStatus, compilerOut, compilerErr) <- readProcessWithExitCode "ghc" ["--numeric-version"] ""
+    unless (compilerStatus == ExitSuccess && words compilerOut == [cProjectVersion]) $
+        fatalSetupFailure ("expected GHC " ++ cProjectVersion ++ "\n" ++ compilerOut ++ compilerErr)
+    (runtimeStatus, runtimeOut, runtimeErr) <- readProcessWithExitCode "ghc-pkg" ["latest", "MemoristANT"] ""
+    unless (runtimeStatus == ExitSuccess) $
+        fatalSetupFailure ("runtime unavailable\n" ++ runtimeOut ++ runtimeErr)
     temporary <- getTemporaryDirectory
     root <- createTempDirectory temporary "cost-reference-suite-"
     let support = root </> "support"
@@ -57,26 +69,38 @@ runReferenceCase :: ReferenceEnvironment -> (String, [FilePath]) -> IO [Artifact
 runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
     root <- createTempDirectory (environmentRoot environment) (label ++ "-")
     putStrLn ("Reference fixtures and logs: " ++ root)
-    let generated = root </> "generated"
-        reference = root </> "reference"
-    forM_ [generated, reference] $ \sandbox -> do
-        createDirectoryIfMissing True sandbox
-        when (sandbox == reference) (stageSource fixture sandbox)
-        copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
-    source <- fixturePath fixture
-    result <- stageAndTranslate source (generated </> "Generated.hs")
-    publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
-    checkAcceptedFunctions publication (generated </> "Generated.hs")
-    checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
-    copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
-    actual <- buildObserver environment generated
-    expected <- buildObserver environment reference
-    (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-    writeFile (root </> "comparison.log") (out ++ err)
-    unless (status == ExitSuccess) $
-        fail (label ++ ": reference comparison failed\n" ++ out ++ err ++ "\nArtifacts: " ++ root)
-    putStr out
-    pure (Artifacts fixture generated reference)
+    retainReferenceFailure root $ do
+        let generated = root </> "generated"
+            reference = root </> "reference"
+        forM_ [generated, reference] $ \sandbox -> do
+            createDirectoryIfMissing True sandbox
+            when (sandbox == reference) (stageSource fixture sandbox)
+            copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
+        source <- fixturePath fixture
+        result <- stageAndTranslate source (generated </> "Generated.hs")
+        publication <- either (externalFailure TranslationDiagnostic (label ++ ": translation failed:")) pure result
+        checkAcceptedFunctions publication (generated </> "Generated.hs")
+        checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
+        copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
+        actual <- buildObserver environment generated
+        expected <- buildObserver environment reference
+        (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+        writeFile (root </> "comparison.log") (out ++ err)
+        checkProcessCrash status (out ++ err)
+        unless (status == ExitSuccess) $
+            externalFailure ComparisonDiagnostic (label ++ ": reference comparison failed") (out ++ err)
+        putStr out
+        pure (Artifacts fixture generated reference)
+
+retainReferenceFailure :: FilePath -> IO a -> IO a
+retainReferenceFailure root action = action `catch` retain
+  where
+    retain :: IOException -> IO a
+    retain exception = do
+        let message = ioeGetErrorString exception ++ "\nArtifacts: " ++ root ++
+                "\nFailure log: " ++ root </> "failure.log"
+        writeFile (root </> "failure.log") message
+        throwIO (ioeSetErrorString exception message)
 
 stageSource :: FilePath -> FilePath -> IO ()
 stageSource fixture sandbox = do
@@ -110,7 +134,8 @@ checkOptimizedReferenceCases label environment artifacts = forM_ artifacts $ \ar
         expected <- buildObserverAt optimization environment (referenceDirectory artifact)
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (generatedDirectory artifact </> ("comparison" ++ optimization ++ ".log")) (out ++ err)
-        unless (status == ExitSuccess) (fail (optimization ++ ": " ++ out ++ err))
+        checkProcessCrash status (out ++ err)
+        unless (status == ExitSuccess) (externalFailure ComparisonDiagnostic optimization (out ++ err))
         putStrLn ("PASS: " ++ label ++ " / " ++ optimization ++ " / boundary cases and 200 randomized value/cost comparisons")
 
 buildObserverWith :: [String] -> ReferenceEnvironment -> FilePath -> IO FilePath
@@ -132,7 +157,14 @@ compileAt options support sandbox entry packages executable = do
           "-outputdir", objects, "-main-is", entry ++ ".main", support </> entry ++ ".hs",
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
-    unless (status == ExitSuccess) (fail ("observer compilation failed in " ++ sandbox ++ "\n" ++ out ++ err))
+    checkProcessCrash status (out ++ err)
+    unless (status == ExitSuccess) $
+        externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) (out ++ err)
+
+checkProcessCrash :: ExitCode -> String -> IO ()
+checkProcessCrash (ExitFailure code) output | code < 0 || code >= 128 =
+    fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
+checkProcessCrash _ _ = pure ()
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real
 -- GHC, then replaces its successfully checked candidate before publication.
@@ -403,5 +435,16 @@ checkReferenceHarness environment = do
     check root shouldPass label actual expected = do
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (root </> "mutation.log") (label ++ "\n" ++ out ++ err)
-        unless ((status == ExitSuccess) == shouldPass) $
+        checkProcessCrash status (out ++ err)
+        unless (if shouldPass then status == ExitSuccess
+                else status == ExitFailure 1 && rejection label `isInfixOf` (out ++ err)) $
             fail ("reference harness did not detect " ++ label ++ "\n" ++ out ++ err)
+    rejection label = case label of
+        "PrematureForce.hs" -> "unused-bottom: unexpected computation failure"
+        "EmptyCase.hs" -> "case has no costed reference comparison"
+        "SnapshotsOnly.hs" -> "case has no costed reference comparison"
+        "FailuresOnly.hs" -> "case has no costed reference comparison"
+        "BrokenProjection.hs" -> "broken shared projector: unexpected computation failure"
+        "malformed-response" -> "observer timed out or returned an invalid response"
+        "wrong-executable" -> "usage: compare GENERATED_OBSERVER REFERENCE_OBSERVER"
+        _ -> "boundary sample:"

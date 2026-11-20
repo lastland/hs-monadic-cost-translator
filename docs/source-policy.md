@@ -123,6 +123,13 @@ change. No hook manager or pre-push hook is required.
 
 ## Regressions and CI
 
+Reference selection checks every known-failure record against an existing local
+issue in `.scratch/reference-failures/issues/`. Cabal packages those issue files
+as data alongside the fixtures, so installed and source-distribution tests resolve
+them through the package data directory, not the current working directory.
+Missing issue data makes discovery fail before listing or running references.
+The `test-selection` and `fixture-policy` groups do not need the external runtime.
+
 ```sh
 python3 test/source_policy.py --ghc /path/to/ghc --self-test
 python3 test/staged_policy.py --ghc /path/to/ghc --self-test

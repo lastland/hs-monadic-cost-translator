@@ -15,6 +15,7 @@ import GeneratedSyntax (bareExpression, collectAst, expressionVariable, generate
 import PaperScalarChecks (checkPaperScalarOutput)
 import Paths_cost_translate (getDataFileName)
 import qualified ReferenceRunner
+import ReferenceFailure (fatalSetupFailure, ExternalDiagnostic(..), externalFailure)
 import System.Directory (findExecutable)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeFileName)
@@ -61,12 +62,16 @@ checkManualSourceWarnings artifacts = do
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-outputdir", root </> "source-objects", source] ""
     writeFile (root </> "source-warnings.log") (out ++ err)
-    unless (compiled == ExitSuccess) (fail (out ++ err))
+    ReferenceRunner.checkProcessCrash compiled (out ++ err)
+    unless (compiled == ExitSuccess) $
+        externalFailure CompilationDiagnostic "manual source warning check failed" (out ++ err)
     hlint <- findExecutable "hlint"
-    command <- maybe (fail "manual example lint requires hlint on PATH") pure hlint
+    command <- maybe (fatalSetupFailure "manual example lint requires hlint on PATH") pure hlint
     (linted, lintOut, lintErr) <- readProcessWithExitCode command [source] ""
     writeFile (root </> "source-hlint.log") (lintOut ++ lintErr)
-    unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
+    ReferenceRunner.checkProcessCrash linted (lintOut ++ lintErr)
+    unless (linted == ExitSuccess) $
+        externalFailure CompilationDiagnostic "manual source lint check failed" (lintOut ++ lintErr)
 
 -- Follow the selected parameter's force to its result binder. A case on a
 -- field or another argument of the same type is a different inspection.
@@ -155,14 +160,18 @@ checkWarningsAndHLint root warningLog = do
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-package", "MemoristANT", "-package", "QuickCheck", "-i", "-i" ++ root, output] ""
     writeFile (root </> warningLog) (out ++ err)
-    unless (compiled == ExitSuccess) (fail (out ++ err))
+    ReferenceRunner.checkProcessCrash compiled (out ++ err)
+    unless (compiled == ExitSuccess) $
+        externalFailure CompilationDiagnostic "generated warning check failed" (out ++ err)
     hlint <- findExecutable "hlint"
     case hlint of
-        Nothing -> putStrLn "SKIP: generated code HLint check (hlint unavailable)"
+        Nothing -> fatalSetupFailure "generated code HLint requires hlint"
         Just command -> do
             (linted, lintOut, lintErr) <- readProcessWithExitCode command [output] ""
             writeFile (root </> "hlint.log") (lintOut ++ lintErr)
-            unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
+            ReferenceRunner.checkProcessCrash linted (lintOut ++ lintErr)
+            unless (linted == ExitSuccess) $
+                externalFailure CompilationDiagnostic "generated lint check failed" (lintOut ++ lintErr)
 
 checkGeneratedLayout :: FilePath -> String -> IO ()
 checkGeneratedLayout name source = do

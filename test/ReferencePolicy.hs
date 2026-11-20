@@ -10,6 +10,7 @@ module ReferencePolicy
     ) where
 
 import Control.Monad (foldM, forM, unless, void, zipWithM)
+import Control.Exception (IOException, try)
 import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.Data (Data, cast, gmapQ)
 import Data.Foldable (toList)
@@ -45,6 +46,7 @@ import GHC.Types.SrcLoc (GenLocated(..), mkRealSrcLoc)
 import GHC.Types.SourceText (il_value)
 import GHC.Utils.Outputable (ppr)
 import Paths_cost_translate (getDataFileName)
+import ReferenceSelection (KnownFailure(..), ReferenceCase(..), referenceCases, knownFailures, validateKnownFailures)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
 import System.FilePath ((</>), makeRelative, splitDirectories, takeBaseName, takeDirectory, takeExtension, takeFileName)
 
@@ -226,6 +228,7 @@ discoverReferenceCases = do
     registrationProblems <- checkRegistrations
     exampleProblems <- checkManualExamples cases
     failProblems (inventoryProblems ++ sourceProblems ++ registrationProblems ++ exampleProblems)
+    validateKnownFailures (referenceCases cases) knownFailures
     pure cases
 
 validateReferenceCases :: IO ()
@@ -1108,6 +1111,22 @@ checkReferencePolicyTests = do
     mapM_ (expectSource flags) sourceSpecimens
     mapM_ expectInventory inventorySpecimens
     mapM_ expectManifest manifestSpecimens
+    let variants =
+            [ReferenceCase "paired" "test/cases/paired/Shadowed.hs"
+            ,ReferenceCase "paired" "test/cases/paired/Renamed.hs"]
+        record = KnownFailure "paired:test/cases/paired/Shadowed.hs" "strict cost mismatch"
+            ".scratch/reference-failures/issues/01-source-global-sharing.md"
+    expectKnownFailures variants [] []
+    expectKnownFailures variants [record] []
+    expectKnownFailures variants
+        [record {failureIssue = ".scratch/reference-failures/issues/missing-target.md"}]
+        ["missing known-failure issue target"]
+    expectKnownFailures variants [record, record] ["duplicate known-failure key"]
+    expectKnownFailures (variants ++ variants) [] ["duplicate reference case key"]
+    expectKnownFailures (drop 1 variants) [record] ["unknown known-failure key"]
+    expectKnownFailures variants [record {failureReason = ""}] ["requires a reason and local issue"]
+    expectKnownFailures variants [record {failureIssue = "https://example.com/issue"}]
+        ["requires a reason and local issue"]
     mapM_ expectRegistrations
         [("registration-valid", []), ("registration-nested", ["unregistered Cabal manifest"])]
     let exampleFiles = [source | (_, source) <- manualExamples]
@@ -1134,6 +1153,12 @@ checkReferencePolicyTests = do
             (unlines (concat [[takeFileName source, label] | (label, source) <- manualExamples])))
     putStrLn "PASS: reference-policy / parsed static catalogs, isolated references, fail-closed inventory and test registrations"
   where
+    expectKnownFailures inventory records fragments = do
+        result <- try (validateKnownFailures inventory records) :: IO (Either IOException ())
+        case result of
+            Right () -> unless (null fragments) (fail ("known-failure policy accepted " ++ show fragments))
+            Left exception -> unless (not (null fragments) && all (`isInfixOf` show exception) fragments) $
+                fail ("known-failure policy rejected unexpectedly: " ++ show exception)
     expectSource flags (role, specimen, fragments) = do
         let file = "test/reference-policy" </> specimen
         ownReference <- if role == CaseFile
