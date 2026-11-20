@@ -1,6 +1,6 @@
 -- | Caller arithmetic has the source contract, not a preselected numeric
 -- instance. This does not prove strictness from Num or excuse visible bodies.
-module ConstructionArithmetic (callerArithmetic) where
+module ConstructionArithmetic (callerArithmetic, wellFormed) where
 
 import ConstructionDictionary (Evidence(..), Use(..), predicateOf)
 import ConstructionRuntime (Runtime, Family(..), standardNames)

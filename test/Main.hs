@@ -16,6 +16,7 @@ import ReferenceRunner
     , prepareReferenceEnvironment, runReferenceCase
     )
 import RuntimeAllocator (checkRuntimeAllocator)
+import ScalarComparisonChecks (checkScalarComparisonCallers)
 import System.Directory (copyFile, doesFileExist, getCurrentDirectory, getTemporaryDirectory, listDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, setEnv)
 import System.Exit (ExitCode(..), exitFailure)
@@ -94,6 +95,7 @@ runGroup environment (Semantic label sources) = do
     when (label == "anf-scoped-renaming") checkScopedRenamingSources
     context <- requireEnvironment environment
     artifacts <- runReferenceCase context (label, sources)
+    when (label == "caller-scalar-comparisons") (checkScalarComparisonCallers context artifacts)
     mapM_ (checkGeneratedArtifacts label) artifacts
     putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
 runGroup _ Diagnostics = checkDiagnostics

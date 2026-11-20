@@ -5,6 +5,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 import ConstructionDictionary
 import ConstructionSuper (validSuper)
 import ConstructionArithmetic (callerArithmetic)
+import ConstructionScalarComparison (callerComparison)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
@@ -203,11 +204,11 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
 
 -- Collect the complete home graph before validating any caller. Source-only
 -- dead uses and compiler-generated uses are obligations of the same field.
-checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [Site] -> [String]
-checkEvidence rt homes demands sites = concatMap check sites
+checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [(Name, Type)] -> [Site] -> [String]
+checkEvidence rt homes demands scalars sites = concatMap check sites
   where
     checkSelected = checkUse MethodRules
-        { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
+        { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands, scalarFacts = scalars
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
         , stockFacts = [facts | StockFacts facts <- sites]
@@ -228,7 +229,7 @@ data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
     , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
     , stockFacts :: [StockMethods], tagFacts :: [(Platform, [TyCon])]
-    , methodFacts :: [Methods] }
+    , methodFacts :: [Methods], scalarFacts :: [(Name, Type)] }
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
@@ -260,6 +261,7 @@ checkUse rules origin utility = check
                     | stockUse rt homes (stockFacts rules) origin tagUse use -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
                     | callerArithmetic rt use -> Nothing
+                    | callerComparison rt (scalarFacts rules) use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
                     | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
                         selectedPredicate ty evidence && ordinary evidence -> Nothing

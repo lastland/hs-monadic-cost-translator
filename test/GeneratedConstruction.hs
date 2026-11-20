@@ -8,6 +8,7 @@ import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAllocation (checkPhantomAllocation)
 import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
+import ConstructionScalarComparison (scalarComparisonFacts)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings, independentBinding)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
@@ -97,7 +98,8 @@ constructionReports output =
             evidence <- collectEvidence rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
-            checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
+            checkEvidence rt representations (homeDemandTypes rt checkedModules)
+                (scalarComparisonFacts output checkedModules) (concatMap snd reports))
 
 configureArtifact :: FilePath -> Ghc ()
 configureArtifact output = do
@@ -156,6 +158,9 @@ checkGeneratedConstructionSpecimens = do
          (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show")]
     rejectsAt "StockSpecialized.hs"
         [(7, selected "GHC.Classes.=="), (10, selected "GHC.Classes.==")]
+    accepts "CallerScalarEquality.hs"
+    accepts "CallerScalarOrdering.hs"
+    checksScalarComparisonBoundaries
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
     accepts "ConcreteFoldableClosure.hs"
@@ -736,6 +741,72 @@ checkGeneratedConstructionSpecimens = do
                 getName cls == numClassName, getTyVar_maybe argument == Just a -> pure ()
             _ -> fail ("twiceM must retain only Num a, found " ++ pretty signature)
         putStrLn ("PASS: caller arithmetic / complete generated twiceM graph, unchanged Num a / " ++ directory)
+    checksScalarComparisonBoundaries = do
+        source <- specimen "CallerScalarEquality.hs" >>= readFile
+        let marker = unlines (takeWhile (not . isPrefixOf "--") (drop 1 (lines source)))
+            equality = "same :: (Scalar a, Eq a) => a -> a -> Bool\nsame x y = x == y\n"
+            check label imports declarations body reason =
+                withSystemTempDirectory ("scalar-comparison-" ++ label ++ "-") $ \directory -> do
+                    let output = directory </> "Generated.hs"
+                    writeFile output ("{-# LANGUAGE TypeFamilies #-}\nmodule Generated where\n" ++ imports ++ declarations ++ body)
+                    typechecks output
+                    reports <- rejection output
+                    unless (reason `isInfixOf` reports) $
+                        fail (label ++ ": missing rejection " ++ reason ++ "\n" ++ reports)
+            unknownEq = selected "GHC.Classes.==: unknown concrete scalar instance"
+            change old new = unlines . map (\line -> if line == old then new else line) . lines
+        check "marker-shape" "" (change "class Scalar a" "class Eq a => Scalar a" marker) equality unknownEq
+        check "marker-kind" "" (change "class Scalar a" "class Scalar (a :: *)" marker) equality unknownEq
+        check "extra-instance" "" (marker ++ "instance Scalar Ordering\n") equality unknownEq
+        check "missing-instance" "" (change "instance Scalar Char" "" marker) equality unknownEq
+        check "newtype-instance" "" (marker ++ "newtype Extra = Extra Int\ninstance Scalar Extra\n") equality unknownEq
+        check "raw-thunk-instance" "import qualified Memorist.Base.Thunk as M\n"
+            (marker ++ "instance Scalar (M.Th Int)\n") equality unknownEq
+        check "annotation-instance" "import qualified Memorist.Base.Core as M\n"
+            (marker ++ "instance Scalar (M.Annotated Int)\n") equality unknownEq
+        check "demand-instance" "import qualified Memorist.Memorist as M\n"
+            (marker ++ "instance Scalar (M.MaybeD Int)\n") equality unknownEq
+        check "associated-family" "" (change "class Scalar a" "class Scalar a where\n    type Hidden a" marker)
+            equality unknownEq
+        check "wrong-type" "" marker
+            "same :: (Scalar a, Eq b) => a -> b -> b -> Bool\nsame _ x y = x == y\n" unknownEq
+        check "unrelated-evidence" "" marker
+            "same :: Eq a => a -> a -> Bool\nsame x y = x == y\n" unknownEq
+        check "unrelated-class" "" marker
+            "class Other a where same :: a -> a -> Bool\nuse :: (Scalar a, Other a) => a -> a -> Bool\nuse x y = same x y\n"
+            (unknown "Generated.same")
+        check "compare" "" marker
+            "order :: (Scalar a, Ord a) => a -> a -> Ordering\norder x y = compare x y\n"
+            (selected "GHC.Classes.compare: unknown concrete scalar instance")
+        check "min" "" marker
+            "least :: (Scalar a, Ord a) => a -> a -> a\nleast x y = min x y\n"
+            (selected "GHC.Classes.min: unknown concrete scalar instance")
+        check "max" "" marker
+            "largest :: (Scalar a, Ord a) => a -> a -> a\nlargest x y = max x y\n"
+            (selected "GHC.Classes.max: unknown concrete scalar instance")
+        check "show" "" marker
+            "render :: (Scalar a, Show a) => a -> String\nrender x = show x\n"
+            (selected "GHC.Internal.Show.show: unknown concrete scalar instance")
+        withSystemTempDirectory "scalar-comparison-imported-" $ \directory -> do
+            let dependency = directory </> "Marker.hs"
+                output = directory </> "Generated.hs"
+            writeFile dependency ("module Marker where\n" ++ marker)
+            writeFile output ("module Generated where\nimport Marker\n" ++ equality)
+            typechecks output
+            rejection output >>= \reports -> unless (unknownEq `isInfixOf` reports) $
+                fail ("an imported Scalar must not authorize comparisons:\n" ++ reports)
+        withSystemTempDirectory "scalar-comparison-visible-instance-" $ \directory -> do
+            let output = directory </> "Generated.hs"
+            writeFile output ("module Generated where\nimport qualified Memorist.Base.Thunk as M\n" ++ marker ++ equality ++
+                "data Bad = Bad (M.Th Int)\n" ++
+                "instance Eq Bad where\n    Bad x == Bad y = M.tval x == M.tval y\n" ++
+                "instance Ord Bad where\n    Bad x < Bad y = M.tval x < M.tval y\n")
+            typechecks output
+            reports <- rejection output
+            unless (forbidden tval `isInfixOf` reports) $
+                fail ("visible Eq/Ord bodies must remain checked:\n" ++ reports)
+            cleanDefinitions reports output [TopBinding "same"]
+        putStrLn "PASS: caller scalar comparisons / exact six selectors, nominal root marker, matching evidence and seven-type universe"
     checkIntegralContext fixture = do
         let label = takeBaseName fixture
         (_, _, output) <- completeArtifact label fixture
