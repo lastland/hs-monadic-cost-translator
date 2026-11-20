@@ -161,6 +161,7 @@ test-suite cost-translate-test
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionActionFields
+                     ConstructionActionFlow
                      ConstructionAst
                      ConstructionRuntime
                      ConstructionHomeRepr

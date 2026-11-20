@@ -31,3 +31,14 @@ projection :: M.Th Bool -> Q.Property
 projection t =
     let jobs = Jobs (pure True) (pure () >>= \() -> pure (M.tval t)) False
     in Q.property (M.value (M.eval1 (spare jobs)))
+
+discard :: M.MemoristM Bool -> M.MemoristM Bool
+discard _ = pure True
+
+discardJob :: Jobs -> M.MemoristM Bool
+discardJob (Jobs m _ _) = discard (m >>= pure)
+
+discarded :: M.Th Bool -> Q.Property
+discarded t =
+    let jobs = Jobs (pure () >>= \() -> pure (M.tval t)) (pure False) False
+    in Q.property (M.value (M.eval1 (discardJob jobs)))

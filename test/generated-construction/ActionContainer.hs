@@ -27,7 +27,7 @@ packed t =
     in Q.property (M.value (M.eval1 (runner $ jobs)))
 
 runAfter :: Job -> M.MemoristM Bool
-runAfter (Job action) = pure () >>= \() -> action
+runAfter = \(Job action) -> pure () >>= \() -> action
 
 after :: M.Th Bool -> Q.Property
 after t =
