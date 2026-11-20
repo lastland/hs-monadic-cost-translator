@@ -62,3 +62,21 @@ sh scripts/stack-test.sh --test-arguments=polymorphic-checked-payload-kinds
 sh scripts/stack-test.sh --test-arguments=polymorphic-dependent-payload-kinds
 sh scripts/stack-test.sh --test-arguments=polymorphic-vacuous-quantification
 ```
+
+## Comments
+
+- After reviewed stock integration, the exact
+  `higher-kinded-polykinded-field`, `polymorphic-checked-payload-kinds` and
+  `polymorphic-dependent-payload-kinds` variants pass their complete ordinary
+  reference lifecycles, including O0/O2 boundary cases and 200 randomized
+  value/cost comparisons at `88dc779`.
+- `polymorphic-vacuous-quantification` also passes its unchanged reference.
+  Commit `6f0b1aa` adds this case to the existing optimized postchecks; its fresh
+  complete lifecycle passes O0/O2 boundary cases and 200 randomized value/cost
+  comparisons. HLint checks pass.
+- `higher-kinded-demands` was independently rerun at `758e058` and still fails
+  the complete construction guard. The above recoveries do not establish its
+  field obligations or either growing-recursion case.
+- These four recoveries require explicit reviewed promotion after the reference
+  split and its review fixes are integrated. The initial `e5d4652` catalog is
+  unchanged by these receipts.
