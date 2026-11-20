@@ -309,7 +309,6 @@ guardedM x
                        (do arg1 <- M.lazy (pure (error "source undefined"))
                            pure (L.ConsT x arg1))
        let nextEquation0 = pure (error "source undefined")
-       let nextGuard0 = nextEquation0
        matched' <- M.force caseThunk0
        case matched' of
          L.ConsT h _
@@ -321,8 +320,8 @@ guardedM x
                  arg5 <- M.lazy (pure 0)
                  zValue <- M.force z
                  rhs <- M.force arg5
-                 if zValue > rhs then M.force z else nextGuard0
-         _ -> nextGuard0
+                 if zValue > rhs then M.force z else nextEquation0
+         _ -> nextEquation0
 
 chooseM ::
   forall (a :: Type).

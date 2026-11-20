@@ -203,11 +203,8 @@ takeM n arg0
               case matched' of
                 L.NilT -> pure L.NilT
                 L.ConsT x xs
-                  -> do arg3 <- M.lazy
-                                  (do arg4 <- M.lazy
-                                                (do nValue' <- M.force (n :: M.Th Int)
-                                                    pure (nValue' - (1 :: Int)))
-                                      takeM arg4 xs)
+                  -> do arg4 <- M.lazy (pure (nValue - (1 :: Int)))
+                        arg3 <- M.lazy (takeM arg4 xs)
                         pure (L.ConsT x arg3)
 
 repeatM :: forall (a :: Type). M.Th a -> M.MemoristM (L.ListT a)

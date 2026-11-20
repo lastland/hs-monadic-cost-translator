@@ -246,6 +246,68 @@ patternProbes = concat
     | (label, n) <- [("negative-zero", -0.0), ("positive-zero", 0.0), ("nonzero", 1)]
     ]
 
+rowProbes :: [Probe]
+rowProbes =
+    [ scalarSource ("case/wildcard-guard/" ++ show n) (const (Source.caseRows n undefined)) $ \s ->
+        call2 caseRowsM (priced (repeats s) n) (bad "wildcard scrutinee")
+    | n <- [-2, 0, 3] ] ++
+    [ scalarSource ("equation/swapped-binders/" ++ show n) (Source.equation n . rhs) $ \s ->
+        call2 equationM (priced 2 n) (priced 3 (rhs s))
+    | n <- [-2, 1] ] ++
+    [ failure "case/wildcard-guard-demands-x" $ \_ ->
+        call2 caseRowsM (bad "condition") (pure False)
+    , shallowBox "case/join-skips-guard-and-field" $ \_ ->
+        call2 joinRowsM (bad "skipped guard and field") (priced 1 False)
+    , failure "case/join-pattern-miss-demands-field" $ \_ ->
+        call2 joinRowsM (bad "field") (pure False) >>= fieldValue
+    , failure "case/join-pattern-match-demands-guard" $ \_ ->
+        fromEnum . isJustT <$> call2 joinRowsM (bad "guard") (pure True)
+    , fullBox "case/join-both-failure-edges" $ \s ->
+        call2 joinRowsM (priced (repeats s) (number s)) (priced 2 (leftDemand s))
+    ]
+  where rhs s = 4 + abs (other s)
+
+payloadProbes :: [Probe]
+payloadProbes =
+    [ scalar "payload/skip-both-roots" $ \_ -> make (bad "payload input") >> pure 1
+    , failure "payload/root-demands-condition" $ \_ -> do
+        M.PairT root _ <- make (bad "payload condition")
+        PacketT _ _ <- M.force root
+        pure 1
+    , boolean "payload/roots-and-fields-are-shared" $ \s -> do
+        M.PairT a b <- make (priced 2 (number s))
+        PacketT x m <- M.force a
+        PacketT y n <- M.force b
+        pure ([M.tname a, M.tname x, M.tname m] == [M.tname b, M.tname y, M.tname n])
+    , scalarSource "payload/both-typed-views" (source . Source.payload . number) $ \s -> do
+        M.PairT a b <- make (priced (repeats s) (number s))
+        (+) <$> observe a <*> observe b
+    , scalar "payload/entered-branch-skips-failed-field" $ \_ -> do
+        M.PairT a _ <- call2 payloadWorkM (priced 2 1) (bad "field operand")
+        PacketT _ optional <- M.force a
+        fromEnum . isJustT <$> M.force optional
+    , failure "payload/entered-branch-demands-field" $ \_ -> do
+        M.PairT _ b <- call2 payloadWorkM (pure 1) (bad "field operand")
+        observe b
+    , scalar "payload/other-branch-skips-work" $ \_ -> do
+        M.PairT a _ <- call2 payloadWorkM (pure (-1)) (bad "unused operand")
+        observe a
+    , scalarSource "payload/both-views-pay-for-work-once"
+        (\s -> source (Source.payloadWork (1 + abs (number s)) (other s))) $ \s -> do
+        M.PairT a b <- call2 payloadWorkM (priced 2 (1 + abs (number s))) (priced 3 (other s))
+        (+) <$> observe a <*> observe b
+    ]
+  where
+    make input = M.lazy input >>= payloadM
+    observe root = do
+        PacketT field optional <- M.force root
+        value <- M.force field
+        tag <- M.force optional
+        pure (value + fromEnum (isJustT tag))
+    source packets = case packets of
+        (Source.Packet x Nothing, Source.Packet y Nothing) -> x + y
+        _ -> error "unexpected source payload"
+
 probes :: [Probe]
 probes =
     [ scalarSource "case/direct-alias" (Source.viaCase . number) $ \s ->
@@ -259,4 +321,4 @@ probes =
         M.lazy (priced (repeats s) (number s)) >>= nestedM
     , failure "nested/comparison-demands-input" $ \_ -> M.lazy (bad "input") >>= nestedM
     ] ++ patternProbes ++ shortCircuitProbes ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
-    guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes
+    guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes ++ rowProbes ++ payloadProbes

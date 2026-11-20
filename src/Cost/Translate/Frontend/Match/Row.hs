@@ -1,5 +1,6 @@
 module Cost.Translate.Frontend.Match.Row
     ( Body
+    , GuardEnd
     , Result
     , Row (..)
     , Step (..)
@@ -9,6 +10,7 @@ module Cost.Translate.Frontend.Match.Row
     , tag
     , emitBranch
     , prepareRow
+    , totalPattern
     ) where
 
 import Cost.Translate.Frontend.Allocation (simpleIdentifier)
@@ -33,7 +35,8 @@ import GHC.Types.Name.Occurrence (varName)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 
 type Result = Either String O.Expr
-type Body = Env -> O.Expr -> Result
+type GuardEnd = Env -> (O.Expr -> Result) -> Result
+type Body = Env -> GuardEnd -> Result
 
 data Row = Row
     { scalarPositions :: Set.Set [Int]
@@ -41,7 +44,7 @@ data Row = Row
     , rowStep :: Step
     }
 
-data Step = Ready (Facts -> Env) Body | Inspect Subject Check
+data Step = Ready Sources Env Body | Inspect Subject Check
 
 data Subject = Subject
     { position :: [Int]
@@ -74,14 +77,10 @@ prepareRow env sources (location, patterns, body) =
         indexed = zip [0 ..] patterns
         next = actionName env "nextEquation" location
         root (index, (thunk, pat)) =
-            ([index],thunk,) <$> patternAt labels pat (patternRoot pat index)
-        labels name = case lookupEnv name env of
-            Just (Constructor _ _ names) -> Just names
-            _ -> Nothing
+            ([index],thunk,) <$> rowPattern env pat (patternRoot pat index)
         row bindings = Row (Set.fromList (map fst bindings)) next
-        advance _ scope bindings [] = Right (row bindings (Ready finish body))
-            where
-                finish facts = refine facts bindings scope
+        advance _ scope bindings [] =
+            Right (row bindings (Ready bindings scope body))
         advance used scope bs ((column, thunk, pat) : rest) = case test pat of
             Skip -> done
             Equal value -> inspect (Right (Compare value done))
@@ -106,6 +105,24 @@ prepareRow env sources (location, patterns, body) =
                         siblings = Set.fromList (IntMap.elems slots)
                         pending = map child fields ++ rest
                      in advance (used <> siblings) bound bindings' pending
+
+rowPattern :: Env -> LPat GhcRn -> String -> Either String Pattern
+rowPattern env = patternAt labels
+    where
+        labels name = case lookupEnv name env of
+            Just (Constructor _ _ names) -> Just names
+            _ -> Nothing
+
+totalPattern :: Env -> LPat GhcRn -> Bool
+totalPattern env pat = either (const False) total (rowPattern env pat "")
+    where
+        total pattern' = case test pattern' of
+            Skip -> True
+            Deconstruct head' fields
+                | Right (name, _) <- resolveHead env head' (length fields)
+                , Set.member name (singleConstructors env) ->
+                    all (total . snd) fields
+            _ -> False
 
 incomingNames :: Env -> [(O.Expr, a)] -> Set.Set String
 incomingNames env patterns =

@@ -1,4 +1,4 @@
-module Cost.Translate.Frontend.Emit (emitBind, emitExpr, emitCondition) where
+module Cost.Translate.Frontend.Emit (emitBind, renderPayload) where
 
 import Control.Monad (unless, void, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)
@@ -9,8 +9,8 @@ import Cost.Translate.Frontend.Expression.Thunks
 import Cost.Translate.Frontend.Expression.Values (knownValue, returningScalar)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
+import Cost.Translate.Frontend.Match.Facts (inheritScalars)
 import Cost.Translate.Frontend.Match.Fallback (withFallback)
-import Cost.Translate.Frontend.Match.Pattern qualified as P
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Patterns
 import Cost.Translate.Frontend.Polymorphic
@@ -44,8 +44,8 @@ emitBind outer binding = case unLoc binding of
     _ -> bindingError binding
 
 emitGuards ::
-    Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
-emitGuards _ [] fallback = Right fallback
+    Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> GuardEnd -> Either String O.Expr
+emitGuards env [] fallback = fallback env Right
 emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
     let failures = scanr ((||) . canMiss) False guards
     unless (or failures) (void (emitGuards env rest fallback))
@@ -54,17 +54,17 @@ emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
         canMiss (L _ statement) = case statement of
             LetStmt {} -> False
             BodyStmt _ expr _ _ -> constantCondition env expr /= Just True
-            BindStmt _ pat _ -> case P.patternAt (const Nothing) pat "" of
-                Right (P.Pattern _ _ P.Skip) -> False
-                _ -> True
+            BindStmt _ pat _ -> not (totalPattern env pat)
             _ -> True
-        following scope build = do
-            next <- emitGuards scope rest fallback
-            withFallback label next build
+        following scope build = case rest of
+            [] -> fallback (inheritScalars scope env) build
+            _ -> do
+                next <- emitGuards (inheritScalars scope env) rest fallback
+                withFallback label next build
         label = actionName env "nextGuard" (getLocA located)
 
 emitMatchBody ::
-    Env -> Match GhcRn (LHsExpr GhcRn) -> O.Expr -> Either String O.Expr
+    Env -> Match GhcRn (LHsExpr GhcRn) -> GuardEnd -> Either String O.Expr
 emitMatchBody env match failure =
     withLocals env (grhssLocalBinds rhs) $ \scope ->
         emitGuards scope (grhssGRHSs rhs) failure
@@ -202,8 +202,7 @@ emitLocalValue signatures scope binding name match done = do
             , Map.notMember (unLoc name) instances -> do
                 continuation <- remaining
                 allocatePayload
-                    (emitExpr scope)
-                    (emitCondition scope)
+                    (renderPayload scope)
                     scope
                     (unLoc name)
                     plan
@@ -219,7 +218,8 @@ emitOrdinaryLocalValue ::
     (Env -> Either String O.Expr) ->
     Either String O.Expr
 emitOrdinaryLocalValue signatures scope binding name match done = do
-    action <- emitMatchBody scope match (failureExpr "source guard failure")
+    action <- emitMatchBody scope match $ \_ build ->
+        build (failureExpr "source guard failure")
     let source = unLoc name
         n = localName scope source
         bindingType = Map.lookup source (inferredBindings scope)
@@ -301,11 +301,8 @@ emitExpr env located = case unLoc located of
     OpApp _ left operator right -> emitOperator env located left operator right
     _ -> unsupportedExpression located
 
-emitCondition ::
-    Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr
-emitCondition env located yes no =
-    underCondition emitThunk emitExpr env located $ \_ choose ->
-        choose (const (Right yes)) (const (Right no))
+renderPayload :: Env -> Payload -> Either String O.Expr
+renderPayload = emitPayload emitThunk emitExpr
 
 emitApplication :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitApplication env located = case unLoc fun of

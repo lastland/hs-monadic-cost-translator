@@ -4,6 +4,8 @@ module Cost.Translate.Frontend.Match.Facts
     , scrutinee
     , bindAliases
     , refine
+    , inheritScalars
+    , learnedFacts
     ) where
 
 import Cost.Translate.Frontend.Environment
@@ -15,6 +17,23 @@ import GHC
 
 type Facts = Map.Map [Int] O.Expr
 type Sources = [([Int], (Name, Type))]
+
+inheritScalars :: Env -> Env -> Env
+inheritScalars incoming target =
+    target
+        { knownScalarValues =
+            Map.intersection (knownScalarValues incoming) (envBindings target)
+                `Map.union` knownScalarValues target
+        }
+
+learnedFacts :: Env -> Sources -> Facts -> Facts
+learnedFacts env sources =
+    Map.union $
+        Map.fromList
+            [ (pos, value)
+            | (pos, key) <- sources
+            , Just value <- [knownScalar env key]
+            ]
 
 scrutinee :: Env -> LHsExpr GhcRn -> Sources
 scrutinee env expr = case reference env expr of
