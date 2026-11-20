@@ -14,7 +14,7 @@ setup errors; do not add project discovery, automatic installation, or a custom
 runtime-location mechanism.
 
 For reference and integration tests, both Stack projects register the
-[patched `hs-pbt/` submodule](../../patches/README.md). This gives GHC the
+[pinned `hs-pbt/` submodule](../runtime.md). This gives GHC the
 actual runtime when it compiles generated modules and their callers. Parsing
 generated text alone is not sufficient validation. Users write their own
 QuickCheck properties; the translator generates representation and structural

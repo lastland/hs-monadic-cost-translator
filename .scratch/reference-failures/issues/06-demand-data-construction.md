@@ -51,7 +51,7 @@ Re-audit each exact case after any approved integration.
 After approved support, pass the complete-output guard, then ordinary caller
 compilation, then unchanged boundary/seeded value/cost comparisons and existing
 optimized postchecks. A removed first diagnostic is not evidence of full success.
-Prepare the runtime using `patches/README.md`, then run each selector:
+Prepare the runtime using `docs/runtime.md`, then run each selector:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=datatypes-and-demands

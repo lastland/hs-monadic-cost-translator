@@ -39,7 +39,7 @@ independent references and all assertions unchanged.
 
 After approved support, require complete-output guards, ordinary caller builds,
 boundary/seeded comparisons and existing optimized postchecks, in that order.
-Prepare the runtime using `patches/README.md`, then run:
+Prepare the runtime using `docs/runtime.md`, then run:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=direct-concatMap-maybe

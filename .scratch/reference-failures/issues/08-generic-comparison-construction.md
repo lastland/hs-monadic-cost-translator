@@ -37,7 +37,7 @@ postchecks. Candidate work or removing one rejection does not establish success.
 
 ## Reproduce
 
-Prepare the runtime using `patches/README.md`, then run:
+Prepare the runtime using `docs/runtime.md`, then run:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=mutually-recursive-captured-helpers

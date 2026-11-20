@@ -41,7 +41,7 @@ and seeded samples and existing optimized postchecks before reviewed promotion.
 
 ## Reproduce
 
-Prepare the runtime using `patches/README.md`, then run:
+Prepare the runtime using `docs/runtime.md`, then run:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=polymorphic-shared-top-level-value

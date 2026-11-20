@@ -1,3 +1,4 @@
 [submodule "hs-pbt"]
 	path = hs-pbt
-	url = https://github.com/hzelkatz/memorist-hs-pbt
+	url = git@github.com:lastland/memorist-hs-pbt.git
+	branch = fix/private-thunk-allocator

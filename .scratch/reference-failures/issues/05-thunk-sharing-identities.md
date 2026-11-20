@@ -57,7 +57,7 @@ including boundary/seeded samples and existing optimized postchecks.
 
 ## Reproduce
 
-Prepare the runtime using `patches/README.md`, then run:
+Prepare the runtime using `docs/runtime.md`, then run:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=manual-thunk-matching

@@ -8,12 +8,15 @@ Building and running the translator with candidate verification requires:
 
 - **GHC 9.10.3**: The translator uses GHC 9.10.3's internal API. Cabal rejects other compiler versions during dependency resolution.
 - **Stack (LTS 24.22)**: `stack.yaml` pins LTS 24.22 (GHC 9.10.3) and `QuickCheck-2.17.1.0` to match the target runtime.
-- **`MemoristANT` runtime**: Git pins the runtime at [`hs-pbt/`](hs-pbt). From the repository root, initialize it, apply the [private-allocator patch](patches/README.md) once, and build the library:
+- **`MemoristANT` runtime**: Git pins the runtime submodule at [`hs-pbt/`](hs-pbt) (commit `3f69b244bedab34c27bad427ddea907d3417c5ae` on the `fix/private-thunk-allocator` branch of `git@github.com:lastland/memorist-hs-pbt.git`; see the [external runtime guide](docs/runtime.md)). From the repository root, sync the submodule URL from `.gitmodules`, initialize the submodule, and build the library:
   ```sh
+  git submodule sync -- hs-pbt
   git submodule update --init -- hs-pbt
-  git -C hs-pbt apply --check ../patches/memorist-private-allocator.patch
-  git -C hs-pbt apply ../patches/memorist-private-allocator.patch
   stack build MemoristANT:lib
+  ```
+  Without GitHub SSH access, run `git submodule sync -- hs-pbt` and rewrite the configured fork URL for the single `submodule update` invocation without changing global Git configuration:
+  ```sh
+  git -c url."https://github.com/".insteadOf=git@github.com: submodule update --init -- hs-pbt
   ```
 
 `stack.yaml` registers both `.` and `hs-pbt/` so that GHC commands invoked under `stack run` and `stack test` can load `MemoristANT` and `QuickCheck` when typechecking generated modules. The translator library and executable do not depend on `MemoristANT` at build time. Runtime-free builds require Cabal and GHC 9.10.3; repository validation also requires the pinned tools described in the [source-check guide](docs/source-policy.md).
@@ -214,7 +217,7 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/validate.sh
   ```
   `scripts/validate.sh` checks formatting, source limits, ShellCheck, HLint, and checker/hook regressions before running a warning-clean build and runtime-free tests. See [`docs/source-policy.md`](docs/source-policy.md) for tool setup, formatting commands, and the opt-in staged hook.
-- **Reference-comparison test suite** (requires Stack, the patched `hs-pbt/` submodule, and HLint on `PATH`; use the shared `scripts/stack-test.sh` wrapper):
+- **Reference-comparison test suite** (requires Stack, the pinned `hs-pbt/` submodule, and HLint on `PATH`; use the shared `scripts/stack-test.sh` wrapper):
   ```sh
   # Default: passing reference cases (--success) plus all infrastructure test groups
   sh scripts/stack-test.sh
@@ -232,7 +235,7 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   ```
   - **Reference modes and selectors**: With no `--test-arguments`, the suite runs the passing reference inventory (`--success`) and all infrastructure groups. Passing selector arguments without a mode flag defaults to `--all-references` across the selected cases and runs only explicitly named infrastructure groups; combining one mode flag (`--success`, `--known-failures`, or `--all-references`) with selectors filters those selectors by mode. A group selector such as `anf-scoped-renaming` runs all of its source variants (`Renamed.hs` and `Shadowed.hs`), whereas `selector:repo-relative/source.hs` isolates one source.
   - **Known-failure catalog and failure reporting**: Known failures are cataloged in [`test/ReferenceSelection.hs`](test/ReferenceSelection.hs) and mapped to local issue notes in [`.scratch/reference-failures/map.md`](.scratch/reference-failures/map.md). `--list-reference-cases` prints each selected case's classification, key, reason and issue path, and exact rerun command without executing tests. During execution, the runner continues across all selected reference cases after ordinary construction or comparison failures, retains per-case artifacts and a `failure.log` path, and exits non-zero whenever any selected case fails (including under `--known-failures`, which runs unchanged assertions). New fixtures default to `--success`; regressions are never quarantined automatically, and any known failure that passes requires manual promotion in `test/ReferenceSelection.hs`. Missing tools or runtime packages, setup errors, and compiler crashes abort immediately as fatal errors.
-  - **Runtime fingerprint and construction guard checks**: The translator typechecks candidates against the `MemoristANT` API. The reference suite also checks the compiled runtime against the audited source fingerprints in [`test/ConstructionRuntime.hs`](test/ConstructionRuntime.hs). The pinned submodule already includes the `scanl` laziness fix; only the [allocator patch](patches/README.md) is needed. Before compiling callers, the reference runner checks each complete generated module and its home imports against the construction-only contract without whole-module waivers or stripped support declarations. Generated modules that use legacy sharing helpers, uncertified open class dictionaries (such as open `FoldableT` calls), or other uncertified class methods can translate and typecheck yet fail this pre-caller guard before reference comparison. The `generated-construction` selector tests the guard itself across construction, structural-view, observation/accounting support, demand-shrinker, stock `Eq`/`Show` and outer-tag, caller-arithmetic, scalar-comparison, and concrete `Repr` and home-method controls and expected rejections.
+  - **Runtime fingerprint and construction guard checks**: The translator typechecks candidates against the `MemoristANT` API. The reference suite also checks the compiled runtime against the audited source fingerprints in [`test/ConstructionRuntime.hs`](test/ConstructionRuntime.hs). The [pinned submodule](docs/runtime.md) already includes both the `scanl` laziness fix and the private thunk-allocator changes. Before compiling callers, the reference runner checks each complete generated module and its home imports against the construction-only contract without whole-module waivers or stripped support declarations. Generated modules that use legacy sharing helpers, uncertified open class dictionaries (such as open `FoldableT` calls), or other uncertified class methods can translate and typecheck yet fail this pre-caller guard before reference comparison. The `generated-construction` selector tests the guard itself across construction, structural-view, observation/accounting support, demand-shrinker, stock `Eq`/`Show` and outer-tag, caller-arithmetic, scalar-comparison, and concrete `Repr` and home-method controls and expected rejections.
 - **Supplemental external-runtime probes** (runs all four `cost-translate-integration` suites against `MemoristANT`):
   ```sh
   sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration

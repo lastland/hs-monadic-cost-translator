@@ -144,7 +144,7 @@ CI runs on every push and pull request without path filters. The runtime-free
 job runs compiler preflight and `sh scripts/validate.sh`, then checks the
 committed `examples/*M.hs` translations against fresh generator output.
 
-Two independent Stack runs build the [patched `hs-pbt/` submodule](../patches/README.md).
+Two independent Stack runs build the [pinned `hs-pbt/` submodule](runtime.md).
 One runs passing handwritten references plus infrastructure checks; the other
 runs all four integration suites. To reproduce them locally after setting up the
 runtime:

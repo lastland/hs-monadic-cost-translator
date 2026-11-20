@@ -35,7 +35,7 @@ These results come from the boundary sample with `number = 5`, `other = 0`,
 
 ## Reproduce
 
-Initialize and patch the pinned runtime as documented in `patches/README.md`,
+Initialize the pinned runtime as documented in `docs/runtime.md`,
 then run:
 
 ```sh

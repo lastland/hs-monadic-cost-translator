@@ -35,7 +35,7 @@ for every mapped case. Source-global changes require a separate scope decision.
 
 ## Reproduce
 
-Prepare the runtime using `patches/README.md`, then run:
+Prepare the runtime using `docs/runtime.md`, then run:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=scoped-factory-case-shadow-int

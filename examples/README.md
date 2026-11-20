@@ -41,7 +41,7 @@ sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-argument
 
 ### Building the Translator
 
-Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `QuickCheck`. The root Stack configuration provides both when the `hs-pbt/` submodule is initialized and patched (see the [root README](../README.md) for prerequisites and setup):
+Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `QuickCheck`. The root Stack configuration provides both when the `hs-pbt/` submodule is initialized and built (see the [root README](../README.md) for prerequisites and setup):
 
 ```sh
 stack build
@@ -62,7 +62,7 @@ diagnostic logs (such as `BasicM.hs.log`).
 
 On every push and pull request, the runtime-free CI job regenerates the text
 without `hs-pbt/` and shows a Git diff if the checked-in copies are out of date,
-while the Stack CI job runs the reference comparisons against the patched
+while the Stack CI job runs the reference comparisons against the pinned
 `hs-pbt/` submodule.
 
 ### Translating and Inspecting an Example

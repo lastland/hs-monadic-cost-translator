@@ -47,7 +47,7 @@ that pass the complete lifecycle after explicit review.
 
 ## Reproduce
 
-Prepare the pinned runtime using `patches/README.md`, then run each command:
+Prepare the pinned runtime using `docs/runtime.md`, then run each command:
 
 ```sh
 sh scripts/stack-test.sh --test-arguments=constrained-sharing-all-dictionaries

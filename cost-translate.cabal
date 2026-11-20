@@ -36,8 +36,7 @@ extra-source-files:
     .shellcheckrc
     fourmolu.yaml
     docs/source-policy.md
-    patches/README.md
-    patches/memorist-private-allocator.patch
+    docs/runtime.md
     .scratch/translator-poc/scanl-demand-fix.patch
     examples/VALIDATION.md
     scripts/stack-compiler.yaml

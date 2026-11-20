@@ -1,7 +1,7 @@
 # Integration project for the cost-semantics translator.
 #
-# The project includes cost-translate ('..') and the patched MemoristANT
-# runtime submodule ('../hs-pbt'; see ../patches/README.md).
+# The project includes cost-translate ('..') and the pinned MemoristANT
+# runtime submodule ('../hs-pbt'; see ../docs/runtime.md).
 # Same snapshot as the root project (lts-24.22, ghc-9.10.3) plus
 # QuickCheck 2.17.1.0 required by hs-pbt.
 
