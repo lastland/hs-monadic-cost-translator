@@ -361,6 +361,12 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "WrapperCarrier.hs" [(4, carrier "=<<"), (7, functorWrapper), (10, functorWrapper)]
     accepts "HomeReprUse.hs"
     accepts "TreeRepr.hs"
+    rejectsAt "TreeReprUnsafe.hs"
+        [(14, forbidden "Memorist.Data.Interface.Data.abstract"), (22, reprFailure),
+         (32, forbidden "Memorist.Data.Interface.Data.abstract"), (39, reprFailure)]
+    mixed "TreeReprEscapes.hs" [TopBinding "safe"] "TreeReprEscapes.hs"
+        [(12, reprFailure), (15, reprFailure), (18, reprFailure),
+         (21, forbidden "Memorist.Data.Interface.Data.abstract"), (24, forbidden tval)]
     mapM_ accepts ["FieldProjection.hs", "FieldForward.hs", "FieldUnused.hs", "FieldChain.hs"]
     rejectsAt "FieldBadUse.hs" [(9, reprFailure), (12, reprFailure), (15, reprFailure), (18, reprFailure)]
     rejectsAt "FieldHidden.hs" [(9, reprFailure)]
