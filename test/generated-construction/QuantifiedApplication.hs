@@ -41,3 +41,8 @@ instance forall f a. (ReprK f, ReprK a) => M.Repr (Higher f a) where
         ((HigherT <$> M.lazy (M.reprM scalar)) <*> M.lazy (M.reprM applied))
     abstract (HigherT scalar applied) = withConstraint (Proxy :: Proxy (ReprApp f a))
         (Higher (M.abstract (M.tval scalar)) (M.abstract (M.tval applied)))
+
+makeInt :: Higher Maybe Int -> M.MemoristM (HigherT M.MaybeT Int)
+makeInt = M.reprM
+makeBool :: Higher Maybe Bool -> M.MemoristM (HigherT M.MaybeT Bool)
+makeBool = M.reprM
