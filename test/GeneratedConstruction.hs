@@ -180,6 +180,15 @@ checkGeneratedConstructionSpecimens = do
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
     accepts "ShapeStock.hs"
+    accepts "ShapeStockSum.hs"
+    accepts "RenamedStock.hs"
+    rejectsAt "ShapeStockEscapes.hs"
+        ([(line, selected "GHC.Classes.==") | line <- [11, 15, 19, 23, 28, 38, 46]] ++
+         [(line, selected "GHC.Internal.Show.show") | line <- [13, 17, 30, 40, 48]])
+    shapeCollision <- specimen "ShapeStockCollision.hs"
+    typechecks shapeCollision
+    rejection shapeCollision >>= \diagnostics ->
+        requireAt diagnostics "Collision.hs" [(324, selected "GHC.Classes.==")]
     accepts "StockHigher.hs"
     accepts "StockHigherSum.hs"
     accepts "StockHigherStandalone.hs"

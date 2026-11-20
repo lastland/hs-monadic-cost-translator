@@ -104,6 +104,8 @@ runGroup environment (Semantic label sources) = do
         (checkOptimizedReferenceCases "recursive Tree reprM" context artifacts)
     when (label == "runtime-demand-bundle")
         (checkOptimizedReferenceCases "acyclic runtime demand bundle" context artifacts)
+    when (label == "higher-kinded-stock-context")
+        (checkOptimizedReferenceCases "higher-kinded stock context" context artifacts)
     mapM_ (checkGeneratedArtifacts label) artifacts
     putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
 runGroup _ Diagnostics = checkDiagnostics
