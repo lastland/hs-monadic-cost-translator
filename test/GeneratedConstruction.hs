@@ -183,6 +183,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "DemandConcreteRecursive.hs"
     accepts "DemandConcreteSum.hs"
     accepts "DemandConcreteLargeSum.hs"
+    checksParameterizedTags
     rejectsAt "DemandRecursiveProtected.hs"
         [(10, selected "GHC.Classes.==: unknown concrete scalar instance"),
          (13, selected "GHC.Internal.Show.show: unknown concrete scalar instance")]
@@ -447,6 +448,21 @@ checkGeneratedConstructionSpecimens = do
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
+    checksParameterizedTags = do
+        accepts "TagClosed.hs"
+        output <- specimen "TagParameterized.hs"
+        -- Inspect through the public pre-caller guard. The separate closed
+        -- stock-method proof still rejects generic Eq/default obligations.
+        result <- try @IOException (checkGeneratedConstruction output)
+        case result of
+            Left problem -> do
+                let diagnostics = ioeGetErrorString problem
+                    reports = filter (isInfixOf "unapproved ") (lines diagnostics)
+                when ("GHC.Magic.dataToTag#" `isInfixOf` diagnostics) $
+                    fail ("outer tags need exact parameterized builtin evidence:\n" ++ diagnostics)
+                unless (length reports == 2 && all (isInfixOf "GHC.Classes.") reports) $
+                    fail ("only the two independent Eq/default obligations should remain:\n" ++ diagnostics)
+            Right () -> fail "parameterized stock Eq permission is not part of the outer-tag certificate"
     protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
     demandEq = selected "GHC.Classes.==: demand-data methods have no observation exemption"
     demandProducer = [InstanceMethod "Demand" ["Producer"] method | method <- ["fullDemand", "usage"]]
