@@ -3,6 +3,7 @@
 module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 
 import ConstructionDictionary
+import ConstructionSuper (validSuper)
 import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
@@ -286,7 +287,8 @@ checkUse rules origin utility = check
         supportEvidence Given{} = True
         supportEvidence (Instance _ _ _ ds) = all supportEvidence ds
         supportEvidence (Transport _ parent) = supportEvidence parent
-        supportEvidence ev@Super{} = maybe False supportEvidence (projected homes ev)
+        supportEvidence (Super selector endpoint parent) =
+            validSuper selector endpoint parent && supportEvidence parent
         supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
             tagMethod selected predicate && case getClassPredTys_maybe predicate of

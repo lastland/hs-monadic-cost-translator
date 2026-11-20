@@ -188,6 +188,7 @@ test-suite cost-translate-test
                      ConstructionDefaults
                      ConstructionDemandMethods
                      ConstructionStock
+                     ConstructionSuper
                      ConstructionTag
                      ConstructionEvidence
                      ConstructionMethods

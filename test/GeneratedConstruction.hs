@@ -183,6 +183,44 @@ checkGeneratedConstructionSpecimens = do
          (13, supportUse "StandaloneDemandShrink.shrinkField")]
     accepts "BoxSupport.hs"
     accepts "UtilityApp.hs"
+    accepts "RenamedUtility.hs"
+    accepts "RoleGood.hs"
+    rejectsAt "UtilityEscapes.hs"
+        [(8, reprFailure), (10, reprFailure), (12, reprFailure),
+         (14, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (16, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (18, forbidden "Memorist.Data.Interface.Demand.usage"),
+         (20, forbidden tval), (22, forbidden "Memorist.Base.Thunk.tannot"),
+         (24, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (28, forbidden "Memorist.Data.Interface.Demand.fullDemand")]
+    rejectsAt "ForeignSuper.hs"
+        [(10, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (11, forbidden "Memorist.Data.Interface.Demand.usage"),
+         (15, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (17, forbidden "Memorist.Data.Interface.Demand.usage"),
+         (19, unknown "ForeignSuper.fullDemand"),
+         (25, reprFailure), (26, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (28, reprFailure)]
+    mixed "UtilitySiblings.hs"
+        [InstanceMethod "Demand" ["Wrap", "f", "a"] method | method <- ["fullDemand", "usage"]]
+        "UtilitySiblings.hs"
+        [(10, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (25, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (26, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (32, external "GHC.Internal.Data.Tuple.fst"),
+         (33, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
+         (39, unknown "UtilitySiblings.sibling")]
+    roleCollision <- specimen "RoleCollision.hs"
+    typechecks roleCollision
+    collisionReports <- rejection roleCollision
+    requireAt collisionReports "colliding-roles.hs"
+        [(50, forbidden "Memorist.Data.Interface.Demand.fullDemand")]
+    mappedRoles <- siteReports "colliding-roles.hs" collisionReports
+    unless (length mappedRoles == 4 && all ((== 50) . srcSpanStartLine . fst) mappedRoles) $
+        fail ("unexpected colliding-module role reports:\n" ++ collisionReports)
+    rejectsAt "QuantifiedConcreteBoundary.hs"
+        [(10, selected "Memorist.Data.Interface.Demand.fullDemand"),
+         (11, selected "Memorist.Data.Interface.Demand.usage")]
     accepts "FamilySupport.hs"
     rejectsAt "FamilyEscape.hs"
         [(9, reprFailure), (12, forbidden "Memorist.Data.Interface.Data.abstract"),
