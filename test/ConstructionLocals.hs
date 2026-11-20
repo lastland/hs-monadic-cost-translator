@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitSource,
     implicitBindingAt, nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings, reachable, spine, typedVariable, variable)
+import ConstructionAst (bindingName, children, collectAst, firstOrderCall, nestedBindings, reachable, typedVariable, variable)
 import ConstructionImplicit
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
@@ -12,7 +12,6 @@ import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
-import GHC.Builtin.Names (dollarName)
 import qualified GHC.Core as C
 import GHC.Core.Coercion (coercionLKind, coercionRKind, topNormaliseNewType_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -34,20 +33,21 @@ data SourceBody = Declaration (HsBind GhcRn) | Component (LPat GhcRn) (LHsExpr G
 
 -- Stop at each declaration. A mention in a nested shrinker is a use by that
 -- shrinker, not a use by the generator that encloses both of them.
-parts :: Data a => (SrcSpan -> [Name]) -> a -> ([HsBind GhcRn], [Name])
-parts readsIP node
+parts :: Data a => (LHsExpr GhcRn -> [Reference]) -> a -> ([HsBind GhcRn], [Reference])
+parts mentions node
     -- The enclosing expression forces this RHS without a variable occurrence.
     -- A strict name can also have ordinary consumers; a wildcard has none.
     | Just b <- cast node, forcedBinder b = case names b of
-        [] -> bodyParts readsIP b
-        ns -> ([b], ns)
+        [] -> bodyParts mentions b
+        ns -> ([b], map Direct ns)
     | Just binding <- cast node = ([binding], [])
     | Just (_ :: IPBind GhcRn) <- cast node = mempty
-    | Just e@(L _ HsIPVar{}) <- cast node :: Maybe (LHsExpr GhcRn) = ([], readsIP (getLocA e))
-    | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [unLoc n])
+    | Just e@(L _ HsIPVar{}) <- cast node :: Maybe (LHsExpr GhcRn) = ([], mentions e)
+    | Just e@(L _ (HsVar _ n)) <- cast node :: Maybe (LHsExpr GhcRn) = ([], Direct (unLoc n) : mentions e)
+    | Just (HsVar _ n) <- cast node :: Maybe (HsExpr GhcRn) = ([], [Direct (unLoc n)])
     | Just (_ :: NameSet) <- cast node = mempty
     | Just (_ :: Name) <- cast node = mempty
-    | otherwise = mconcat (children (parts readsIP) node)
+    | otherwise = mconcat (children (parts mentions) node)
 
 forcedBinder :: HsBind GhcRn -> Bool
 forcedBinder PatBind{pat_lhs = pat} = strictPat pat
@@ -66,8 +66,8 @@ simpleBinder (L _ VarPat{}) = True
 simpleBinder (L _ WildPat{}) = True
 simpleBinder _ = False
 
-bodyParts :: (SrcSpan -> [Name]) -> HsBind GhcRn -> ([HsBind GhcRn], [Name])
-bodyParts readsIP = mconcat . children (parts readsIP)
+bodyParts :: (LHsExpr GhcRn -> [Reference]) -> HsBind GhcRn -> ([HsBind GhcRn], [Reference])
+bodyParts mentions = mconcat . children (parts mentions)
 
 names :: HsBind GhcRn -> [Name]
 names = collectHsBindBinders CollNoDictBinders
@@ -96,19 +96,20 @@ data LocalRole = Testing | Value | Ordinary deriving Eq
 localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
 localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries parameters
   where
-    groups = [(m, group, implicitParameters m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
+    schemes = implicitFormals qc modules
+    groups = [(m, group, implicitParameters schemes m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
     parameters = Map.fromList [(ms_mod (pm_mod_summary (tm_parsed_module m)), ip) | (m, _, ip) <- groups]
     region ip role ns (bs, refs) = (role, ns, refs) : concatMap (local ip) bs
-    locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (readAt ip) b) |
+    locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (references ip) b) |
         (m, group, ip) <- groups, b <- fst (parts (const []) group)] ++
-        concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (readAt ip) rhs) |
+        concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (references ip) rhs) |
             (_, group, ip) <- groups, rhs <- implicitBodies group, let vs = [v | Just (v, _) <- [bindingAt ip (getLocA rhs)]]]
     local ip b = concat [region ip role ns body | (ns, body) <- regions]
       where
         role | generator b = Testing | value b = Value | otherwise = Ordinary
         regions | value b, Just fields <- components b =
-                    [(collectPatBinders CollNoDictBinders p, parts (readAt ip) e) | (p, e) <- fields]
-                | otherwise = [(names b, bodyParts (readAt ip) b)]
+                    [(collectPatBinders CollNoDictBinders p, parts (references ip) e) | (p, e) <- fields]
+                | otherwise = [(names b, bodyParts (references ip) b)]
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
@@ -116,28 +117,30 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
     value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
-    deps = Map.fromList [(n, refs) | (Value, ns, refs) <- locals, n <- ns]
+    targets active refs = [n | Direct n <- refs] ++ [n | AtCall formal n <- refs, Set.member formal active]
+    deps active = Map.fromList [(n, targets active refs) | (Value, ns, refs) <- locals, n <- ns]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
-    live = reachable deps (Set.fromList [ref | (Testing, _, refs) <- locals, ref <- refs])
+    calls = Map.fromListWith (++) [(formal, [actual]) | (_, _, refs) <- locals, AtCall formal actual <- refs]
+    -- An unused/overridden formal cannot make its caller's IP live. Start
+    -- with direct reads and propagate demand through saturated first-order calls.
+    live = demand Set.empty
+    demand active = let seen = reachable (deps active) (Set.fromList [n | (Testing, _, refs) <- locals, n <- targets active refs])
+                        next = Set.intersection (Map.keysSet calls) seen
+                    in if next == active then seen else demand next
     consumed ns = not (null ns) && all (`Set.member` live) ns
-    ordinary = reachable deps (Set.unions (passed : ordinaryRefs : [supplied ip | (_, _, ip) <- groups]))
-    ordinaryRefs = Set.fromList [ref | (role, ns, refs) <- locals, role == Ordinary || (role == Value && not (consumed ns)), ref <- refs]
+    ordinary = reachable (Map.unionWith (++) calls (deps live)) (Set.unions (passed : ordinaryRefs : [ordinaryIPs ip | (_, _, ip) <- groups]))
+    ordinaryRefs = Set.fromList [n | (role, ns, refs) <- locals, role == Ordinary || (role == Value && not (consumed ns)), n <- targets live refs]
     values = Set.fromList [n | (Value, ns, _) <- locals, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
     independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
     dictionaries = Map.fromList [site | (_, _, ip) <- groups, site <- declarations ip]
     -- An explicit scalar argument of an ordinary home helper crosses the
     -- same boundary as an implicit dictionary argument, including via aliases.
     helper fn = not (isQuickCheckBinding qc fn) && (isInternalName fn || maybe False (`Map.member` parameters) (nameModule_maybe fn))
-    passed = Set.intersection (Map.keysSet dictionaries) (reachable deps (Set.fromList
-        [n | (_, group, ip) <- groups, not (null (declarations ip)), e <- collectAst group,
-        (f, arg) <- arguments e, Just fn <- [variable (fst (spine f))], helper fn, n <- snd (parts (readAt ip) arg)]))
-    arguments (HsApp _ f x) | (op, [h]) <- spine f, variable op == Just dollarName = [(h, x)]
-                            | otherwise = [(f, x)]
-    arguments (OpApp _ x op y) | variable op == Just dollarName = [(x, y)]
-                               | otherwise = [(op, x), (op, y)]
-    arguments _ = []
+    passed = Set.intersection (Set.unions [dictionaryIds ip | (_, _, ip) <- groups]) (reachable (deps live) (Set.fromList
+        [n | (_, group, ip) <- groups, not (Set.null (dictionaryIds ip)), e <- collectAst group,
+        let (f, args) = firstOrderCall e, Just fn <- [variable f], helper fn, arg <- args, n <- targets live (snd (parts (references ip) arg))]))
 
 data Result = DataValue | Executable | Unknown deriving Eq
 

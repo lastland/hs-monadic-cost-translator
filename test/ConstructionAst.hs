@@ -1,11 +1,12 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, reachable, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, atSourceSpan, reachable, allBindings, nestedBindings, pretty, spine, firstOrderCall, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, maybeToList)
 import qualified Data.Set as Set
 import GHC
+import GHC.Builtin.Names (dollarName)
 import qualified GHC.Core as C
 import GHC.Core.ConLike (ConLike)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
@@ -71,6 +72,16 @@ variable :: LHsExpr GhcRn -> Maybe Name
 variable expression = case spine expression of
     (L _ (HsVar _ name), []) -> Just (unLoc name)
     _ -> Nothing
+
+-- The wired-in ($) supplies an argument to its left operand. A different
+-- infix function receives both operands itself.
+firstOrderCall :: LHsExpr GhcRn -> (LHsExpr GhcRn, [LHsExpr GhcRn])
+firstOrderCall e = case spine e of
+    (L _ (OpApp _ f op x), rest) | variable op == Just dollarName -> apply f (x : rest)
+                                 | otherwise -> (op, f : x : rest)
+    (op, f : x : rest) | variable op == Just dollarName -> apply f (x : rest)
+    callSite -> callSite
+  where apply f xs = let (h, args) = firstOrderCall f in (h, args ++ xs)
 
 -- A type application or compiler wrapper can carry the instantiation. Keep
 -- the source variable's site; never borrow the type of a surrounding term call.

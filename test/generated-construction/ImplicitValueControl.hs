@@ -30,7 +30,7 @@ readsSeen :: (?seen :: Bool) => () -> Q.Property
 readsSeen () = Q.property ?seen
 
 relay :: (?seen :: Bool) => () -> Q.Property
-relay u = readsSeen u
+relay u = readsSeen $ u
 
 throughProperty :: M.Th Bool -> Q.Property
 throughProperty t = let ?seen = M.tval t in relay ()
