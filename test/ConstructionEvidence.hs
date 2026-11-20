@@ -7,8 +7,8 @@ import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
-import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType)
-import ConstructionTag (tagMethod, validTag)
+import ConstructionDemandMethods (runtimeDemandMethod, stockMethods)
+import ConstructionTag (tagMethod, validTag, tagHomeType)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
 import ConstructionMethods (Methods, MethodSite(..), homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod)
@@ -165,7 +165,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     -- simple Core optimization can inline or erase its call.
                     stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
                         (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
-                    rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
+                    rawSites = TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
                         StockFacts stockFacts : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
                         DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
