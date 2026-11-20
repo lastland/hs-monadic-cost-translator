@@ -125,6 +125,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "CallerArithmeticOperations.hs"
     accepts "ConcreteFoldableClosure.hs"
     accepts "ConcreteFoldableHomeInstance.hs"
+    accepts "ConcreteFoldableCollision.hs"
     checksFoldableSelf
     rejectsAt "ConcreteFoldableDeadHelper.hs"
         [(9, selected "ConcreteFoldableDeadHelper.run: unknown executable method/default dependency")]
