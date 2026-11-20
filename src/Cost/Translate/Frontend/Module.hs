@@ -49,9 +49,11 @@ emitModule strict target source hash dts original literals hints checked group =
         adjustedHints = Map.map adjustType hints
         checkedScopes = Map.mapWithKey scope checked
         scope name info
-            | name `Map.member` helperTypes = givens {Typed.ownerVariables = []}
+            | name `Map.member` helperTypes =
+                empty {Typed.checkedGivens = Typed.checkedGivens givens}
             | otherwise = givens
             where
+                empty = Typed.emptyAllocationScope
                 givens = Typed.functionGivens adjustType info
         (constructorEnv, specialized) =
             moduleEnvironment

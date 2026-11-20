@@ -15,11 +15,15 @@ import Cost.Translate.Sharing.Specialization
     , scopedGivenClasses
     , specializedSharing
     )
-import Cost.Translate.Typed (AllocationScope (..), emptyAllocationScope)
+import Cost.Translate.Typed
+    ( AllocationScope (..)
+    , nameableDeclaredGivens
+    , nameableType
+    )
 import Data.Either (fromRight)
 import Data.List (nubBy)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (isNothing)
 import Data.Set qualified as Set
 import GHC (TyCon, TyVar, Type, getName)
 import GHC.Builtin.Names (numClassName)
@@ -65,8 +69,8 @@ planSpecializations datatypes evidence ty uses =
             scope <- evidence
             residualSharing datatypes scope ty uses
     where
-        AllocationScope variables givens _ =
-            fromMaybe emptyAllocationScope evidence
+        variables = maybe [] ownerVariables evidence
+        givens = maybe [] checkedGivens evidence
 
 residualSharing ::
     [TyCon] ->
@@ -77,7 +81,7 @@ residualSharing ::
 residualSharing datatypes evidence ty uses = do
     guard (not (null uses) && not (null constrained) && not (null residual))
     guard (all ((`eqType` liftedTypeKind) . tyVarKind) constrained)
-    guard (all (isPredTy . scaledThing) arguments && available ty)
+    guard (all (isPredTy . scaledThing) arguments && nameableType evidence ty)
     actual <- sequence uses
     matches <- mapM (matchUse ty) actual
     keys <- mapM (\pairs -> mapM (`lookup` pairs) constrained) matches
@@ -97,7 +101,7 @@ residualSharing datatypes evidence ty uses = do
         inferKey [[key]]
             | [formal] <- constrained
             , Just owner <- getTyVar_maybe key =
-                isNothing (nameableDeclaredGivens evidence)
+                not (nameableType evidence key)
                     && isEmptyVarSet (tyCoVarsOfType ty)
                     && owner `elem` ownerVariables evidence
                     && visibleIn formal result
@@ -106,7 +110,8 @@ residualSharing datatypes evidence ty uses = do
             let instantiate = substTyWith constrained key
                 partial = instantiate (mkForAllTys residual result)
                 predicates = map (instantiate . scaledThing) arguments
-            guard (all (predicateAvailable evidence infer) predicates)
+            guard (infer || nameableType evidence partial)
+            guard (all (predicateAvailable evidence) predicates)
             guard (not (any (`elemVarSet` tyCoVarsOfType partial) constrained))
             _ <-
                 fromRight Nothing $
@@ -151,8 +156,8 @@ matchUse sigma use = do
                 && substTy substitution (mkTyVarTy v) `eqType` mkTyVarTy v
                 && substTy substitution (tyVarKind v) `eqType` tyVarKind v
 
-predicateAvailable :: AllocationScope -> Bool -> Type -> Bool
-predicateAvailable evidence infer p = case splitTyConApp_maybe p of
+predicateAvailable :: AllocationScope -> Type -> Bool
+predicateAvailable evidence p = case splitTyConApp_maybe p of
     Just (constructor, [actual])
         | getName constructor == numClassName
         , actual `eqType` intTy || actual `eqType` integerTy ->
@@ -167,12 +172,10 @@ predicateAvailable evidence infer p = case splitTyConApp_maybe p of
     _ -> False
     where
         given = any (eqType p) (checkedGivens evidence)
-        context = nameableDeclaredGivens evidence
         supplied cls ty
-            | cls == numClassName = True
-            | cls `elem` scopedGivenClasses = infer || isJust context
+            | cls `elem` scopedGivenClasses = True
             | cls `elem` scalarWitnessClasses =
-                any (suppliesScalar ty) (fromMaybe [] context)
+                any (suppliesScalar ty) (nameableDeclaredGivens evidence)
             | otherwise = False
         suppliesScalar ty predicate = case splitTyConApp_maybe predicate of
             Just (c, [arg]) ->
