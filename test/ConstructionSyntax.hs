@@ -109,9 +109,10 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
                     HsRecSel _ field -> Just (foExt field)
                     _ -> Nothing
                 site = ([], [MethodAt here name | Just name <- [reference], name `elem` methods])
+                operand = case form of
+                    RecordCon{rcon_con = name} -> valueUse (getLocA name) (unLoc name)
+                    _ -> maybe ([], []) (valueUse here) reference
                 body = case form of
-                    _ | Just name <- reference, permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
-                        ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
                     XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
                         L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
                             walk here (L annotation original :: LHsExpr GhcRn)
@@ -126,7 +127,7 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
                             | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-             in if isViewCall here then expansionProblems expression else shape `plus` site `plus` body
+             in if isViewCall here then expansionProblems expression else shape `plus` site `plus` operand `plus` body
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LPat GhcRn)) = recordField location field
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LHsExpr GhcRn)) = recordField location field
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
@@ -149,6 +150,10 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
         ([], [ComponentAt (getLocA pat) (getLocA rhs)])
     plus (a, b) (c, d) = (a ++ c, b ++ d)
+    valueUse here name
+        | permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name =
+            ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
+        | otherwise = ([], [])
     -- Matching or assigning a labelled field is not applying its selector.
     -- The constructor, field ownership, and nested pattern/expression still count.
     recordField :: Data rhs => SrcSpan -> HsRecField GhcRn rhs -> ([String], [SourceSite])
@@ -172,29 +177,19 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
             Just ReprMethod -> True
             _ -> False
 
--- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
--- Its selected constructor identifies the right parent, not merely a candidate
+-- A selected constructor identifies the right parent, not merely a candidate
 -- with the same field spelling. Parent labels are ordered like update fields.
 ambiguousUpdateReferences :: Data a => a -> [(SrcSpan, Name)]
 ambiguousUpdateReferences checked =
     [ (getLocA label, greName field)
     | ExpandedThingTc (OrigExpr RecordUpd { rupd_flds = RegularRecUpdFields parents fields }) expanded <- collectAst checked
+    , let selected = map (conLikeName . fst) (updateAlternatives expanded)
     , parent <- toList parents
     , length fields == length (rnRecUpdLabels parent)
-    , any ((`elem` updateConstructors expanded) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
+    , any ((`elem` selected) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
     , (binding, field) <- zip fields (toList (rnRecUpdLabels parent))
     , Ambiguous _ label <- [unLoc (hfbLHS (unLoc binding))]
     ]
-
-updateConstructors :: HsExpr GhcTc -> [Name]
-updateConstructors (HsLet _ _ body) = updateConstructors (unLoc body)
-updateConstructors (XExpr (WrapExpr (HsWrap _ expression))) = updateConstructors expression
-updateConstructors (HsCase RecUpd _ matches) =
-    [ conLikeName (unLoc constructor)
-    | match <- unLoc (mg_alts matches)
-    , ConPat _ constructor _ <- map unLoc (m_pats (unLoc match))
-    ]
-updateConstructors _ = []
 
 -- These are the pinned compiler's finite section templates, not general
 -- permission to discard an expansion. The operator is the same resolved Name;

@@ -3,7 +3,8 @@
 -- calling an ordinary home function does not turn that function into a property.
 module ConstructionOperandTransfers (ordinaryOperandTransfers) where
 
-import ConstructionAst (appliedDataCon, children, collectAst, pretty, typedVariable)
+import ConstructionAst (children, collectAst, pretty, strictConstructorOperands, strictNullaryRhs, typedVariable, updateAlternatives)
+import ConstructionQuickCheckUses (quickCheckOperand)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
 import Data.Data (Data, cast)
@@ -20,7 +21,7 @@ import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (getTyVar_maybe, mkScaledFunTys, mkTyVarTy, splitAppTys, splitFunTys, splitPiTys, substTy)
 import GHC.Core.Unify (tcMatchTy)
 import qualified GHC.Data.Strict as Strict
-import GHC.Hs.Syn.Type (hsExprType, hsLPatType, lhsExprType)
+import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.FieldLabel (flSelector)
 import GHC.Types.Id.Make (seqId)
@@ -74,7 +75,8 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
             ++ " (operand in ordinary callee at this instantiation)"
         | e <- collectAst source, Just call@(location, name, _) <- [typedCall e],
           Just (key, body, sub) <- [instantiate call],
-          let becomes ty = not (result ty) && result (substTy sub ty),
+          let operand = quickCheckOperand result
+              becomes ty = not (operand ty) && operand (substTy sub ty),
           any becomes (forcedOperands body) || any (becomes . mkTyVarTy) (heads Map.! key)]
 
 rho :: Type -> Type
@@ -135,32 +137,19 @@ bodyUses qc = walk
                   ([scaledThing first | name == getName seqId,
                       first:_ <- [fst (splitFunTys (rho ty))]], [call])
             | Just pat@(L _ BangPat{}) <- cast node :: Maybe (LPat GhcTc) = ([hsLPatType pat], [])
-            | Just e <- cast node, Strict.Just _ <- getBufSpan (getLocA e),
-              Just (con, []) <- appliedDataCon (unLoc (e :: LHsExpr GhcTc)) = (strictFields con (lhsExprType e), [])
-            | Just RecordCon{rcon_con = n, rcon_ext = actual} <- cast node :: Maybe (HsExpr GhcTc),
-              Strict.Just _ <- getBufSpan (getLocA n), RealDataCon con <- unLoc n =
-                (strictFields con (hsExprType actual), [])
+            | Just (FunBind _ _ matches) <- cast node :: Maybe (HsBind GhcTc), strictNullaryRhs matches =
+                ([mg_res_ty (mg_ext matches)], [])
+            | Just e <- cast node, Just (_, _, operands) <- strictConstructorOperands e = (operands, [])
             | Just (ExpandedThingTc (OrigExpr RecordUpd{rupd_flds = RegularRecUpdFields parents _}) expanded) <- cast node =
                 (updatedStrictFields [greName f | parent <- toList parents, f <- toList (rnRecUpdLabels parent)] expanded, [])
             | otherwise = ([], [])
-
--- Use the actual constructor wrapper's instantiated argument types in
--- declaration order, for positional, partially applied and labelled construction.
-strictFields :: DataCon -> Type -> [Type]
-strictFields con ty = [scaledThing arg | (bang, arg) <- zip (dataConImplBangs con) (fst (splitFunTys (rho ty))), isBanged bang]
 
 -- Updating a lazy field need not force any new value at an unchanged strict
 -- slot. GHC's update cases choose the constructors; the written field labels
 -- choose only the assignments. A type-changing update uses the result type.
 updatedStrictFields :: [Name] -> HsExpr GhcTc -> [Type]
-updatedStrictFields labels = go
-  where
-    go (HsLet _ _ body) = go (unLoc body)
-    go (XExpr (WrapExpr (HsWrap _ e))) = go e
-    go (HsCase RecUpd _ matches) =
-        [substTy sub (scaledThing arg) | L _ match <- unLoc (mg_alts matches),
-            L _ ConPat{pat_con = L _ (RealDataCon con)} <- m_pats match,
-            Just sub <- [tcMatchTy (dataConOrigResTy con) (mg_res_ty (mg_ext matches))],
-            (field, bang, arg) <- zip3 (dataConFieldLabels con) (dataConImplBangs con) (dataConOrigArgTys con),
-            flSelector field `elem` labels, isBanged bang]
-    go _ = []
+updatedStrictFields labels expanded =
+    [substTy sub (scaledThing arg) | (RealDataCon con, resultTy) <- updateAlternatives expanded,
+        Just sub <- [tcMatchTy (dataConOrigResTy con) resultTy],
+        (field, bang, arg) <- zip3 (dataConFieldLabels con) (dataConImplBangs con) (dataConOrigArgTys con),
+        flSelector field `elem` labels, isBanged bang]

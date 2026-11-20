@@ -1,5 +1,9 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, appliedDataCon, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst
+    ( collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
+    , appliedDataCon, strictConstructorOperands, updateAlternatives, call, bindingName, strictNullaryRhs
+    , plainPattern, constructorPattern, oneRhs, equations
+    ) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
@@ -7,7 +11,13 @@ import Data.Maybe (isJust, maybeToList)
 import GHC
 import qualified GHC.Core as C
 import GHC.Core.ConLike (ConLike(..))
+import GHC.Core.DataCon (dataConImplBangs, isBanged)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Core.Type (splitFunTys)
+import qualified GHC.Data.Strict as Strict
+import GHC.Hs.Syn.Type (hsExprType, lhsExprType)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
+import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
 import GHC.Types.SrcLoc (getBufSpan, srcSpanToRealSrcSpan)
 import GHC.Utils.Outputable (Outputable, ppr, showSDocUnsafe)
 
@@ -66,28 +76,53 @@ variable expression = case spine expression of
 
 -- A type application or compiler wrapper can carry the instantiation. Keep
 -- the source variable's site; never borrow the type of a surrounding term call.
-typedVariable :: LHsExpr GhcTc -> Maybe (SrcSpan, Name)
-typedVariable expression = at (getLocA expression) (unLoc expression)
+typedHead :: LHsExpr GhcTc -> (SrcSpan, HsExpr GhcTc)
+typedHead expression = at (getLocA expression) (unLoc expression)
   where
-    at location (HsVar _ name) = Just (location, getName (unLoc name))
-    at location (HsRecSel _ field) = Just (location, getName (foExt field))
-    at _ (HsAppType _ function _) = typedVariable function
-    at _ (HsPar _ function) = typedVariable function
-    at _ (ExprWithTySig _ function _) = typedVariable function
+    at _ (HsAppType _ function _) = typedHead function
+    at _ (HsPar _ function) = typedHead function
+    at _ (ExprWithTySig _ function _) = typedHead function
     at location (XExpr (WrapExpr (HsWrap _ function))) = at location function
-    at _ _ = Nothing
+    at location head' = (location, head')
+
+typedVariable :: LHsExpr GhcTc -> Maybe (SrcSpan, Name)
+typedVariable expression = case typedHead expression of
+    (location, HsVar _ name) -> Just (location, getName (unLoc name))
+    (location, HsRecSel _ field) -> Just (location, getName (foExt field))
+    _ -> Nothing
+
+-- Field bangs are in declaration order. Read their operand types from the
+-- instantiated wrapper, even for a bare constructor with no written arguments.
+strictConstructorOperands :: LHsExpr GhcTc -> Maybe (SrcSpan, Name, [Type])
+strictConstructorOperands expression = case typedHead expression of
+    (loc, XExpr (ConLikeTc (RealDataCon con) _ _)) -> fields loc con (lhsExprType expression)
+    (_, RecordCon{rcon_con = n, rcon_ext = actual}) | RealDataCon con <- unLoc n ->
+        fields (getLocA n) con (hsExprType actual)
+    _ -> Nothing
+  where
+    fields loc con ty = case getBufSpan loc of
+        Strict.Just _ -> let (_, _, body) = tcSplitSigmaTy ty in Just (loc, getName con,
+            [scaledThing arg | (bang, arg) <- zip (dataConImplBangs con) (fst (splitFunTys body)), isBanged bang])
+        Strict.Nothing -> Nothing
+
+-- GHC 9.10 expands a record update to let/case. Only the generated case
+-- alternatives select constructors; a type-changing update uses its result type.
+updateAlternatives :: HsExpr GhcTc -> [(ConLike, Type)]
+updateAlternatives (HsLet _ _ body) = updateAlternatives (unLoc body)
+updateAlternatives (XExpr (WrapExpr (HsWrap _ expression))) = updateAlternatives expression
+updateAlternatives (HsCase RecUpd _ matches) =
+    [(con, mg_res_ty (mg_ext matches)) | L _ match <- unLoc (mg_alts matches),
+        L _ ConPat{pat_con = L _ con} <- m_pats match]
+updateAlternatives _ = []
 
 -- Keep the written term arguments in constructor order, across type wrappers.
-appliedDataCon :: HsExpr GhcTc -> Maybe (DataCon, [LHsExpr GhcTc])
+appliedDataCon :: LHsExpr GhcTc -> Maybe (DataCon, [LHsExpr GhcTc])
 appliedDataCon = go []
   where
-    go args (XExpr (ConLikeTc (RealDataCon con) _ _)) = Just (con, args)
-    go args (XExpr (WrapExpr (HsWrap _ f))) = go args f
-    go args (HsApp _ f x) = go (x : args) (unLoc f)
-    go args (HsAppType _ f _) = go args (unLoc f)
-    go args (HsPar _ f) = go args (unLoc f)
-    go args (ExprWithTySig _ f _) = go args (unLoc f)
-    go _ _ = Nothing
+    go args e = case typedHead e of
+        (_, XExpr (ConLikeTc (RealDataCon con) _ _)) -> Just (con, args)
+        (_, HsApp _ f x) -> go (x : args) f
+        _ -> Nothing
 
 call :: [Name] -> LHsExpr GhcRn -> Maybe [LHsExpr GhcRn]
 call names expression = case spine expression of
@@ -99,6 +134,12 @@ bindingName :: HsBind GhcRn -> Maybe Name
 bindingName (FunBind _ name _) = Just (unLoc name)
 bindingName PatBind{pat_lhs = pat} = plainPattern pat
 bindingName _ = Nothing
+
+-- GHC retains `let !y = rhs` as a strict equation with no arguments.
+strictNullaryRhs :: MatchGroup (GhcPass p) (LHsExpr (GhcPass p)) -> Bool
+strictNullaryRhs matches = case unLoc (mg_alts matches) of
+    [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True
+    _ -> False
 
 plainPattern :: LPat GhcRn -> Maybe Name
 plainPattern (L _ (VarPat _ name)) = Just (unLoc name)
