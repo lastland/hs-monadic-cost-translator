@@ -121,10 +121,13 @@ The translator instruments renamed source syntax (via the GHC API) rather than o
 
 Unticked operations still pay the ticks of any thunks they force. Costs count source-level function entries, not elapsed wall-clock time or GHC-optimized execution.
 
-For a saturated built-in primitive at a known concrete scalar type, the
-translator uses literal operands directly. If a strict use has already forced
-a source binding on the current path, a later scalar operation can use that
-value at the same type. A lazy consumer still receives the original thunk.
+The translator uses literals directly at a strict operation when GHC identifies
+the saturated built-in primitive, its concrete scalar type, and the standard
+instance for any overloaded operation or literal. A local `(+)` or a
+caller-supplied `Num Int` dictionary does not meet that test. If a strict use
+has already forced a source binding on the current path, a later scalar
+operation can use that value at the same type. A lazy consumer still receives
+the original thunk.
 For example, the guard in `take` forces the count; the selected cons branch
 can suspend the decrement using that count, while the recursive call stays
 inside the tail thunk. These choices preserve the demanded value and its
