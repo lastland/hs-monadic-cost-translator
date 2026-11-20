@@ -10,7 +10,7 @@ import Data.Data (Data, cast)
 import Data.Foldable (toList)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.ConLike (ConLike(..))
@@ -38,7 +38,7 @@ ordinaryOperandTransfers :: (Type -> Bool) -> QuickCheck -> [TypecheckedModule] 
 ordinaryOperandTransfers result qc modules = concatMap report sources
   where
     sources = map tm_typechecked_source modules
-    bodies = Map.fromList (concatMap (mapMaybe (ordinaryBody qc) . collectAst) sources)
+    bodies = Map.fromList (concatMap (mapMaybe (bindingBody qc) . collectAst) sources)
     exports = Map.fromList [(getName poly, getName mono) | source <- sources, ABE poly mono _ _ <- collectAst source]
     resolve seen name
         | Just body <- Map.lookup name bodies = Just (name, body)
@@ -52,15 +52,17 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
     -- For a first-order value only its outer type constructor decides the
     -- role. Carry open heads across statically named calls, including aliases.
     -- The domain is finite: only free variables of each retained template can
-    -- be added. Recursive calls never require unfolding a growing type or RHS.
+    -- be added, paired with the written call that introduced the ordinary
+    -- force. Recursive calls never require unfolding a growing type or RHS.
     open body ty = do
         v <- getTyVar_maybe (fst (splitAppTys ty))
         if v `elemVarSet` tyCoVarsOfType (template body) then Just v else Nothing
-    seeds = Map.map (\body -> Set.fromList (mapMaybe (open body) (forcedOperands body))) bodies
-    edges = Map.map (mapMaybe instantiate . calls) bodies
+    seeds = Map.map (\body -> Set.fromList [(v, Nothing) | v <- mapMaybe (open body) (forcedOperands body)]) bodies
+    edges = Map.map (mapMaybe (\call@(_, n, _) -> (n,) <$> instantiate call) . calls) bodies
     close known =
         let step name body = Set.union (seeds Map.! name) $ Set.fromList
-                [v | (child, _, sub) <- edges Map.! name, h <- Set.toList (known Map.! child),
+                [(v, Just (fromMaybe called origin)) | (called, (child, _, sub)) <- edges Map.! name,
+                    (h, origin) <- Set.toList (known Map.! child),
                     Just v <- [open body (substTy sub (mkTyVarTy h))]]
             next = Map.mapWithKey step bodies
         in if next == known then known else close next
@@ -71,11 +73,12 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
     -- operand is checked at its own ordinary declaration, not at every caller.
     report source = nub
         [pretty location ++ ": QuickCheck value used outside a generator or property: " ++ describeName name
-            ++ " (operand in ordinary callee at this instantiation)"
+            ++ " (operand in ordinary callee" ++ (if origin == name then "" else " " ++ describeName origin) ++ " at this instantiation)"
         | e <- collectAst source, Just call@(location, name, _) <- [typedCall e],
           Just (key, body, sub) <- [instantiate call],
           let becomes ty = not (result ty) && result (substTy sub ty),
-          any becomes (forcedOperands body) || any (becomes . mkTyVarTy) (heads Map.! key)]
+           origin <- [name | any becomes (forcedOperands body)] ++
+               [fromMaybe name via | (v, via) <- Set.toList (heads Map.! key), becomes (mkTyVarTy v)]]
 
 rho :: Type -> Type
 rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
@@ -83,12 +86,16 @@ rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
 firstOrder :: Type -> Bool
 firstOrder = all (null . fst . splitPiTys . scaledThing) . fst . splitFunTys
 
-ordinaryBody :: QuickCheck -> HsBind GhcTc -> Maybe (Name, Body)
-ordinaryBody qc binding = do
+bindingBody :: QuickCheck -> HsBind GhcTc -> Maybe (Name, Body)
+bindingBody qc binding = do
     identifier <- bindingId binding
     let record scheme rhs
-            | firstOrder scheme, not (isQuickCheckBinding qc identifier) =
-                let (observed, direct) = bodyUses qc rhs in Just (getName identifier, Body scheme observed direct)
+            | firstOrder scheme =
+                let (observed, direct) = bodyUses qc rhs
+                    -- A property may force its own operands. Its statically
+                    -- named home calls still carry their own ordinary forces.
+                    ordinary = if isQuickCheckBinding qc identifier then [] else observed
+                in Just (getName identifier, Body scheme ordinary direct)
             | otherwise = Nothing
     case binding of
         FunBind _ _ matches -> let MatchGroupTc args res _ = mg_ext matches in record (mkScaledFunTys args res) matches
