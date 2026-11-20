@@ -197,8 +197,7 @@ doubleM :: M.Th Int -> M.MemoristM Int
 doubleM x
   = do (M.tick :: M.MemoristM ())
        xValue <- M.force (x :: M.Th Int)
-       xValue' <- M.force (x :: M.Th Int)
-       pure (xValue + xValue')
+       pure (xValue + xValue)
 
 sharedM :: M.Th Int -> M.MemoristM Int
 sharedM x
@@ -206,8 +205,7 @@ sharedM x
        yanchor <- M.lazy (doubleM x)
        let y = yanchor
        yValue <- M.force (y :: M.Th Int)
-       yValue' <- M.force (y :: M.Th Int)
-       pure (yValue + yValue')
+       pure (yValue + yValue)
 
 capturedM :: M.Th Int -> M.MemoristM Int
 capturedM x
@@ -220,7 +218,7 @@ capturedM x
                   zValue <- M.force (z :: M.Th Int)
                   pure (yValue + zValue)
        arg3 <- M.lazy (add (x :: M.Th Int))
-       arg4 <- M.lazy (add (x :: M.Th Int))
        lhs <- M.force arg3
+       arg4 <- M.lazy (add (x :: M.Th Int))
        rhs <- M.force arg4
        pure (lhs + rhs)

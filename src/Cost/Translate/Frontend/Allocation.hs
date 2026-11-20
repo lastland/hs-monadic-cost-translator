@@ -13,7 +13,7 @@ module Cost.Translate.Frontend.Allocation
     ) where
 
 import Data.Char (isAlpha, isAlphaNum)
-import Data.List (isPrefixOf, mapAccumL)
+import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC (Name)
@@ -85,11 +85,7 @@ assignActions used assigned counters (key : keys) =
         (Map.insert prefix next counters)
         keys
     where
-        prefix
-            | "nextEquation" `isPrefixOf` key = "nextEquation"
-            | "nextGuard" `isPrefixOf` key = "nextGuard"
-            | "caseThunk" `isPrefixOf` key = "caseThunk"
-            | otherwise = "guardThunk"
+        prefix = takeWhile (/= '_') key
         counter = Map.findWithDefault 0 prefix counters
         (name, next) = freshNumbered used prefix counter
 

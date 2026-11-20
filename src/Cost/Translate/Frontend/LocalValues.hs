@@ -19,7 +19,7 @@ import Control.Monad (unless)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Allocation (freshPrimed)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions (reuseThunk)
+import Cost.Translate.Frontend.Expression.Thunks (reuseThunk)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.NamePlan (NamePlan (..), plannedTemporaryNames)
 import Cost.Translate.Frontend.Resolve (remainingArity)

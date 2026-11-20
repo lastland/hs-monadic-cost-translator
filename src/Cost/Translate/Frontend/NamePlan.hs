@@ -67,7 +67,7 @@ planNames datatypes globalNames layouts specialized syntax =
         (arguments, afterArguments) = assignArguments afterParameters sites
         (actions, afterActions) =
             assignActions afterArguments Map.empty Map.empty $
-                sourceActions syntax
+                sourceActions exprs syntax
         roots = patternRoots syntax
         fieldKeys = nub (concatMap (uncurry (plannedFieldKeys layouts)) roots)
         (fields, afterFields) = assignFields afterActions fieldKeys
@@ -157,8 +157,8 @@ expressionSites layouts expression = case unLoc expression of
     where
         key = actionKey "argument" (getLocA expression)
 
-sourceActions :: (Data a) => a -> [String]
-sourceActions syntax =
+sourceActions :: (Data a) => [LHsExpr GhcRn] -> a -> [String]
+sourceActions exprs syntax =
     nub
         ( concat
             [ map (actionKey "nextEquation" . getLocA) equations
@@ -170,11 +170,19 @@ sourceActions syntax =
                , not (null guards)
                ]
             ++ [ actionKey "caseThunk" (getLocA expression)
-               | expression <- expressions syntax
+               | expression <- exprs
                , HsCase {} <- [unLoc expression]
                ]
             ++ [ actionKey "guardThunk" (getLocA statement)
                | statement@(L _ BindStmt {}) <- statements
+               ]
+            ++ [ actionKey "condition" (getLocA expr)
+               | condition <-
+                    [c | L _ (HsIf _ c _ _) <- exprs]
+                        ++ [c | L _ (BodyStmt _ c _ _) <- statements]
+               , let (expr, args) = spine condition
+               , null args
+               , HsVar {} <- [unLoc expr]
                ]
         )
     where

@@ -68,7 +68,12 @@ library
         Cost.Translate.Frontend.Allocation
         Cost.Translate.Frontend.Emit
         Cost.Translate.Frontend.Environment
-        Cost.Translate.Frontend.Expressions
+        Cost.Translate.Frontend.Expression.Arguments
+        Cost.Translate.Frontend.Expression.Conditions
+        Cost.Translate.Frontend.Expression.Evidence
+        Cost.Translate.Frontend.Expression.Scalar
+        Cost.Translate.Frontend.Expression.Thunks
+        Cost.Translate.Frontend.Expression.Values
         Cost.Translate.Frontend.Gates
         Cost.Translate.Frontend.LocalValues
         Cost.Translate.Frontend.Logs
@@ -164,6 +169,8 @@ test-suite cost-translate-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    ConditionChecks
+                     GeneratedSyntax
+                     PaperScalarChecks
                      FixturePolicy
                      GeneratedChecks
                      GeneratedConstruction

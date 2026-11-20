@@ -3,18 +3,16 @@ module GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources) whe
 import ConditionChecks (checkConditionOutput)
 import Control.Monad (unless, when)
 import Data.Char (isSpace)
-import Data.Data (Data, cast, gmapQ)
 import Data.List (isInfixOf, isPrefixOf, sort, tails)
-import Data.Maybe (maybeToList)
 import GHC
-    ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), HsExpr(..), LHsExpr
-    , MatchGroup(..), Match(..), Pat(..), HsDoFlavour(..), StmtLR(..), ExprLStmt
+    ( GhcPs, HsExpr(..), LHsExpr, MatchGroup(..), Match(..), Pat(..), HsDoFlavour(..), StmtLR(..)
     , moduleNameString, unLoc
     )
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (RdrName(..), rdrNameOcc)
 import GHC.Types.SrcLoc (GenLocated(..))
-import GeneratedFunctions (parseHaskellModule)
+import GeneratedSyntax (bareExpression, collectAst, expressionVariable, generatedBindings, terminalExpression)
+import PaperScalarChecks (checkPaperScalarOutput)
 import Paths_cost_translate (getDataFileName)
 import qualified ReferenceRunner
 import System.Directory (findExecutable)
@@ -33,7 +31,8 @@ checkGeneratedArtifacts label artifacts = do
         "ordered-equations-and-conjunctive-guards" -> listInspection "chooseM"
         "manual-constructor-equations" -> mapM_ listInspection ["chooseM", "repeatedM"]
         "ordered-match-columns" -> checkParameterInspection output "chooseM" 2 ["JustT", "NothingT"]
-        "direct-primitive-conditions" -> checkConditionOutput (parseGeneratedBinding output)
+        "direct-primitive-conditions" -> generatedBindings output >>= checkConditionOutput
+        "paper-strict-scalars" -> generatedBindings output >>= checkPaperScalarOutput
         "anf-demand" -> checkTerminalDoBlocks output "chooseM"
         "manual-terminal-do" -> mapM_ (checkTerminalDoBlocks output) ["chooseM", "localM"]
         "pattern-scaling" -> do
@@ -73,7 +72,8 @@ checkManualSourceWarnings artifacts = do
 -- field or another argument of the same type is a different inspection.
 checkParameterInspection :: FilePath -> String -> Int -> [String] -> IO ()
 checkParameterInspection output target position constructors = do
-    binding <- parseGeneratedBinding output target
+    select <- generatedBindings output
+    binding <- select target
     let label = target ++ ", parameter " ++ show position
     parameter <- case drop (position - 1) (m_pats binding) of
         L _ (VarPat _ name) : _ -> pure (unLoc name)
@@ -101,7 +101,8 @@ forcedVariable _ = Nothing
 
 checkTerminalDoBlocks :: FilePath -> String -> IO ()
 checkTerminalDoBlocks output target = do
-    binding <- parseGeneratedBinding output target
+    select <- generatedBindings output
+    binding <- select target
     let nested = [() | HsDo _ (DoExpr Nothing) statements <- collectAst (m_grhss binding) :: [HsExpr GhcPs],
             terminal : _ <- [reverse (unLoc statements)],
             Just expression <- [terminalExpression terminal],
@@ -116,38 +117,6 @@ checkTerminalDoBlocks output target = do
         HsPar _ nested -> terminalOrdinaryDo nested
         HsLet _ _ body -> terminalOrdinaryDo body
         _ -> False
-
-    terminalExpression :: ExprLStmt GhcPs -> Maybe (LHsExpr GhcPs)
-    terminalExpression statement = case unLoc statement of
-        BodyStmt _ expression _ _ -> Just expression
-        LastStmt _ expression _ _ -> Just expression
-        _ -> Nothing
-
--- Parse the published artifact, including its extension pragmas, without loading
--- imports. Checks select a binding structurally, not by layout or fresh names.
-parseGeneratedBinding :: FilePath -> String -> IO (Match GhcPs (LHsExpr GhcPs))
-parseGeneratedBinding output target = do
-    ast <- parseHaskellModule output
-    case [unLoc alternative | L _ (ValD _ (FunBind _ name matches)) <- hsmodDecls ast,
-            occNameString (rdrNameOcc (unLoc name)) == target,
-            alternative <- unLoc (mg_alts matches)] of
-        [binding] -> pure binding
-        bindings -> fail (output ++ ": expected one equation for " ++ target ++
-                          ", found " ++ show (length bindings))
-
-collectAst :: (Data a, Data b) => b -> [a]
-collectAst value = maybeToList (cast value) ++ concat (gmapQ collectAst value)
-
-expressionVariable :: LHsExpr GhcPs -> Maybe RdrName
-expressionVariable expression = case bareExpression expression of
-    HsVar _ name -> Just (unLoc name)
-    _ -> Nothing
-
-bareExpression :: LHsExpr GhcPs -> HsExpr GhcPs
-bareExpression expression = case unLoc expression of
-    HsPar _ nested -> bareExpression nested
-    ExprWithTySig _ nested _ -> bareExpression nested
-    other -> other
 
 checkGeneratedWarnings :: FilePath -> IO ()
 checkGeneratedWarnings root = do

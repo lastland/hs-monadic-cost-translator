@@ -1,4 +1,4 @@
-module Cost.Translate.Frontend.Expressions
+module Cost.Translate.Frontend.Expression.Thunks
     ( emitVariable
     , emitLiteral
     , annotateExpression

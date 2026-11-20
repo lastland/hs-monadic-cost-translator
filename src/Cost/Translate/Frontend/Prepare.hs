@@ -4,6 +4,7 @@ import Control.Monad.IO.Class (liftIO)
 import Cost.Translate.Callable (expressions)
 import Cost.Translate.Datatypes (checkConversionExports)
 import Cost.Translate.Diagnostic (Diagnostic (..))
+import Cost.Translate.Frontend.Expression.Evidence
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.Module (emitModule)
 import Cost.Translate.Frontend.Prune (pruneLocals)
@@ -52,16 +53,13 @@ generateChecked file target flags summary = do
     checked <- parseModule summary >>= typecheckModule
     desugared <- desugarModule checked
     session <- getSession
-    hints <- case tm_renamed_source checked of
-        Just (group, _, _, _, _) ->
-            liftIO
-                ( Typed.expressionTypes
-                    session
-                    checked
-                    (expressions group)
-                    (collect (tm_typechecked_source checked))
-                )
-        Nothing -> pure Map.empty
+    evidence <- case tm_renamed_source checked of
+        Just (group, _, _, _, _) -> do
+            let source = expressions group
+                typed = collect (tm_typechecked_source checked)
+            cores <- liftIO (Typed.expressionCores session checked source typed)
+            pure (checkedExpressions checked source typed cores)
+        Nothing -> pure (ExpressionEvidence Map.empty Map.empty)
     strictValues <- liftIO (strictWhnfBindings session checked)
     pure $
         renderChecked
@@ -71,7 +69,7 @@ generateChecked file target flags summary = do
             summary
             checked
             desugared
-            hints
+            evidence
             strictValues
 
 renderChecked ::
@@ -81,27 +79,27 @@ renderChecked ::
     ModSummary ->
     TypecheckedModule ->
     DesugaredModule ->
-    Map.Map Typed.SourceKey Type ->
+    ExpressionEvidence ->
     Set.Set Name ->
     (Either Diagnostic String, String)
-renderChecked file target flags summary checked desugared hints strictValues =
+renderChecked file target flags summary checked desugared evidence strict =
     case tm_renamed_source checked of
         Just (group, imports, _, _, _) ->
             let info = tm_checked_module_info checked
                 datatypes = [t | ATyCon t <- modInfoTyThings info]
                 emit =
                     emitModule
-                        strictValues
+                        strict
                         target
                         (moduleNameString (moduleName (ms_mod summary)))
                         (xopt Extension.MagicHash (ms_hspp_opts summary))
                         datatypes
                         (bindingTypes checked)
                         (literalTypes checked)
-                        hints
+                        evidence
                         (Typed.functionTypes checked)
                 (original, logs) = emit group
-                result = checkedPrunedEmission strictValues group emit original
+                result = checkedPrunedEmission strict group emit original
                 validation = do
                     checkSourceExtensions file summary
                     mapM_ checkImport imports

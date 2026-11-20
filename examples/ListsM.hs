@@ -195,10 +195,8 @@ takeM ::
   M.Th Int -> M.Th (L.ListT a) -> M.MemoristM (L.ListT a)
 takeM n arg0
   = do (M.tick :: M.MemoristM ())
-       arg1 <- M.lazy (pure (0 :: Int))
        nValue <- M.force (n :: M.Th Int)
-       rhs <- M.force arg1
-       if nValue <= rhs then
+       if nValue <= (0 :: Int) then
            pure L.NilT
        else
            do matched' <- M.force arg0
@@ -207,10 +205,8 @@ takeM n arg0
                 L.ConsT x xs
                   -> do arg3 <- M.lazy
                                   (do arg4 <- M.lazy
-                                                (do arg7 <- M.lazy (pure (1 :: Int))
-                                                    nValue' <- M.force (n :: M.Th Int)
-                                                    rhs' <- M.force arg7
-                                                    pure (nValue' - rhs'))
+                                                (do nValue' <- M.force (n :: M.Th Int)
+                                                    pure (nValue' - (1 :: Int)))
                                       takeM arg4 xs)
                         pure (L.ConsT x arg3)
 

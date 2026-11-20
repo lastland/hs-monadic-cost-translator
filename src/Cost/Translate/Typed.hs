@@ -1,7 +1,7 @@
 module Cost.Translate.Typed
     ( SourceKey
     , sourceKey
-    , expressionTypes
+    , expressionCores
     , expressionTypeAt
     , FunctionType (..)
     , functionTypes
@@ -23,7 +23,8 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Ord (comparing)
 import Data.Set qualified as Set
-import GHC hiding (exprType)
+import GHC
+import GHC.Core (CoreExpr)
 import GHC.Core.ConLike (conLikeName)
 import GHC.Core.FVs (exprFreeIds)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
@@ -31,7 +32,6 @@ import GHC.Core.TyCo.Rep (scaledMult, scaledThing)
 import GHC.Core.TyCo.Subst (substTy)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, mkTyVarTy, mkVisFunTy)
 import GHC.Core.Unify (tcMatchTy)
-import GHC.Core.Utils (exprType)
 import GHC.Data.Bag (bagToList)
 import GHC.Data.Strict qualified as Strict
 import GHC.HsToCore.Expr (dsLExpr)
@@ -58,13 +58,13 @@ sourceKey :: SrcSpan -> SourceKey
 sourceKey (RealSrcSpan virtual buffer) = Right (virtual, buffer)
 sourceKey span' = Left (showSDocUnsafe (ppr span'))
 
-expressionTypes ::
+expressionCores ::
     HscEnv ->
     TypecheckedModule ->
     [LHsExpr GhcRn] ->
     [LHsExpr GhcTc] ->
-    IO (Map.Map SourceKey Type)
-expressionTypes session checked source typed = do
+    IO (Map.Map SourceKey CoreExpr)
+expressionCores session checked source typed = do
     let locations =
             Map.fromListWith
                 (+)
@@ -94,7 +94,7 @@ expressionTypes session checked source typed = do
         choose = recover names occurrences references
     (_, result) <-
         initDs session (fst (tm_internals_ checked)) $
-            traverse (fmap exprType . dsLExpr) selected
+            traverse dsLExpr selected
     maybe (fail "GHC type-evidence desugaring failed") pure result
     where
         location = sourceKey . getLocA
