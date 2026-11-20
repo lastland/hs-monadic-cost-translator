@@ -117,7 +117,7 @@ The translator instruments renamed source syntax (via the GHC API) rather than o
 - **1 tick per source function entry**: Every translated top-level or local function executes `tick` on entry.
 - **1 tick per generated record selector and direct container fold**: Record field accessors (`<field>M`) charge one entry tick before forcing the record and selected field. Direct `FoldableT` operations (`foldrT` and `foldlT` on `MaybeT` and `PairT`, plus generic `concatMapT`) charge one entry tick in addition to callback ticks; list instances delegate to `Memorist.Example.List`.
 - **0 entry ticks for constructors, adapters, and conversions**: Allocating data constructors, pairs, lists, or records suspends field computations without charging an entry tick. Partial application, function composition `(.)`, and representation or demand conversions (`reprM`, `abstract`, `fullDemand`) also add no entry ticks.
-- **0 entry ticks for scalar primitives**: Arithmetic (`+`, `-`, `*`, `/`, `div`, `mod`, `quot`, `rem`), negation, scalar comparisons (`==`, `/=`, `<`, `<=`, `>`, `>=`), and short-circuit booleans (`&&`, `||`) charge no entry tick and force only the operands they need.
+- **0 entry ticks for scalar primitives**: Arithmetic (`+`, `-`, `*`, `/`, `div`, `mod`, `quot`, `rem`), negation, scalar comparisons (`==`, `/=`, `<`, `<=`, `>`, `>=`), and short-circuit booleans (`&&`, `||`) charge no entry tick. Arithmetic forces every operand under the [strict-arithmetic assumption](#strict-arithmetic-assumption); scalar comparisons force both operands, while `&&` and `||` retain short-circuit evaluation.
 
 Unticked operations still pay the ticks of any thunks they force. Costs count source-level function entries, not elapsed wall-clock time or GHC-optimized execution.
 
@@ -139,6 +139,14 @@ Translated bindings express evaluation and sharing through the runtime's core mo
 
 ## Limitations
 
+### Strict Arithmetic Assumption
+
+The translator assumes that arithmetic operators (`+`, `-`, `*`, `/`, `div`, `mod`, `quot`, `rem`) and negation are strict in every operand: demanding a result requires evaluating each operand to its outermost value. Haskell's numeric classes, including `Num`, do not enforce this assumption.
+
+For example, a caller-defined `(+)` implemented as `_ + _ = One` ignores both operands. The translation still forces both operands before calling `(+)`, so it may evaluate computations that the source leaves unevaluated, charge extra ticks, or diverge when the source terminates. Non-strict arithmetic instances are outside the supported demand and cost model.
+
+The cost contract also assumes that caller-supplied arithmetic methods obey the same runtime-access restrictions as translated functions: they must not read thunk payloads with `tval` or bypass `force`. Strictness does not grant permission to bypass accounting, and a `Num` constraint alone guarantees neither obligation.
+
 ### Excluded Source-Global Sharing Costs and Identity
 
 Top-level value bindings translate to monadic actions, and translated functions take no global environment argument. Re-executing a global action does not retain its earlier result or thunk identity across uses:
@@ -152,7 +160,7 @@ The six-combinator contract restricts translated computations to `lazy`, `force`
 
 - **Legacy local sharing fallback**: Local value shapes outside the native lowering rules still emit legacy evaluator helpers (`sharedAt` / `sharedAtBy` using `eval` and `value`) and may require `Typeable` constraints absent from the source signature. In particular, construction-only sharing for potentially overlapping generic instantiations—such as a dictionary-sensitive local used at both an abstract `a` and concrete `Int`, which must share when `a = Int` and stay separate when `a = Integer`—is outside the current scope ([issue #3](https://github.com/lastland/hs-monadic-cost-translator/issues/3)).
 - **Generated observation, conversion, and value-dependent shrinkers**: Generated pure `Repr` and `Demand` interfaces (`abstract`, `fullDemand`, `usage`; [issue #8](https://github.com/lastland/hs-monadic-cost-translator/issues/8)) and separately callable value-dependent demand shrinkers (`shrink*Demand`, `shrinkField`; [issue #10](https://github.com/lastland/hs-monadic-cost-translator/issues/10)) inspect thunk payloads and accounting metadata directly (`tval`, `usage`, `empty`, `union`).
-- **Caller-supplied dictionaries on exported polymorphic functions**: Before caller compilation, a publicly exported function such as `Num a => a -> a` using `(+)` has only an open caller-supplied dictionary; the construction guard can reject its arithmetic even though concrete `Int` at the same operation is supported ([issue #11](https://github.com/lastland/hs-monadic-cost-translator/issues/11)).
+- **Caller-supplied dictionaries on exported polymorphic functions**: Before caller compilation, a publicly exported function such as `Num a => a -> a` using `(+)` has only an open caller-supplied dictionary. The [arithmetic assumptions](#strict-arithmetic-assumption) restrict supported callers but do not provide concrete method evidence. The current construction guard still rejects this unresolved selection even though concrete `Int` at the same operation is supported ([issue #11](https://github.com/lastland/hs-monadic-cost-translator/issues/11)).
 
 ### Unsupported Source Constructs and Semantic Constraints
 
