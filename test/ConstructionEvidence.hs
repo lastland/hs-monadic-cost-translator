@@ -3,14 +3,15 @@
 module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 
 import ConstructionDictionary
+import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType)
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
-import ConstructionRoles (QuickCheck, isQuickCheckBinding)
+import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
+import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding, shrinkSupport)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -64,7 +65,7 @@ methodFamilies rt = do
                     (method, Just (actual, _)) <- classOpItems cls, getName method == name]
             -- Overloaded wrappers are ordinary Ids. Their first argument after
             -- type abstraction is the dictionary passed at the occurrence.
-            Just (AnId identifier) | family == Computation,
+            Just (AnId identifier) | family `elem` [Computation, ForbiddenMethod],
                 arg : _ <- fst (splitFunTys (snd (splitForAllTyVars (idType identifier)))),
                 Just (cls, [_]) <- getClassPredTys_maybe (scaledThing arg) -> pure [(name, (family, getName cls))]
             _ -> fail ("cannot bind construction method: " ++ describeName name)
@@ -78,7 +79,7 @@ methodNames rt modules = do
     pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
-data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
+data Site = FieldBody Name | Site String (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
     | StockFacts [(Name, Name, Type, [Use])]
     | TagFacts Platform [TyCon]
 
@@ -88,15 +89,26 @@ data RetainedEvidence = RetainedEvidence
     , patternBindings :: [Maybe [(Id, C.CoreExpr)]], componentBodies :: [Maybe C.CoreExpr]
     , retainedActions :: [C.CoreExpr] }
 
-collectEvidence :: Runtime -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
-collectEvidence rt locals homes program support checked sourceSites = do
+collectEvidence :: Runtime -> Support -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
+collectEvidence rt utilities locals homes program support checked sourceSites = do
     selected <- methodFamilies rt
     let bindings = allBindings program
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        bindingSites env given bs = concat [record (coreLocation locals binder) (Left (getName binder)) (uses qc selected env given rhs) |
-            (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
+        bindingSites env given bs = concat
+            [let role = supportBinding utilities (getName binder)
+                 collect = case role of
+                     Just _ -> usesExcept qc (sourceBinding utilities)
+                     Nothing -> uses qc
+             in (if shrinkSupport role then [] else
+                    recordRole role (coreLocation locals binder) (Left (getName binder)) (collect selected env given rhs)) ++
+                 concat [recordRole (supportBinding utilities (getName v)) (coreLocation locals v)
+                     (Left (getName v)) (usesExcept qc (sourceBinding utilities) selected env given body) |
+                     Just _ <- [role], (v, body) <- allBindings [C.NonRec binder rhs],
+                     getName v /= getName binder, sourceBinding utilities (getName v),
+                     not (shrinkSupport role) || independentBinding locals (getName v), not (isQuickCheckBinding qc v)]
+            | (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
     flags <- getSessionDynFlags
@@ -177,7 +189,8 @@ collectEvidence rt locals homes program support checked sourceSites = do
     componentKey a b = case (getBufSpan a, getBufSpan b) of
         (Strict.Just p, Strict.Just e) -> Just (p, e)
         _ -> Nothing
-    record location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner) us
+    record location = recordRole (supportAt utilities checked location) location
+    recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner role) us
       where owner = contextSite homes site
 
 -- Collect the complete home graph before validating any caller. Source-only
@@ -191,14 +204,14 @@ checkEvidence rt homes demands sites = concatMap check sites
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
         , stockFacts = concat [facts | StockFacts facts <- sites]
         , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
-    observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) u <- sites]
+    observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) _ u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
     check (DefaultFacts _) = []
     check (StockFacts _) = []
     check (TagFacts _ _) = []
     check (MissingCertificate why) = [why]
-    check (Site location field u) = map ((location ++ ": ") ++) (checkSelected [] field u)
+    check (Site location field role u) = map ((location ++ ": ") ++) (checkSelected role [] field u)
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
@@ -209,8 +222,8 @@ data MethodRules = MethodRules
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: MethodRules -> [Active] -> Maybe Name -> Use -> [String]
-checkUse rules = check
+checkUse :: MethodRules -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
+checkUse rules utility = check
   where
     rt = auditedRuntime rules
     homes = homeRepresentations rules
@@ -218,7 +231,8 @@ checkUse rules = check
         ["unapproved selected method " ++ describeName name ++ ": " ++ why ++
             " [" ++ unwords (map renderEvidence dictionaries) ++ "]" | Just why <- [verdict]]
       where
-        verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
+        verdict | family == ForbiddenMethod && utilityMethod use = Nothing
+                | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
                 | isDataDefault rules use = Nothing
                 | tagUse use = Nothing
                 | family == UnknownMethod = Just "unknown executable method/default dependency"
@@ -231,6 +245,7 @@ checkUse rules = check
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                     | selectedPredicate ty evidence && demandMethod [] name evidence -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
+                    | callerArithmetic rt use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
                     | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
                         selectedPredicate ty evidence && ordinary evidence -> Nothing
@@ -240,6 +255,17 @@ checkUse rules = check
             _ -> Just "unsaturated selector has no selected instance evidence"
         root (Super _ _ parent) = root parent
         root evidence = evidence
+        utilityMethod (Use selected cls _ ts [ev])
+            | Just roles <- utility, not (null roles), all (\role -> roleOf rt selected == Just role &&
+                  role `elem` [AbstractMethod, FullMethod, UsageMethod]) roles,
+              Just (actual, args) <- predicateOf ev >>= getClassPredTys_maybe,
+              getName actual == cls, length args == length ts, and (zipWith eqType args ts) =
+                supportEvidence ev
+        utilityMethod _ = False
+        supportEvidence Given{} = True
+        supportEvidence (Instance _ _ _ ds) = all supportEvidence ds
+        supportEvidence ev@Super{} = maybe False supportEvidence (projected homes ev)
+        supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
             tagMethod selected predicate && case getClassPredTys_maybe predicate of
                 Just (actual, args) -> cls == getName actual && length ts == length args &&
@@ -371,7 +397,10 @@ checkUse rules = check
             _ -> False
 
 uses :: QuickCheck -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
-uses qc selected = walk
+uses qc = usesExcept qc (const False)
+
+usesExcept :: QuickCheck -> (Name -> Bool) -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
+usesExcept qc boundary selected = walk
   where
     walk env given expression = case expression of
         C.Lam binder body -> walk env (if isId binder && isPredTy (idType binder)
@@ -379,7 +408,7 @@ uses qc selected = walk
         C.Let binding body ->
             let bs = C.flattenBinds [binding]
                 next = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- bs]) env
-            in walk next given body ++ concat [walk next given rhs | (v, rhs) <- bs, not (isQuickCheckBinding qc v)]
+            in walk next given body ++ concat [walk next given rhs | (v, rhs) <- bs, not (isQuickCheckBinding qc v), not (boundary (getName v))]
         C.Cast body _ -> walk env given body
         C.Tick _ body -> walk env given body
         C.Case scrutinee _ _ alternatives -> walk env given scrutinee ++ concat [walk env given rhs | C.Alt _ _ rhs <- alternatives]

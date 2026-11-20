@@ -176,6 +176,7 @@ test-suite cost-translate-test
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionAllocation
+                     ConstructionArithmetic
                      ConstructionActionFields
                      ConstructionActionFlow
                      ConstructionAst

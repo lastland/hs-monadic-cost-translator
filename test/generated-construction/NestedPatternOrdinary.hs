@@ -4,10 +4,10 @@ module NestedPatternOrdinary where
 import qualified Memorist.Memorist as M
 import qualified Test.QuickCheck as Q
 
-unusedNumber :: forall a. Num a => a -> Q.Property
-unusedNumber _ =
+unusedNumber :: forall a. Eq a => a -> Q.Property
+unusedNumber input =
     let (seen, _) =
-            (True, 1 :: a)
+            (True, input == input)
     in Q.property seen
 
 shared :: M.Th Bool -> Q.Property
@@ -84,10 +84,10 @@ independentAction t =
             , M.tval t `seq` (pure True :: M.MemoristM Bool) )
     in Q.property (seen && M.value (M.eval1 act))
 
-annotatedNumber :: forall a. Num a => a -> Q.Property
-annotatedNumber _ =
+annotatedNumber :: forall a. Eq a => a -> Q.Property
+annotatedNumber input =
     let (seen :: Bool, _) =
-            (True, 1 :: a)
+            (True, input == input)
     in Q.property seen
 
 unitWithHelper :: Eq a => M.Th () -> a -> Q.Property

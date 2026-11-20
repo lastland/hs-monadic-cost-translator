@@ -6,7 +6,7 @@ import ConstructionActionFields (missingActions, sourceActions)
 import ConstructionAst
 import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitSource, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
-import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
+import ConstructionRoles (isQuickCheckBinding, quickCheckBody, Support, supportAt, shrinkSupport, restrictedSupport)
 import ConstructionRuntime
 import ConstructionViews (ViewSupport, moduleViews, restrictedViews)
 import Data.Data (Data, cast)
@@ -67,8 +67,8 @@ checkParsedSyntax parsed =
     patternTH SplicePat{} = True
     patternTH _ = False
 
-checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
-checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
+checkSyntax :: Runtime -> Support -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
+checkSyntax rt utilities locals uses homes methods support checked = case tm_renamed_source checked of
     Just (group, _, _, _, _) -> ([pretty at ++ ": no retained action operand" | at <- missingActions actions], []) `plus`
         foldr (plus . walk noSrcSpan)
             (foldr (plus . nested noSrcSpan) (walk noSrcSpan group) (implicitSource locals checked group))
@@ -97,7 +97,7 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, exempt binding, not (strictBinding binding) =
+        | Just binding <- cast value, exempt binding || shrinkBinding binding, not (strictBinding binding) =
             foldr (plus . nested location) ([], []) (nestedSource locals binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
@@ -154,6 +154,8 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
     descend location value = foldr plus ([], []) (children (walk location) value)
     strictBinding FunBind{fun_matches = matches} = strictNullaryRhs matches
     strictBinding _ = False
+    shrinkBinding (FunBind _ name _) = shrinkSupport (supportAt utilities checked (getLocA name))
+    shrinkBinding _ = False
     nested location (Declaration binding) = walk location binding `plus`
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
@@ -172,9 +174,20 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
     checkName location name | isQuickCheckBinding qc name =
         ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
     checkName location name = checkOperation location name
-    checkOperation location name = if permitted name then ([], []) else
+    checkOperation location name
+        | restrictedSupport utilities name, Nothing <- supportAt utilities checked location =
+            ([pretty location ++ ": support utility used by ordinary computation: " ++ describeName name], [])
+        | permitted name || utilityOperation location name = ([], [])
+        | otherwise =
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
+    utilityOperation location name = case (supportAt utilities checked location, roleOf rt name) of
+        (Just roles, Just operation) -> not (null roles) && all (`permits` operation) roles
+        _ -> False
+    permits AbstractMethod role = role `elem` [AbstractMethod, Payload]
+    permits FullMethod role = role `elem` [FullMethod, Payload]
+    permits UsageMethod role = role `elem` [UsageMethod, ThunkAccounting, EmptyAccounting, UnionAccounting]
+    permits _ _ = False
     permitted name | name `elem` restrictedViews support = False
     permitted name = case nameModule_maybe name of
         Nothing -> True
