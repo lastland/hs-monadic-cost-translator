@@ -6,12 +6,20 @@ import ConstructionDictionary
 import ConstructionHomeRepr (HomeReprs)
 import ConstructionMethods (MethodSite(..))
 import ConstructionRuntime hiding (runtime)
+import Control.Monad (guard)
 import Data.List (deleteFirstsBy)
-import GHC
-import GHC.Core.Class (classSCSelIds, classTyVars)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import GHC hiding (exprType)
+import qualified GHC.Core as C
+import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
+import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
-import GHC.Core.Type (substTyWith)
+import GHC.Core.Type (isPredTy, substTyWith)
+import GHC.Core.TyCon (tyConSingleDataCon)
+import GHC.Core.Utils (exprType)
+import GHC.Types.Var (isId, isTyVar)
 
 stockUse :: Runtime -> HomeReprs -> [StockMethods] -> MethodSite -> (Use -> Bool) -> Use -> Bool
 stockUse rt homes programs origin tag use =
@@ -22,13 +30,14 @@ stockUse rt homes programs origin tag use =
         _ -> False
   where
     stocks = concat [ss | StockMethods _ ss <- programs]
-    homeEntry (Use _ _ ScalarMethod _ [e]) = case resolve e of
+    env = Map.unions [e | StockMethods e _ <- programs]
+    homeEntry (Use _ _ ScalarMethod _ [e]) = case resolve [] e of
         Just (Instance df _ _ _) -> runtimeOwns rt (getName df) || any (\(Stock owner _ _ _ _) -> df == owner) stocks
         _ -> False
     homeEntry _ = False
     prove _ _ obligation | tag obligation = True
     prove active own (Use method expected ScalarMethod [operand] [e])
-        | not (isProtected rt operand), Just ev <- resolve e,
+        | not (isProtected rt operand), Just ev <- resolve [] e,
           Just (cls, [actual]) <- predicateOf ev >>= getClassPredTys_maybe,
           getName cls == expected, eqType actual operand =
             (scalarType operand && ordinary ev) ||
@@ -98,4 +107,69 @@ stockUse rt homes programs origin tag use =
             Just formal -> eqType predicate (substTyWith (classTyVars cls) args formal)
             _ -> False
         _ -> False
-    resolve = projected homes
+    resolve path (Transport target source) = do
+        actual <- resolve path source
+        pure $ case actual of
+            Transport _ inner | maybe False (eqType target) (predicateOf inner) -> inner
+            _ | maybe False (eqType target) (predicateOf actual) -> actual
+              | otherwise -> Transport target actual
+    resolve path (Instance df p ts ds) = Instance df p ts <$> mapM (resolve path) ds
+    resolve path evidence@(Super sel predicate parent) = do
+        guard (validSuper sel predicate parent)
+        source <- resolve path parent
+        case source of
+            Given{} -> pure (Super sel predicate source)
+            Transport{} -> pure (Super sel predicate source)
+            Super{} -> pure (Super sel predicate source)
+            Instance df p ts ds | getName df `notElem` path ->
+                case Map.lookup (getName df) env of
+                    Just rhs -> case C.collectArgs (snd (C.collectBinders rhs)) of
+                        (C.Var worker, supplied) -> do
+                            let (bs, body) = C.collectBinders rhs
+                                (vs, slots) = span isTyVar bs
+                                ty = substTyWith vs ts
+                            guard (length vs == length ts && length slots == length ds &&
+                                all (\v -> isId v && isPredTy (idType v)) slots && eqType (ty (exprType body)) p &&
+                                and (zipWith (\v d -> maybe False (eqType (ty (idType v))) (predicateOf d)) slots ds))
+                            (cls, _) <- getClassPredTys_maybe p
+                            guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)))
+                            let fields = filter (not . C.isTyCoArg) supplied
+                            guard (length fields == length (classAllSelIds cls))
+                            field <- lookup sel (zip (classAllSelIds cls) fields)
+                            template <- fieldEvidence env [] (Set.fromList (map getName slots)) field
+                            result <- resolve (getName df : path) (substitute ty (zip (map getName slots) ds) template)
+                            actual <- predicateOf result
+                            guard (eqType actual predicate)
+                            pure result
+                        _ -> projected homes evidence >>= resolve (getName df : path)
+                    Nothing -> projected homes evidence >>= resolve (getName df : path)
+            _ -> Nothing
+    resolve _ e@Given{} = Just e
+    resolve _ e@BuiltinTag{} = Just e
+    resolve _ Unknown{} = Nothing
+    -- Open only the actual selected superclass field. Helpers may abstract over
+    -- types and evidence, never ordinary executable arguments. trace validates
+    -- original coercions before any type/context substitution is performed.
+    fieldEvidence local seen given (C.Let (C.NonRec binder rhs) body)
+        | isId binder && isPredTy (idType binder) =
+            fieldEvidence (Map.insert (getName binder) rhs local) seen given body
+    fieldEvidence local seen given expression = case trace local given Set.empty expression of
+        Unknown{} -> do
+            (C.Var helper, supplied) <- pure (C.collectArgs expression)
+            guard (getName helper `notElem` seen)
+            rhs <- Map.lookup (getName helper) local
+            let (bs, body) = C.collectBinders rhs
+                (vs, slots) = span isTyVar bs
+                ts = [t | C.Type t <- supplied]
+                arguments = filter (not . C.isTyCoArg) supplied
+            guard (length supplied == length vs + length slots && length ts == length vs &&
+                length arguments == length slots && all (\v -> isId v && isPredTy (idType v)) slots &&
+                all (isPredTy . exprType) arguments)
+            values <- mapM (fieldEvidence local (getName helper : seen) given) arguments
+            template <- fieldEvidence local (getName helper : seen) (Set.union given (Set.fromList (map getName slots))) body
+            let ty = substTyWith vs ts
+            guard (and (zipWith (\v d -> maybe False (eqType (ty (idType v))) (predicateOf d)) slots values))
+            result <- pure (substitute ty (zip (map getName slots) values) template)
+            guard (maybe False (eqType (exprType expression)) (predicateOf result))
+            pure result
+        evidence -> Just evidence

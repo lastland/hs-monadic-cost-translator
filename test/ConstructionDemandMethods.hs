@@ -23,7 +23,9 @@ import GHC.Types.Var (isId, isTyVar, varType)
 import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_insts)
 
--- This summary covers only the two pinned stock instances at Demand.hs:13-14.
+-- Pinned Demand.hs:13-14 and 59-60: ThD delegates to its payload; MaybeD
+-- delegates through ThD to that payload. The same selected child remains an
+-- obligation. These are not general unary-container permissions.
 -- The actual DFun head, substitution, selected method, and one field dictionary
 -- must all match. The caller still proves the actual selected child method.
 runtimeDemandMethod :: Runtime -> Name -> Id -> Type -> [Type] -> [Type] -> Maybe (Name, Type)
@@ -40,7 +42,7 @@ runtimeDemandMethod rt method df predicate args children = do
         eqType (apply template) ty &&
         and (zipWith eqType (map (apply . scaledThing) context) children))
     (tc, [field]) <- splitTyConApp_maybe ty
-    guard (getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD")
+    guard (getName tc `elem` [runtimeName rt "Memorist.Data.Interface.Demand" label | label <- ["ThD", "MaybeD"]])
     selected <- lookup method [(name, getName op) | (op, def) <- classOpItems cls,
         name <- getName op : [n | Just (n, _) <- [def]]]
     child <- case [(label, name) | label <- ["==", "showsPrec"], Just name <- [lookup ("Prelude." ++ label) (standardNames rt)],
