@@ -122,6 +122,7 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "StockSimple.hs"
+    accepts "StockSum.hs"
     accepts "StockReset.hs"
     accepts "StockResetCompound.hs"
     rejectsAt "StockResetUnsafe.hs"
