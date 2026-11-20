@@ -1,0 +1,3 @@
+[submodule "hs-pbt"]
+	path = hs-pbt
+	url = https://github.com/hzelkatz/memorist-hs-pbt

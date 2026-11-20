@@ -122,8 +122,9 @@ seeded/randomized ANF properties also pass in the same focused run.
 ## Toolchain
 
 `stack exec -- ghc --version` reported GHC 9.10.3. Stack uses LTS 24.22 and
-QuickCheck 2.17.1.0, with the existing external `hs-pbt/` checkout. The translator
-package gains no runtime or QuickCheck build dependency.
+QuickCheck 2.17.1.0. This run used the local `hs-pbt/` checkout that preceded
+the [pinned submodule](../../patches/README.md). The translator package has
+no runtime or QuickCheck build dependency.
 
 ## Validation results
 

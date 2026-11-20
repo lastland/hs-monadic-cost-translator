@@ -8,7 +8,4 @@ __pycache__/
 /examples/flycheck_*.hs
 /examples/*M.hs.log
 
-# External reference runtime; intentionally not part of version control.
-hs-pbt/
-
 paper.pdf

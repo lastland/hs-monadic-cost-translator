@@ -8,10 +8,11 @@ Building and running the translator with candidate verification requires:
 
 - **GHC 9.10.3**: The translator uses GHC 9.10.3's internal API. Cabal rejects other compiler versions during dependency resolution.
 - **Stack (LTS 24.22)**: `stack.yaml` pins LTS 24.22 (GHC 9.10.3) and `QuickCheck-2.17.1.0` to match the target runtime.
-- **Local `MemoristANT` checkout (`hs-pbt/`)**: Place a local `MemoristANT-0.1.0.0` checkout at `hs-pbt/` in the repository root and apply the [private-allocator patch](patches/README.md) before building (`hs-pbt/` is git-ignored and not bundled with this repository, and no upstream repository URL or base commit revision is recorded):
+- **`MemoristANT` runtime**: Git pins the runtime at [`hs-pbt/`](hs-pbt). From the repository root, initialize it, apply the [private-allocator patch](patches/README.md) once, and build the library:
   ```sh
-  git apply --check --directory=hs-pbt patches/memorist-private-allocator.patch
-  git apply --directory=hs-pbt patches/memorist-private-allocator.patch
+  git submodule update --init -- hs-pbt
+  git -C hs-pbt apply --check ../patches/memorist-private-allocator.patch
+  git -C hs-pbt apply ../patches/memorist-private-allocator.patch
   stack build MemoristANT:lib
   ```
 
@@ -213,7 +214,7 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/validate.sh
   ```
   `scripts/validate.sh` checks formatting, source limits, ShellCheck, HLint, and checker/hook regressions before running a warning-clean build and runtime-free tests. See [`docs/source-policy.md`](docs/source-policy.md) for tool setup, formatting commands, and the opt-in staged hook.
-- **Full reference-comparison test suite** (requires Stack, `hs-pbt/`, and HLint on `PATH`):
+- **Full reference-comparison test suite** (requires Stack, the patched `hs-pbt/` submodule, and HLint on `PATH`):
   ```sh
   sh scripts/stack-test.sh
   ```
@@ -222,12 +223,12 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="double"
   sh scripts/stack-test.sh cost-translate:test:cost-translate-test --test-arguments="diagnostics fixture-policy"
   ```
-  Whereas `cost-translate` only typechecks generated candidates against the `MemoristANT` API, the suite's construction guard requires the compiled `MemoristANT` interfaces to match the exact audited runtime module source fingerprints pinned in [`test/ConstructionRuntime.hs`](test/ConstructionRuntime.hs). An API-compatible `hs-pbt/` checkout alone is therefore insufficient: the audited sources must include the [private-allocator patch](patches/README.md) (see that guide to verify an existing checkout) and, if `src/Memorist/Example/ListInf.hs` is unpatched, the tracked [`scanl` laziness patch](.scratch/translator-poc/scanl-demand-fix.patch) (verify with `git apply --reverse --check --directory=hs-pbt .scratch/translator-poc/scanl-demand-fix.patch`, or apply with `git apply --directory=hs-pbt .scratch/translator-poc/scanl-demand-fix.patch` and rebuild `MemoristANT:lib`).
+  The translator typechecks candidates against the `MemoristANT` API. The reference suite also checks the compiled runtime against the audited source fingerprints in [`test/ConstructionRuntime.hs`](test/ConstructionRuntime.hs). The pinned submodule already includes the `scanl` laziness fix; only the [allocator patch](patches/README.md) is needed.
 
   Before compiling callers, the reference runner checks each complete generated module and its home imports against the construction-only contract without whole-module waivers or stripped support declarations. Generated modules that use legacy sharing helpers, uncertified open class dictionaries (such as open `FoldableT` calls), or other uncertified class methods can translate and typecheck yet fail this pre-caller guard before reference comparison. The `generated-construction` selector tests the guard itself across construction, structural-view, observation/accounting support, demand-shrinker, stock `Eq`/`Show` and outer-tag, caller-arithmetic, scalar-comparison, and concrete `Repr` and home-method controls and expected rejections.
-- **Supplemental external-runtime probes** (validates `MemoristANT` runtime behavior directly):
+- **Supplemental external-runtime probes** (runs all four `cost-translate-integration` suites against `MemoristANT`):
   ```sh
-  sh scripts/stack-test.sh --stack-yaml integration/stack.yaml
+  sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration
   ```
 - **Linting**:
   ```sh
@@ -237,7 +238,7 @@ Test groups and selectors are defined in [`test/Main.hs`](test/Main.hs).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). The external `hs-pbt/` checkout remains subject to its own license.
+This project is licensed under the [MIT License](LICENSE). The external `hs-pbt/` submodule remains subject to its own license.
 
 ## AI Usage Declaration
 

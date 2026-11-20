@@ -16,12 +16,13 @@ Artifacts:
 ## How to run
 
 ```sh
-stack --stack-yaml integration/stack.yaml test cost-translate-integration
+sh scripts/stack-test.sh --stack-yaml integration/stack.yaml cost-translate-integration
 ```
 
-The root translator now builds independently with `stack build`. The separate
-integration project uses the external runtime and QuickCheck 2.17.1.0. See
-`IMPLEMENTATION-STATUS.md` for generated-code checks and current delivery status.
+The translator can build without the runtime using `cabal build exe:cost-translate`.
+The integration tests use the [patched `hs-pbt/` submodule](../../patches/README.md)
+and QuickCheck 2.17.1.0. See `IMPLEMENTATION-STATUS.md` for the checks recorded
+at this checkpoint.
 
 ## Cost derivation table
 
