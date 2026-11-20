@@ -3,14 +3,21 @@
 Status: needs-triage
 Type: task
 
-## Verified case
+## Verified cases
 
 - Selector: `anf-scoped-renaming`
 - Source: `test/cases/anf-scoped-renaming/Renamed.hs`
+- Independently verified sibling: `test/cases/anf-scoped-renaming/Shadowed.hs`
 - Caller: `test/cases/anf-scoped-renaming/Case.hs`
 - Independent reference: `test/cases/anf-scoped-renaming/Reference.hs`
 - Verified implementation pin: `e4633c8d5fea09498c9d52d8be18217fe0afa4fb`
 - Source SHA256: `8b885b286ceeec210b5302b2296e4ac6fe0fc6903d08d169e2029acf0f32dab9`
+
+The earlier pin and source hash above describe the original Renamed receipt.
+The authoritative audit at `e5d4652cd08a4cb4a02d1b9fbc9ac22d67026268`
+independently executes both variants and observes the same three mismatches
+below for each. Both remain open; neither is inferred from its sibling.
+See [the audit map](../map.md) for provenance and the exact classification.
 
 The complete-output checks and ordinary caller compilation succeed. The
 reference comparison then reports matching values but different demanded costs:
@@ -38,8 +45,9 @@ sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
 
 The existing selector runs source variants in sorted order. `Renamed.hs` is
 first, so its failure currently prevents the same command from reaching
-`Shadowed.hs`. Classify that sibling independently in the new per-source
-reference inventory.
+`Shadowed.hs`. The unpublished audit independently selected each source;
+the baseline CLI has no per-source command. Per-source CLI reproduction is
+pending, not an additional argument to the command above.
 
 ## Intended behavior and scope
 
@@ -68,5 +76,6 @@ or treating the passing partition as full reference-suite success.
 
 ## Comments
 
-- The initial issue covers only the source variant verified above. Add other
-  cases only after their fresh results establish the same failure.
+- The fresh authoritative audit adds `Shadowed.hs` after independent execution.
+  Preserve complete-output guards and ordinary caller compilation before every
+  comparison, including the separate known-failure run.
