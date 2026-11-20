@@ -30,6 +30,7 @@ externalFailure origin context diagnostic =
 isSetup :: ExternalDiagnostic -> String -> Bool
 isSetup TranslationDiagnostic diagnostic =
     "setup error:" `isPrefixOf` diagnostic ||
+    isSetup CompilationDiagnostic diagnostic ||
     ("source error:" `isPrefixOf` diagnostic &&
      any (`isInfixOf` diagnostic)
         ["unknown symbol", "undefined symbol", "Symbol not found", "dlopen", "panic!"])
