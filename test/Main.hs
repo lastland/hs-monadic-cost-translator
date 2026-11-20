@@ -13,7 +13,7 @@ import ProducerSharing (checkProducerSharing)
 import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverReferenceCases, validateReferenceCases)
 import ReferenceRunner
     ( ReferenceEnvironment, checkGeneratedConstructionLifecycle, checkGeneratedFunctionLifecycle, checkReferenceHarness
-    , prepareReferenceEnvironment, runReferenceCase
+    , prepareReferenceEnvironment, runReferenceCase, checkOptimizedReferenceCases
     )
 import RuntimeAllocator (checkRuntimeAllocator)
 import ScalarComparisonChecks (checkScalarComparisonCallers)
@@ -96,6 +96,8 @@ runGroup environment (Semantic label sources) = do
     context <- requireEnvironment environment
     artifacts <- runReferenceCase context (label, sources)
     when (label == "caller-scalar-comparisons") (checkScalarComparisonCallers context artifacts)
+    when (label == "recursive-tree-representation")
+        (checkOptimizedReferenceCases "recursive Tree reprM" context artifacts)
     mapM_ (checkGeneratedArtifacts label) artifacts
     putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
 runGroup _ Diagnostics = checkDiagnostics

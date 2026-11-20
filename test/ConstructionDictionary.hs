@@ -1,6 +1,6 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
-    instantiateUse, instantiateTypes, substitute, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
+    instantiateUse, instantiateTypes, substitute, predicateOf, closedFamilyStep, projected, transported, descendant, sameEvidence, sameUse) where
 
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
@@ -232,15 +232,21 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False
         result <- normalize path source
         -- Both wrappers were validated when traced. After exact substitution,
         -- a forward/inverse pair recovers the original selected dictionary.
-        pure $ case result of
-            Transport _ parent | maybe False (eqType ty) (predicateOf parent) -> parent
-            _ | maybe False (eqType ty) (predicateOf result) -> result
-              | otherwise -> Transport ty result
+        pure (transported ty result)
     normalize _ given@Given{} = Just given
     normalize _ Unknown{} = Nothing
     normalize _ builtin@BuiltinTag{} = Just builtin
     progress sel df origin (prevSel, prevDf, prev) = sel /= prevSel || df /= prevDf || descendant origin prev
 projected _ ev = Just ev
+
+-- Both endpoints come from traced, validated transport. After substitution,
+-- an exact forward/inverse pair recovers the original selected dictionary.
+-- This is a root operation: it does not traverse or project other evidence.
+transported :: Type -> Evidence -> Evidence
+transported endpoint source = case source of
+    Transport _ parent | maybe False (eqType endpoint) (predicateOf parent) -> parent
+    _ | maybe False (eqType endpoint) (predicateOf source) -> source
+      | otherwise -> Transport endpoint source
 
 -- Allow another application of the same field only on an actual, strictly
 -- nested dictionary from the previous call. Synthetic growing cycles stop.

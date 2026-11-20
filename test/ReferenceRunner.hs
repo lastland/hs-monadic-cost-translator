@@ -4,7 +4,7 @@ module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
     , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
     , checkGeneratedConstructionLifecycle
-    , buildObserver, buildObserverAt, comparer
+    , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
@@ -92,6 +92,18 @@ buildObserver = buildObserverWith []
 
 buildObserverAt :: String -> ReferenceEnvironment -> FilePath -> IO FilePath
 buildObserverAt optimization = buildObserverWith [optimization]
+
+-- Rebuild the same ordinary lifecycle artifacts without changing their probes,
+-- generated publication, or independent handwritten value/cost oracle.
+checkOptimizedReferenceCases :: String -> ReferenceEnvironment -> [Artifacts] -> IO ()
+checkOptimizedReferenceCases label environment artifacts = forM_ artifacts $ \artifact ->
+    forM_ ["-O0", "-O2"] $ \optimization -> do
+        actual <- buildObserverAt optimization environment (generatedDirectory artifact)
+        expected <- buildObserverAt optimization environment (referenceDirectory artifact)
+        (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+        writeFile (generatedDirectory artifact </> ("comparison" ++ optimization ++ ".log")) (out ++ err)
+        unless (status == ExitSuccess) (fail (optimization ++ ": " ++ out ++ err))
+        putStrLn ("PASS: " ++ label ++ " / " ++ optimization ++ " / boundary cases and 200 randomized value/cost comparisons")
 
 buildObserverWith :: [String] -> ReferenceEnvironment -> FilePath -> IO FilePath
 buildObserverWith options environment sandbox = do

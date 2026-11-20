@@ -363,7 +363,17 @@ checkUse rules origin utility = check
                     all (null . check (active : stack) field . apply) obligations)
             _ -> False
         identical (Active method ev carrier) (Active other previous oldCarrier) =
-            method == other && sameEvidence ev previous && sameEvidence carrier oldCarrier
+            method == other && sameEvidence (roundTrips ev) (roundTrips previous) &&
+                sameEvidence carrier oldCarrier
+        -- Compare only: Active, context checks, substitutions and diagnostics
+        -- retain every original transport. Preserve all non-transport identity
+        -- and ordered children; only an exact endpoint round trip can disappear.
+        roundTrips (Instance owner predicate args ds) =
+            Instance owner predicate args (map roundTrips ds)
+        roundTrips (Super selector predicate parent) =
+            Super selector predicate (roundTrips parent)
+        roundTrips (Transport endpoint parent) = transported endpoint (roundTrips parent)
+        roundTrips ev = ev
         progress (Active _ ev@(Instance owner _ args ds) carrier) (Active _ ancestor@(Instance previous _ oldArgs oldDs) oldCarrier) =
             owner /= previous || descendant ev ancestor ||
                 (sameEvidence carrier oldCarrier && permutation eqType args oldArgs && permutation sameEvidence ds oldDs) ||
