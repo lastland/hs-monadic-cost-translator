@@ -187,8 +187,8 @@ test-suite cost-translate-test
                      GeneratedFunctions
                      ReferencePolicy
                       ReferenceRunner
-        ProducerSharing
-        CapturedKeySharing
+                      ProducerSharing
+                      CapturedKeySharing
                      RuntimeAllocator
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate
