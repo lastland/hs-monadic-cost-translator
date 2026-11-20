@@ -4,6 +4,7 @@ module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
     , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
     , checkGeneratedConstructionLifecycle
+    , checkSourceScopeLifecycle
     , buildObserver, buildObserverAt, comparer
     ) where
 
@@ -11,7 +12,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
-import GeneratedConstruction (checkGeneratedConstructionWithOrigin)
+import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
 import GeneratedFunctions (checkTopLevelFunctions)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
@@ -22,6 +23,8 @@ import System.Environment (getEnvironment, getExecutablePath)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO.Temp (createTempDirectory)
+import System.IO.Error (ioeGetErrorString)
+import Control.Exception (IOException, try)
 import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 
 data ReferenceEnvironment = ReferenceEnvironment
@@ -137,25 +140,32 @@ checkGeneratedConstructionLifecycle environment = do
     putStrLn "PASS: generated-construction / ordinary fixture lifecycle rejects reasoning operations, unused naming helpers and a wrong selected carrier before caller compilation"
 
 checkPublicationGuard :: ReferenceEnvironment -> String -> FilePath -> [String] -> IO ()
-checkPublicationGuard environment label specimen expected = do
+checkPublicationGuard environment = checkPublicationGuardFor environment "identity"
+
+checkPublicationGuardFor :: ReferenceEnvironment -> String -> String -> FilePath -> [String] -> IO ()
+checkPublicationGuardFor environment selector label specimen expected =
+    checkPublicationGuardUsing environment selector label specimen "PublishMissing.sh" [] expected
+
+checkPublicationGuardUsing :: ReferenceEnvironment -> String -> String -> FilePath -> String -> [(String, String)] -> [String] -> IO ()
+checkPublicationGuardUsing environment selector label specimen wrapperName extraEnvironment expected = do
     root <- createTempDirectory (environmentRoot environment) (label ++ "-lifecycle-")
     let commands = root </> "commands"
         wrapper = commands </> "ghc"
         marker = root </> "mutation.log"
     createDirectoryIfMissing True commands
     realGhc <- findExecutable "ghc" >>= maybe (fail "lifecycle specimen requires ghc") pure
-    wrapperSource <- getDataFileName ("test" </> "generated-functions" </> "PublishMissing.sh")
+    wrapperSource <- getDataFileName ("test" </> "generated-functions" </> wrapperName)
     replacement <- getDataFileName ("test" </> specimen)
     copyFile wrapperSource wrapper
     permissions <- getPermissions wrapper
     setPermissions wrapper permissions { executable = True }
     executablePath <- getExecutablePath
     processEnvironment <- getEnvironment
-    let injected =
+    let injected = extraEnvironment ++
             [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" processEnvironment))
             ,("TMPDIR", root), ("FUNCTION_SPECIMEN_GHC", realGhc)
              ,("FUNCTION_SPECIMEN_OUTPUT", replacement), ("FUNCTION_SPECIMEN_LOG", marker)]
-        child = (proc executablePath ["identity"])
+        child = (proc executablePath [selector])
             { env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) processEnvironment) }
     (status, out, err) <- readCreateProcessWithExitCode child ""
     writeFile (root </> "lifecycle.log") (out ++ err)
@@ -172,6 +182,43 @@ checkPublicationGuard environment label specimen expected = do
               out ++ err ++ "\nArtifacts: " ++ root)
   where
     prefix = "Reference fixtures and logs: "
+
+checkSourceScopeLifecycle :: ReferenceEnvironment -> IO ()
+checkSourceScopeLifecycle environment = do
+    artifacts <- runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"])
+    forM_ artifacts $ \artifact -> do
+        result <- try (checkGeneratedConstruction (generatedDirectory artifact </> "Generated.hs"))
+        case result of
+            Left (err :: IOException) ->
+                unless ("Example.hs:9:" `isInfixOf` ioeGetErrorString err &&
+                    "GHC.Internal.Base.map" `isInfixOf` ioeGetErrorString err)
+                    (fail ("strict standalone rejected for the wrong reason: " ++ show err))
+            Right () -> fail "standalone construction checking must remain strict"
+        forM_ ["-O0", "-O2"] $ \optimization -> do
+            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
+            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
+            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+            unless (status == ExitSuccess) (fail (out ++ err))
+    manual <- runReferenceCase environment ("manual-thunk-arguments", ["examples/ThunkArguments.hs"])
+    forM_ manual $ \artifact ->
+        forM_ ["-O0", "-O2"] $ \optimization -> do
+            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
+            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
+            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+            unless (status == ExitSuccess) (fail (out ++ err))
+    checkPublicationGuardFor environment "source-map" "origin-term"
+        ("generated-construction" </> "OriginTermPublication.hs")
+        ("ordinary originating-source term reference Example.keep" :
+         "ordinary originating-source term reference Example.partial" :
+         [ "Generated.hs:" ++ show line ++ ":"
+          | line <- [10, 16, 19, 25, 28, 31, 37, 43 :: Int] ])
+    forM_ [("snapshot", "accepted origin snapshot mismatch"),
+           ("options", "accepted origin snapshot mismatch"),
+           ("path", "origin loaded from an unrecorded path")] $ \(mutation, diagnostic) ->
+        checkPublicationGuardUsing environment "source-map" ("origin-" ++ mutation)
+            ("generated-construction" </> "OriginTermPublication.hs")
+            "PublishOriginMutation.sh" [("ORIGIN_SPECIMEN_MUTATION", mutation)] [diagnostic]
+    putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
 
 -- These are infrastructure specimens, not translator correctness evidence.
 -- They deliberately inject known mistakes and must be rejected by the same

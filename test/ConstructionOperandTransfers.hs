@@ -38,8 +38,9 @@ type Call = (SrcSpan, Name, Type)
 -- types. AbsBinds exports can use different quantified variables.
 data Body = Body { definingHome :: Module, template :: Type, forcedOperands :: [Type], calls :: [Call] }
 
-ordinaryOperandTransfers :: (Module -> Type -> Bool) -> QuickCheck -> [TypecheckedModule] -> [String]
-ordinaryOperandTransfers result qc modules = concatMap report sources
+ordinaryOperandTransfers :: [Module] -> (Module -> Type -> Bool) -> QuickCheck -> [TypecheckedModule] -> [String]
+ordinaryOperandTransfers origins result qc modules =
+    concatMap report (filter ((`notElem` origins) . fst) sources)
   where
     sources = [(checkedHome m, tm_typechecked_source m) | m <- modules]
     bodies = Map.fromList [(n, body) | (home, source) <- sources, b <- collectAst source, Just (n, body) <- [bindingBody home qc b]]

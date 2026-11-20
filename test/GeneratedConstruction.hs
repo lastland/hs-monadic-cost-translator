@@ -110,8 +110,8 @@ constructionReportsWithOrigin publication output =
                 (syntaxProblems, sites) = checkSyntax original rt utilities locals uses homes methods views checked
             evidence <- collectEvidence original rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
-        pure (originReferences origins checkedModules ++ concatMap fst reports ++ ordinaryOperandTransfers qcResult qc
-                (filter ((`notElem` origins) . checkedHome) checkedModules) ++
+        pure (originReferences origins checkedModules ++ concatMap fst reports ++
+            ordinaryOperandTransfers origins qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules)
                 (scalarComparisonFacts output checkedModules) (concatMap snd reports))
 
