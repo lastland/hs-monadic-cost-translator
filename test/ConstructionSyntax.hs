@@ -155,7 +155,7 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
     descend location value = foldr plus ([], []) (children (walk location) value)
     strictBinding FunBind{fun_matches = matches} = strictNullaryRhs matches
     strictBinding _ = False
-    shrinkBinding (FunBind _ name _) = shrinkSupport (supportAt utilities (getLocA name))
+    shrinkBinding (FunBind _ name _) = shrinkSupport (supportAt utilities checked (getLocA name))
     shrinkBinding _ = False
     nested location (Declaration binding) = walk location binding `plus`
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
@@ -176,13 +176,13 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
         ([pretty location ++ ": QuickCheck binding used outside a generator or property: " ++ describeName name], [])
     checkName location name = checkOperation location name
     checkOperation location name
-        | restrictedSupport utilities name, Nothing <- supportAt utilities location =
+        | restrictedSupport utilities name, Nothing <- supportAt utilities checked location =
             ([pretty location ++ ": support utility used by ordinary computation: " ++ describeName name], [])
         | permitted name || utilityOperation location name = ([], [])
         | otherwise =
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
           " operation " ++ describeName name ++ " is forbidden in generated code"], [])
-    utilityOperation location name = case (supportAt utilities location, roleOf rt name) of
+    utilityOperation location name = case (supportAt utilities checked location, roleOf rt name) of
         (Just roles, Just operation) -> not (null roles) && all (`permits` operation) roles
         _ -> False
     permits AbstractMethod role = role `elem` [AbstractMethod, Payload]

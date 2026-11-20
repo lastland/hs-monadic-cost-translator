@@ -33,63 +33,63 @@ import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
-import GHC.Types.SrcLoc (getBufSpan)
+import GHC.Types.SrcLoc (getBufSpan, bufSpanStart, bufSpanEnd)
 import GHC.Types.Name.Set (NameSet)
 
 -- Permission belongs to the nominal class field, never its dictionary or
 -- spelling. Every nested declaration starts a fresh ordinary obligation.
-data Support = Support [(SrcSpan, Maybe [Role])] (Map.Map Name [Role]) (Set.Set Name) (Set.Set Name)
+data Support = Support [(Module, SrcSpan, Maybe [Role])] (Map.Map Name [Role]) (Set.Set Name) (Set.Set Name)
 
 supportRoles :: Runtime -> QuickCheck -> [Name] -> [(TypecheckedModule, C.CoreProgram)] -> Support
 supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrappers
   where
     modules = map fst programs
-    roots = [(getLocA n, role) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+    roots = [((checkedHome m, getLocA n), role) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         FunBind _ n _ <- collectAst group :: [HsBind GhcRn],
-        getLocA n `elem` methods, Just role <- [selectorRole (unLoc n)]]
+        (checkedHome m, getLocA n) `elem` methods, Just role <- [selectorRole (unLoc n)]]
     selectorRole name | name `elem` shrinkers = Just DemandShrink
                       | Just role <- roleOf rt name, role `elem` [AbstractMethod, FullMethod, UsageMethod] = Just role
                       | otherwise = Nothing
     bindings = [(m, b) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         b <- collectAst group :: [HsBind GhcRn]]
-    methods = [getLocA n | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+    methods = [(checkedHome m, getLocA n) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         inst <- collectAst group :: [ClsInstDecl GhcRn], L _ (FunBind _ n _) <- toList (cid_binds inst)] ++
-        [getLocA n | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+        [(checkedHome m, getLocA n) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         ClassDecl{tcdMeths = bs} <- collectAst group :: [TyClDecl GhcRn],
         L _ (FunBind _ n _) <- toList bs]
-    helper (FunBind _ n _) = isExternalName (unLoc n) && getLocA n `notElem` methods
-    helper _ = False
+    helper m (FunBind _ n _) = isExternalName (unLoc n) && (checkedHome m, getLocA n) `notElem` methods
+    helper _ _ = False
     references b = concat (children supportReferences b)
-    edges = Map.fromList [(n, references b) | (_, b) <- bindings, helper b, Just n <- [bindingName b]]
-    forwardReach role = reachable edges (Set.fromList [n | (_, b@(FunBind _ binder _)) <- bindings,
-        lookup (getLocA binder) roots == Just role, n <- references b])
+    edges = Map.fromList [(n, references b) | (m, b) <- bindings, helper m b, Just n <- [bindingName b]]
+    forwardReach role = reachable edges (Set.fromList [n | (m, b@(FunBind _ binder _)) <- bindings,
+        lookup (checkedHome m, getLocA binder) roots == Just role, n <- references b])
     -- Exported wrappers have the same pure-list interface. Certify only an
     -- alias or an eta-expanded forwarding equation to a known shrink utility,
     -- never an arbitrary list result or a callback-taking adapter.
     shrinkWrappers = wrappers (Set.fromList shrinkers)
     shrinkReach = Set.union shrinkWrappers (Set.intersection (Map.keysSet edges) (forwardReach DemandShrink))
     wrappers known = let next = Set.union known (Set.fromList
-                             [n | (_, b) <- bindings, helper b, Just n <- [bindingName b], forwards known b])
+                             [n | (m, b) <- bindings, helper m b, Just n <- [bindingName b], forwards known b])
                      in if next == known then known else wrappers next
     reached DemandShrink = shrinkReach
     reached role = forwardReach role
     supportKinds = [AbstractMethod, FullMethod, UsageMethod, DemandShrink]
     candidates = Set.unions (map reached supportKinds)
     ordinary = reachable edges (Set.fromList [n | (m, b) <- bindings,
-        not (quickCheckBody qc m b), not (maybe False (`Set.member` candidates) (bindingName b) && helper b),
-        not (case b of FunBind _ binder _ -> getLocA binder `elem` map fst roots; _ -> False),
+        not (quickCheckBody qc m b), not (maybe False (`Set.member` candidates) (bindingName b) && helper m b),
+        not (case b of FunBind _ binder _ -> (checkedHome m, getLocA binder) `elem` map fst roots; _ -> False),
         n <- references b])
     helperRoles n = [role | role <- supportKinds,
         n `Set.member` reached role, n `Set.notMember` ordinary, Map.member n edges]
-    sourceRole n = case lookup (getLocA n) roots of
+    sourceRole m n = case lookup (checkedHome m, getLocA n) roots of
         Just role -> Just [role]
         Nothing -> case helperRoles (unLoc n) of [] -> Nothing; roles -> Just roles
-    regions = [(getLocA b, case unLoc b of
-            FunBind _ n _ -> sourceRole n
+    regions = [(checkedHome m, getLocA b, case unLoc b of
+            FunBind _ n _ -> sourceRole m n
             _ -> Nothing) | m <- modules,
         Just (group, _, _, _, _) <- [tm_renamed_source m],
         b <- collectAst group :: [LHsBind GhcRn]]
-    typed = [(getName (unLoc n), getLocA n) | m <- modules, n <- functionBinders m]
+    typed = [(getName (unLoc n), (checkedHome m, getLocA n)) | m <- modules, n <- functionBinders m]
     exports = [(getName poly, getName mono) | m <- modules,
         ABE poly mono _ _ <- collectAst (tm_typechecked_source m)]
     fields = [(getName method, role) | (_, program) <- programs, (df, rhs) <- C.flattenBinds program, isDFunId df,
@@ -101,7 +101,7 @@ supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrap
         (selector, value) <- zip (classAllSelIds cls) values,
         Just role <- [selectorRole (getName selector)],
         (C.Var method, _) <- [C.collectArgs value]]
-    sourceRoles = [(getLocA n, roles) | (_, FunBind _ n _) <- bindings, Just roles <- [sourceRole n]]
+    sourceRoles = [((checkedHome m, getLocA n), roles) | (m, FunBind _ n _) <- bindings, Just roles <- [sourceRole m n]]
     defaults = [name | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)), Just cls <- [tyConClass_maybe tc],
         (method, Just (name, _)) <- classOpItems cls, getName method `elem` shrinkers]
     initial = Map.fromList ([(name, [DemandShrink]) | name <- defaults] ++ [(name, [role]) | (name, role) <- fields] ++
@@ -114,12 +114,16 @@ supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrap
         v <- collectHsBindBinders CollNoDictBinders b]
     declared = Set.fromList (sourceNames ++ [poly | (poly, mono) <- exports, mono `elem` sourceNames])
 
-supportAt :: Support -> SrcSpan -> Maybe [Role]
-supportAt (Support regions _ _ _) at = case
-    [(region, role) | (region, role) <- regions, at `isSubspanOf` region,
-        not (any (\(inner, _) -> inner /= region && inner `isSubspanOf` region && at `isSubspanOf` inner) regions)] of
+supportAt :: Support -> TypecheckedModule -> SrcSpan -> Maybe [Role]
+supportAt (Support modules _ _ _) checked at = case
+    [(region, role) | (region, role) <- regions, at `within` region,
+        not (any (\(inner, _) -> inner /= region && inner `within` region && at `within` inner) regions)] of
     [(_, role)] -> role
     _ -> Nothing
+  where regions = [(region, role) | (owner, region, role) <- modules, owner == checkedHome checked]
+        within inner outer = case (getBufSpan inner, getBufSpan outer) of
+            (Strict.Just a, Strict.Just b) -> bufSpanStart b <= bufSpanStart a && bufSpanEnd a <= bufSpanEnd b
+            _ -> False
 
 supportBinding :: Support -> Name -> Maybe [Role]
 supportBinding (Support _ names _ _) name = Map.lookup name names

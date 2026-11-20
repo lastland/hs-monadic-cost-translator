@@ -187,7 +187,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
     componentKey a b = case (getBufSpan a, getBufSpan b) of
         (Strict.Just p, Strict.Just e) -> Just (p, e)
         _ -> Nothing
-    record location = recordRole (supportAt utilities location) location
+    record location = recordRole (supportAt utilities checked location) location
     recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner role) us
       where owner = contextSite homes site
 
