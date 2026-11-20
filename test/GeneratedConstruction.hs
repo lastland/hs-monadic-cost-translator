@@ -132,7 +132,7 @@ checkGeneratedConstructionSpecimens = do
     checksOperandPropertyCall
     accepts "OperandBoxControl.hs"
     mixed "OperandBoxUse.hs" [TopBinding "prop_packed"] "OperandBoxUse.hs"
-        [(7, qcValue "OperandBoxControl.Box")]
+        [(8, qcValue "OperandBoxControl.Box")]
     mixed "OperandNamedBang.hs" (map TopBinding ["first", "atBool", "prop_local", "project", "prop_project", "prop_callback"]) "OperandNamedBang.hs"
         [(22, qcValue "OperandNamedBang.first"), (25, qcValue "OperandNamedBang.first")]
     mixed "OperandUpdateAlternatives.hs" [TopBinding "prop_other"] "OperandUpdateAlternatives.hs"

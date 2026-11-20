@@ -67,8 +67,8 @@ quickCheckUses result = inModule
         -- bare specialization there is no source operand to report.
         applied = Set.fromList [key | HsApp _ f _ <- collectAst source :: [HsExpr GhcTc],
             Just key <- [variableSite f]]
-        site expression | Just (loc, name, fields) <- strictConstructorOperands expression, any (quickCheckOperand result) fields =
-            (,name) <$> inputSpan loc
+        site expression | Just (bytes, name, fields) <- strictConstructorOperands expression, any (quickCheckOperand result) fields =
+            Just (bytes, name)
         site expression = do
             key@(_, name) <- variableSite expression
             let ty = lhsExprType expression

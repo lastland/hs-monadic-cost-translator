@@ -18,7 +18,7 @@ import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsExprType, lhsExprType)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
-import GHC.Types.SrcLoc (getBufSpan, srcSpanToRealSrcSpan)
+import GHC.Types.SrcLoc (BufSpan, getBufSpan, srcSpanToRealSrcSpan)
 import GHC.Utils.Outputable (Outputable, ppr, showSDocUnsafe)
 
 collectAst :: (Data a, Data b) => b -> [a]
@@ -93,7 +93,7 @@ typedVariable expression = case typedHead expression of
 
 -- Field bangs are in declaration order. Read their operand types from the
 -- instantiated wrapper, even for a bare constructor with no written arguments.
-strictConstructorOperands :: LHsExpr GhcTc -> Maybe (SrcSpan, Name, [Type])
+strictConstructorOperands :: LHsExpr GhcTc -> Maybe (BufSpan, Name, [Type])
 strictConstructorOperands expression = case typedHead expression of
     (loc, XExpr (ConLikeTc (RealDataCon con) _ _)) -> fields loc con (lhsExprType expression)
     (_, RecordCon{rcon_con = n, rcon_ext = actual}) | RealDataCon con <- unLoc n ->
@@ -101,7 +101,7 @@ strictConstructorOperands expression = case typedHead expression of
     _ -> Nothing
   where
     fields loc con ty = case getBufSpan loc of
-        Strict.Just _ -> let (_, _, body) = tcSplitSigmaTy ty in Just (loc, getName con,
+        Strict.Just bytes -> let (_, _, body) = tcSplitSigmaTy ty in Just (bytes, getName con,
             [scaledThing arg | (bang, arg) <- zip (dataConImplBangs con) (fst (splitFunTys body)), isBanged bang])
         Strict.Nothing -> Nothing
 
