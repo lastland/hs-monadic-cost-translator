@@ -1,9 +1,10 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
-module ConstructionAst (collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
+module ConstructionAst (collectAst, children, atSourceSpan, reachable, allBindings, nestedBindings, pretty, spine, variable, typedVariable, call, bindingName, plainPattern, constructorPattern, oneRhs, equations) where
 
 import Data.Data (Data, cast, gmapQ)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, maybeToList)
+import qualified Data.Set as Set
 import GHC
 import qualified GHC.Core as C
 import GHC.Core.ConLike (ConLike)
@@ -30,6 +31,13 @@ atSourceSpan entries = \at -> [value | (location, value) <- Map.findWithDefault 
   where
     key at = (srcSpanToRealSrcSpan at, getBufSpan at)
     index = Map.fromListWith (++) [(key at, [entry]) | entry@(at, _) <- reverse entries]
+
+reachable :: Map.Map Name [Name] -> Set.Set Name -> Set.Set Name
+reachable edges initial = go initial (Set.toList initial)
+  where
+    go seen [] = seen
+    go seen (n:rest) = let next = Set.fromList (Map.findWithDefault [] n edges) `Set.difference` seen
+                       in go (Set.union seen next) (Set.toList next ++ rest)
 
 -- Visit each binding immediately before the let bindings in its RHS.
 allBindings :: C.CoreProgram -> [(Id, C.CoreExpr)]

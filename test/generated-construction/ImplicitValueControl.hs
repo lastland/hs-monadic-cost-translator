@@ -25,3 +25,15 @@ reboundCall t = let ?seen = M.tval t in
   where
     helper :: (?seen :: Bool) => () -> Bool
     helper () = True
+
+-- Both ?n declarations and both RHSs print the same spans. Only mapped
+-- uses the observation; the ordinary dictionary in unusedInt is lawful.
+mapped :: M.Th Bool -> Q.Property
+mapped t =
+{-# LINE 70 "SharedImplicit.hs" #-}
+    let ?n = M.tval t in Q.property ?n
+
+unusedInt :: Q.Property
+unusedInt =
+{-# LINE 70 "SharedImplicit.hs" #-}
+    let ?n = (1::Int) in Q.property True

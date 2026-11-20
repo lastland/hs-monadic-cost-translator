@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitSource,
     implicitBindingAt, nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings, spine, typedVariable, variable)
+import ConstructionAst (bindingName, children, collectAst, nestedBindings, reachable, spine, typedVariable, variable)
 import ConstructionImplicit
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
@@ -12,6 +12,7 @@ import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
+import GHC.Builtin.Names (dollarName)
 import qualified GHC.Core as C
 import GHC.Core.Coercion (coercionLKind, coercionRKind, topNormaliseNewType_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -20,7 +21,7 @@ import GHC.Core.Type (isPiTy, isTyVarTy, splitTyConApp_maybe)
 import GHC.Hs.Syn.Type (hsExprType, lhsExprType)
 import GHC.Tc.Types.Evidence (HsWrapper(..))
 import GHC.Types.Basic (Boxity(Boxed))
-import GHC.Types.Name (isInternalName)
+import GHC.Types.Name (isInternalName, nameModule_maybe)
 import GHC.Types.Name.Set (NameSet)
 
 data Locals = Locals
@@ -90,21 +91,24 @@ components _ = Nothing
 implicitBodies :: HsGroup GhcRn -> [LHsExpr GhcRn]
 implicitBodies group = [rhs | IPBind _ _ rhs <- collectAst group]
 
+data LocalRole = Testing | Value | Ordinary deriving Eq
+
 localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
 localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries parameters
   where
     groups = [(m, group, implicitParameters m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
     parameters = Map.fromList [(ms_mod (pm_mod_summary (tm_parsed_module m)), ip) | (m, _, ip) <- groups]
-    roots = [(quickCheckBody qc m b, readAt ip, bodyParts (readAt ip) b) | (m, group, ip) <- groups, b <- fst (parts (const []) group)]
-    ips = [(bindingAt ip (getLocA rhs), readAt ip, parts (readAt ip) rhs) | (_, group, ip) <- groups, rhs <- implicitBodies group]
-    local readsIP b = concat [(generator b, value b, ns, refs) : concatMap (local readsIP) nested | (ns, (nested, refs)) <- regions]
+    region ip role ns (bs, refs) = (role, ns, refs) : concatMap (local ip) bs
+    locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (readAt ip) b) |
+        (m, group, ip) <- groups, b <- fst (parts (const []) group)] ++
+        concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (readAt ip) rhs) |
+            (_, group, ip) <- groups, rhs <- implicitBodies group, let vs = [v | Just (v, _) <- [bindingAt ip (getLocA rhs)]]]
+    local ip b = concat [region ip role ns body | (ns, body) <- regions]
       where
+        role | generator b = Testing | value b = Value | otherwise = Ordinary
         regions | value b, Just fields <- components b =
-                    [(collectPatBinders CollNoDictBinders p, parts readsIP e) | (p, e) <- fields]
-                | otherwise = [(names b, bodyParts readsIP b)]
-    locals = [entry | (readsIP, (bs, _)) <- [(r, body) | (_, r, body) <- roots] ++ [(r, body) | (_, r, body) <- ips],
-        b <- bs, entry <- local readsIP b] ++
-        [(False, maybe False (scalarIP . fst) binder, [getName v | Just (v, _) <- [binder]], refs) | (binder, _, (_, refs)) <- ips]
+                    [(collectPatBinders CollNoDictBinders p, parts (readAt ip) e) | (p, e) <- fields]
+                | otherwise = [(names b, bodyParts (readAt ip) b)]
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
@@ -112,27 +116,28 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
     value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
-    deps = Map.fromList [(n, refs) | (_, True, ns, refs) <- locals, n <- ns]
+    deps = Map.fromList [(n, refs) | (Value, ns, refs) <- locals, n <- ns]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
-    live = reachable deps (Set.fromList (concat [refs | (True, _, (_, refs)) <- roots] ++ concat [refs | (True, _, _, refs) <- locals]))
+    live = reachable deps (Set.fromList [ref | (Testing, _, refs) <- locals, ref <- refs])
     consumed ns = not (null ns) && all (`Set.member` live) ns
-    ordinary = reachable deps (Set.unions (passed : Set.fromList (concat [refs | (False, _, (_, refs)) <- roots] ++
-        [ref | (False, isValue, ns, refs) <- locals, not (isValue && consumed ns), ref <- refs]) : [supplied ip | (_, _, ip) <- groups]))
-    values = Set.fromList [n | (_, True, ns, _) <- locals, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
-    independent = Set.fromList [n | (_, _, ns, _) <- locals, n <- ns, Set.notMember n values]
+    ordinary = reachable deps (Set.unions (passed : ordinaryRefs : [supplied ip | (_, _, ip) <- groups]))
+    ordinaryRefs = Set.fromList [ref | (role, ns, refs) <- locals, role == Ordinary || (role == Value && not (consumed ns)), ref <- refs]
+    values = Set.fromList [n | (Value, ns, _) <- locals, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
+    independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
     dictionaries = Map.fromList [site | (_, _, ip) <- groups, site <- declarations ip]
     -- An explicit scalar argument of an ordinary home helper crosses the
     -- same boundary as an implicit dictionary argument, including via aliases.
-    helpers = Set.fromList [n | (_, group, _) <- groups, b <- collectAst group, n <- names b, not (isQuickCheckBinding qc n)]
+    helper fn = not (isQuickCheckBinding qc fn) && (isInternalName fn || maybe False (`Map.member` parameters) (nameModule_maybe fn))
     passed = Set.intersection (Map.keysSet dictionaries) (reachable deps (Set.fromList
         [n | (_, group, ip) <- groups, not (null (declarations ip)), e <- collectAst group,
-        (f, args) <- applications e, Just fn <- [variable f], Set.member fn helpers,
-        arg <- args, n <- snd (parts (readAt ip) arg)]))
-    applications (HsApp _ f x) = [(fst (spine f), [x])]
-    applications (OpApp _ x f y) = [(f, [x,y])]
-    applications _ = []
+        (f, arg) <- arguments e, Just fn <- [variable (fst (spine f))], helper fn, n <- snd (parts (readAt ip) arg)]))
+    arguments (HsApp _ f x) | (op, [h]) <- spine f, variable op == Just dollarName = [(h, x)]
+                            | otherwise = [(f, x)]
+    arguments (OpApp _ x op y) | variable op == Just dollarName = [(x, y)]
+                               | otherwise = [(op, x), (op, y)]
+    arguments _ = []
 
 data Result = DataValue | Executable | Unknown deriving Eq
 
