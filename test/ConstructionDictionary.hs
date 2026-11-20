@@ -249,6 +249,11 @@ hasApplication (Transport _ parent) = hasApplication parent
 hasApplication (Lifted _ parent) = hasApplication parent
 hasApplication _ = False
 
+nominalReflexive :: Coercion -> Bool
+nominalReflexive Refl{} = True
+nominalReflexive (GRefl Nominal _ MRefl) = True
+nominalReflexive _ = False
+
 -- Only structural lifts of validated nominal closed-family equations.
 liftedTransport :: Coercion -> Bool
 liftedTransport = lifted
@@ -256,20 +261,17 @@ liftedTransport = lifted
     lifted (SubCo co) = nominal co
     lifted (SymCo co) = lifted co
     lifted (ForAllCo v left right kind body) =
-        isTyVar v && left == right && reflexive kind && lifted body
+        isTyVar v && left == right && nominalReflexive kind && lifted body
     lifted (FunCo Representational left right multiplicity argument result) =
-        left == right && reflexive multiplicity && lifted argument && lifted result
+        left == right && nominalReflexive multiplicity && lifted argument && lifted result
     lifted (GRefl Representational _ MRefl) = True
     lifted co = constraintTransport co
     nominal (ForAllCo v left right kind body) =
-        isTyVar v && left == right && reflexive kind && nominal body
+        isTyVar v && left == right && nominalReflexive kind && nominal body
     nominal (FunCo Nominal left right multiplicity argument result) =
-        left == right && reflexive multiplicity && nominal argument && nominal result
+        left == right && nominalReflexive multiplicity && nominal argument && nominal result
     nominal (SymCo co) = nominal co
-    nominal co = reflexive co || constraintTransport (SubCo co)
-    reflexive Refl{} = True
-    reflexive (GRefl Nominal _ MRefl) = True
-    reflexive _ = False
+    nominal co = nominalReflexive co || constraintTransport (SubCo co)
 
 -- Inert boxed equality fields retain nominal family proofs, never coercion
 -- variables or arbitrary casts. They confer no runtime method permission.
@@ -284,8 +286,7 @@ equalityTransport co = equality (coercionLKind co) && equality (coercionRKind co
 
 nominalFamily :: Coercion -> Bool
 nominalFamily co | coercionRole co /= Nominal = False
-nominalFamily Refl{} = True
-nominalFamily (GRefl Nominal _ MRefl) = True
+nominalFamily co | nominalReflexive co = True
 nominalFamily (SymCo co) = nominalFamily co
 nominalFamily (TransCo a b) = eqType (coercionRKind a) (coercionLKind b) &&
     nominalFamily a && nominalFamily b
@@ -361,13 +362,10 @@ constraintTransport (SubCo step) = nominal step
     nominal inner = equationStep inner
     equationStep equation@(AxiomInstCo ax _ xs) = case splitTyConApp_maybe (coercionLKind equation) of
         Just (tc, _) -> isPredTy (coercionLKind equation) && isPredTy (coercionRKind equation) &&
-            isClosedSynFamilyTyConWithAxiom_maybe tc == Just ax && all reflexive xs &&
+            isClosedSynFamilyTyConWithAxiom_maybe tc == Just ax && all nominalReflexive xs &&
             maybe False (eqType (coercionRKind equation)) (closedFamilyStep (coercionLKind equation))
         _ -> False
     equationStep _ = False
-    reflexive Refl{} = True
-    reflexive (GRefl Nominal _ MRefl) = True
-    reflexive _ = False
 constraintTransport (SymCo (SubCo step)) = constraintTransport (SubCo step)
 constraintTransport _ = False
 
