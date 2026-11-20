@@ -126,6 +126,8 @@ checkGeneratedConstructionSpecimens = do
     accepts "ConcreteFoldableClosure.hs"
     accepts "ConcreteFoldableHomeInstance.hs"
     checksFoldableSelf
+    rejectsAt "ConcreteFoldableDeadHelper.hs"
+        [(9, selected "ConcreteFoldableDeadHelper.run: unknown executable method/default dependency")]
     rejectsAt "ConcreteFoldableOverride.hs" [(11, forbidden tval)]
     rejectsIn "ConcreteFoldableImported.hs" "ConcreteFoldableHidden.hs"
         [(10, forbidden tval), (14, forbidden tval)]
