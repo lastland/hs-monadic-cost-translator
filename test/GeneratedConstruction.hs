@@ -315,6 +315,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "DemandConcreteRecursive.hs"
     accepts "DemandConcreteSum.hs"
     accepts "DemandConcreteLargeSum.hs"
+    accepts "RuntimeListLeaf.hs"
     checksParameterizedTags
     checksSelectedTags
     checksTagLaziness
