@@ -1,6 +1,6 @@
 -- | Narrow stock-method proofs. A deriving request identifies a definition,
 -- never a permission for a type or for a caller-supplied dictionary.
-module ConstructionDemandMethods (runtimeDemandMethod, stockMethods) where
+module ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType) where
 
 import ConstructionAst (collectAst)
 import ConstructionRuntime
@@ -14,15 +14,15 @@ import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
-import GHC.Core.TyCon (isDataTyCon, tyConSingleDataCon)
+import GHC.Core.Type (isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
+import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import GHC.Tc.Types (tcg_insts)
 
 -- This summary covers only the two pinned stock instances at Demand.hs:13-14.
 -- The actual DFun head, substitution, selected method, and one field dictionary
--- must all match. The caller still proves that dictionary recursively.
-runtimeDemandMethod :: Runtime -> Name -> Id -> Type -> [Type] -> [Type] -> Maybe Type
+-- must all match. The caller still proves the actual selected child method.
+runtimeDemandMethod :: Runtime -> Name -> Id -> Type -> [Type] -> [Type] -> Maybe (Name, Type)
 runtimeDemandMethod rt method df predicate args children = do
     (cls, [ty]) <- getClassPredTys_maybe predicate
     guard (standardMethod rt method cls)
@@ -36,8 +36,15 @@ runtimeDemandMethod rt method df predicate args children = do
         eqType (apply template) ty &&
         and (zipWith eqType (map (apply . scaledThing) context) children))
     (tc, [field]) <- splitTyConApp_maybe ty
-    guard (getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD" && scalarType field)
-    pure field
+    guard (getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD")
+    selected <- lookup method [(name, getName op) | (op, def) <- classOpItems cls,
+        name <- getName op : [n | Just (n, _) <- [def]]]
+    child <- case [(label, name) | label <- ["==", "showsPrec"], Just name <- [lookup ("Prelude." ++ label) (standardNames rt)],
+            name `elem` map getName (classAllSelIds cls)] of
+        [(_, name)] -> pure name
+        _ -> Nothing
+    guard (selected `elem` map getName (classAllSelIds cls))
+    pure (child, field)
 
 standardMethod :: Runtime -> Name -> Class -> Bool
 standardMethod rt method cls = any (\label -> case lookup ("Prelude." ++ label) (standardNames rt) of
@@ -45,15 +52,20 @@ standardMethod rt method cls = any (\label -> case lookup ("Prelude." ++ label) 
         method `elem` (selector : [name | Just (name, _) <- [def]])) (classOpItems cls)
     Nothing -> False) ["==", "/=", "show", "showsPrec", "showList"]
 
--- Closed data only: no newtype/coercion, type variables, recursion, callbacks or
--- unexamined home fields. This intentionally is not a general deriving engine.
-safeField :: Runtime -> Type -> Bool
-safeField rt ty = scalarType ty || demandField rt ty
-
-demandField :: Runtime -> Type -> Bool
-demandField rt ty = case splitTyConApp_maybe ty of
-    Just (tc, [field]) -> getName tc == runtimeName rt "Memorist.Data.Interface.Demand" "ThD" && scalarType field
-    _ -> False
+-- Closed ordinary data only. The sole recursive field form is ThD applied to
+-- this exact home type; every sibling field is checked before replay starts.
+safeHomeType :: Runtime -> TyCon -> Bool
+safeHomeType rt tc = isDataTyCon tc && not (isNewTyCon tc) &&
+    not (isFamInstTyCon tc) && isLiftedTypeKind (tyConResKind tc) &&
+    null (tyConTyVars tc) && not (null (tyConDataCons tc)) &&
+    all (\dc -> isVanillaDataCon dc && all (safeField . scaledThing) (dataConInstOrigArgTys dc [])) (tyConDataCons tc)
+  where
+    safeField ty = scalarType ty || case splitTyConApp_maybe ty of
+        Just (demand, [field]) -> getName demand == runtimeName rt "Memorist.Data.Interface.Demand" "ThD" &&
+            (scalarType field || case splitTyConApp_maybe field of
+                Just (home, []) -> home == tc
+                _ -> False)
+        _ -> False
 
 stockMethods :: Runtime -> TypecheckedModule -> Map.Map Name C.CoreExpr -> [(Id, [(Name, C.CoreExpr)])]
 stockMethods rt checked env = do
@@ -65,23 +77,33 @@ stockMethods rt checked env = do
     ([], predicate) <- [splitFunTys body]
     (cls, [ty]) <- maybe [] pure (getClassPredTys_maybe predicate)
     (tc, []) <- maybe [] pure (splitTyConApp_maybe ty)
-    let fieldsOf dc = map scaledThing (dataConInstOrigArgTys dc [])
-    guard ((getName cls, getName tc) `elem` requests && isDataTyCon tc && not (isNewTyCon tc) &&
-        null (tyConTyVars tc) && not (null (tyConDataCons tc)) &&
-        all (\dc -> isVanillaDataCon dc && all (safeField rt) (fieldsOf dc)) (tyConDataCons tc) &&
-        any (any (demandField rt) . fieldsOf) (tyConDataCons tc))
+    guard ((getName cls, getName tc) `elem` requests && safeHomeType rt tc)
     (C.Var worker, C.Type actual : fields) <- [C.collectArgs dictionary]
     guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)) && eqType actual ty &&
         length fields == length (classAllSelIds cls))
-    selected <- maybe [] pure (mapM (fieldBody cls) (zip (classAllSelIds cls) fields))
+    selected <- maybe [] pure (mapM (fieldBody cls fields) (zip (classAllSelIds cls) fields))
     pure (df, concat selected)
   where
-    fieldBody cls (selector, C.Var implementation) = do
+    fieldBody cls fields (selector, C.Var implementation) = do
         guard (standardMethod rt (getName selector) cls)
         rhs <- Map.lookup (getName implementation) env
-        pure [(n, rhs) | (op, def) <- classOpItems cls, op == selector,
-            n <- getName selector : [name | Just (name, _) <- [def]]]
-    fieldBody _ _ = Nothing
+        -- A default wrapper is not a proof of its own default. Replay the
+        -- substantive selected method on which the pinned standard default rests.
+        let dependency label = do
+                name <- lookup ("Prelude." ++ label) (standardNames rt)
+                implementation' <- lookup name [(getName s, e) | (s, e) <- zip (classAllSelIds cls) fields]
+                case implementation' of
+                    C.Var v -> Map.lookup (getName v) env
+                    _ -> Nothing
+            defaultBody = case lookup (getName selector) [(n, label) |
+                    (occ, label) <- [("/=", "=="), ("show", "showsPrec"), ("showList", "showsPrec")],
+                    Just n <- [lookup ("Prelude." ++ occ) (standardNames rt)]] of
+                Just label -> dependency label
+                Nothing -> Just rhs
+        defRhs <- defaultBody
+        pure ((getName selector, rhs) : [(name, defRhs) |
+            (op, Just (name, _)) <- classOpItems cls, op == selector])
+    fieldBody _ _ _ = Nothing
     -- On a data declaration the actual standard Eq/Show classes select stock
     -- derivation by default. Explicit anyclass/via/newtype strategies do not
     -- establish that proof. A manual instance cannot coexist with this request:

@@ -120,6 +120,18 @@ checkGeneratedConstructionSpecimens = do
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
     accepts "DemandScalarMethods.hs"
+    accepts "DemandConcreteRecursive.hs"
+    accepts "DemandConcreteSum.hs"
+    accepts "DemandConcreteLargeSum.hs"
+    rejectsAt "DemandRecursiveProtected.hs"
+        [(10, selected "GHC.Classes.==: unknown concrete scalar instance"),
+         (13, selected "GHC.Internal.Show.show: unknown concrete scalar instance")]
+    rejectsAt "DemandNestedMethod.hs"
+        [(6, demandEq), (9, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption")]
+    rejectsAt "TagForged.hs"
+        [(16, unknown "GHC.Magic.dataToTag#"), (22, unknown "GHC.Magic.dataToTag#"),
+         (17, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"),
+         (23, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce")]
     rejectsAt "DemandScalarUnsafe.hs"
         [(7, forbidden tval), (9, forbidden tval),
          (12, demandEq), (14, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption"),
@@ -307,7 +319,7 @@ checkGeneratedConstructionSpecimens = do
         "SumGeneratorMissing.hs" [(9, defaultUsage)]
     rejectsDespiteImport "SumGeneratorEscape.hs" 7 "SumGeneratorControl.hs" 25 oneof
     rejects "SumGeneratorDead.hs" [(17, eval1)]
-    rejectsAt "SumTagEscape.hs" [(8, unknown "GHC.Magic.dataToTag#")]
+    rejectsAt "SumTagEscape.hs" [(8, external "GHC.Types.I#"), (8, external "GHC.Magic.dataToTag#")]
     accepts "DefaultLabels.hs"
     mixed "DefaultLabelSelection.hs" [TopBinding "inherited"] "DefaultLabelSelection.hs" $
         [(14, forbidden tval), (17, unknown "DefaultLabels.labels"), (20, unknown "DefaultLabels.labels" ++ " [given Labels")] ++
