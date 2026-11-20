@@ -5,7 +5,7 @@ import Data.Either (lefts)
 import Data.List (unsnoc)
 import Data.Maybe (isNothing)
 import GHC
-    ( ExprLStmt, GhcPs, HsConDetails(..), HsDoFlavour(..), HsExpr(..), HsOverLit(..)
+    ( ExprLStmt, GhcPs, HsConDetails(..), HsDoFlavour(..), HsExpr(..), HsOverLit(..), HsType(..)
     , LPat, Match(..), MatchGroup(..), OverLitVal(..), Pat(..), SrcSpan, StmtLR(..)
     , getLocA, unLoc
     )
@@ -35,7 +35,8 @@ checkPaperScalarOutput binding = do
         pure $ case failedGuard equation of
             Left reason -> Left (name ++ ": " ++ reason)
             ok -> ok
-    unless (null (lefts (guards ++ results))) (fail (unlines (lefts (guards ++ results))))
+    payload <- payloadBranch <$> binding "payloadM"
+    unless (null (lefts (payload : guards ++ results))) (fail (unlines (lefts (payload : guards ++ results))))
     counts <- forM ["afterAndM", "afterOrM", "nestedAndM", "bangNextM", "literalM", "inspectM"] $ \name -> do
         equation <- binding name
         pure $ case (m_pats equation, oneRhs equation) of
@@ -78,6 +79,10 @@ shapes =
         If (Call ">" [Call "+" [value, Number 1], Number 0])
             (ret (Call "+" [value, Number 2])) (ret value))
     , ("viaCaseM", ["input"], entry "input" (ret (Call "+" [value, value])))
+    , ("caseRowsM", ["input", "unused"], entry "input" $ If (Call ">" [value, Number 0])
+        (ret (Number 0)) (ret (Call "-" [value, Number 1])))
+    , ("equationM", ["first", "second"], entry "first" $ If (Call ">" [value, Number 0])
+        (force "second") (Block [Bind "other" (force "second")] (ret (Call "-" [value, Use "other"]))))
     , ("checkedFlagM", ["flag"], entry "flag" $ If value
         (ret (Call "==" [value, Call "True" []])) (ret (Call "False" [])))
     , ("givenAddM", ["input"], Block [tick, Bind "field" (suspend givenSum)]
@@ -121,6 +126,33 @@ failedGuard equation = case (m_pats equation, oneRhs equation >>= block) of
             match scope (Call ">" [Use "scalar", Number 0]) predicate
             match scope (Call "pure" [Call "-" [Use "scalar", Number 1]]) fallback
     _ -> Left "expected a scalar bind followed by the guard test"
+
+-- Inspect the action of the rank-polymorphic root suspension. The ordinary
+-- field must suspend the addition itself *inside* the selected branch.
+payloadBranch :: Binding -> Either String ()
+payloadBranch equation = case (m_pats equation, oneRhs equation) of
+    ([p], Just body)
+        | Just x <- patternVariable p
+        , [action] <- [action | HsApp _ f action <- collectAst body,
+                maybe False (named "M.lazy") (expressionVariable f),
+                not (null [() | HsForAllTy{} <- collectAst f :: [HsType GhcPs]]),
+                Just (_, final) <- [block action], HsIf{} <- [bareExpression final]]
+        , Just ([s], final) <- block action
+        , BindStmt _ binder force <- unLoc s, Just v <- patternVariable binder
+        , HsIf _ cond yes _ <- bareExpression final -> do
+            let scope = [(x, "input"), (v, "scalar")]
+            match scope (Call "M.force" [Use "input"]) force
+            match scope (Call ">" [Use "scalar", Number 0]) cond
+            let sites = [() | HsApp _ f arg <- collectAst body,
+                        maybe False (named "M.force") (expressionVariable f),
+                        expressionVariable arg == Just x]
+                adds = [() | HsApp _ f arg <- collectAst yes,
+                        maybe False (named "M.lazy") (expressionVariable f),
+                        Right () <- [match scope (Call "pure" [Call "+" [Use "scalar", Number 1]]) arg]]
+            unless (length sites == 1 && length adds == 1) $
+                Left ("payloadM: expected one input force and one suspended scalar addition; got " ++
+                      show (length sites, length adds))
+    _ -> Left "payloadM: expected a guard in the polymorphic root suspension"
 
 checkEquation :: [String] -> Shape -> Binding -> Either String ()
 checkEquation roles shape equation = case (bindPatterns roles (m_pats equation), oneRhs equation) of

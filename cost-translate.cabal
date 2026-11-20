@@ -189,6 +189,7 @@ test-suite cost-translate-test
                      ConstructionDemandMethods
                      ConstructionTag
                      ConstructionEvidence
+                     ConstructionMethods
                      ConstructionRoles
                      ConstructionQuickCheckTypes
                      ConstructionQuickCheckUses

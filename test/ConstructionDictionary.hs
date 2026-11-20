@@ -1,6 +1,6 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
-    instantiateUse, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
+    instantiateUse, instantiateTypes, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
 
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
@@ -88,6 +88,12 @@ instantiateUse field args ds carrier = do
         env = (getName (carrierBinder field), carrier) : [(name, d) | (names, d) <- zip (slots field) ds, name <- names]
     guard (cls == formalClass)
     pure (\(Use n c f ts es) -> Use n c f (map ty ts) (map (substitute ty env) es))
+
+instantiateTypes :: [TyVar] -> [Type] -> [Use] -> Maybe [Use]
+instantiateTypes variables arguments obligations = do
+    guard (length variables == length arguments)
+    let ty = substTyWith variables arguments
+    pure [Use n c f (map ty ts) (map (substitute ty []) es) | Use n c f ts es <- obligations]
 
 data Direction = Pack | Unpack deriving (Eq)
 

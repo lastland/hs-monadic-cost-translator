@@ -115,3 +115,34 @@ viaCase x = case x of y -> y + x
 
 nested :: Int -> Int
 nested x = if x + 1 > 0 then x + 2 else x
+
+caseRows :: Int -> Bool -> Int
+caseRows x b = case b of
+    _ | x > 0 -> 0
+    _ -> x - 1
+
+equation :: Int -> Int -> Int
+equation x y | x > 0 = y
+equation y x = y - x
+
+-- Unlike the wildcard row, True can fail before the comparison runs.
+joinRows :: Int -> Bool -> Maybe Int
+joinRows x b = case b of
+    True | x > 0 -> Nothing
+    _ -> Just (x - 1)
+
+-- A source constructor with an ordinary Int field and a generalized field
+-- exercises the polymorphic payload emitter at two distinct instantiations.
+data Packet a = Packet Int (Maybe a)
+
+payload :: Int -> (Packet Bool, Packet Int)
+payload x =
+    let p :: Packet a
+        p = if x > 0 then Packet (x + 1) Nothing else Packet 0 Nothing
+    in (p, p)
+
+payloadWork :: Int -> Int -> (Packet Bool, Packet Int)
+payloadWork x y =
+    let p :: Packet a
+        p = if x > 0 then Packet (work (x + y)) Nothing else Packet 0 Nothing
+    in (p, p)

@@ -150,3 +150,44 @@ nestedM x = M.tick >> (result <$> M.force x)
   where
     result n | n + 1 <= 0 = n
              | otherwise = n + 2
+
+caseRowsM :: M.Th Int -> M.Th Bool -> M.MemoristM Int
+caseRowsM x _ = M.tick >> ((\n -> if n <= 0 then pred n else 0) <$> M.force x)
+
+equationM :: M.Th Int -> M.Th Int -> M.MemoristM Int
+equationM first second = do
+    M.tick
+    n <- M.force first
+    if n > 0 then M.force second else (n -) <$> M.force second
+
+joinRowsM :: M.Th Int -> M.Th Bool -> M.MemoristM (M.MaybeT Int)
+joinRowsM x b = do
+    M.tick
+    check <- M.force b
+    stop <- if check then (> 0) <$> M.force x else pure False
+    if stop then pure M.NothingT else M.JustT <$> M.lazy (pred <$> M.force x)
+
+data PacketT a = PacketT (M.Th Int) (M.Th (M.MaybeT a))
+type Views = M.PairT (PacketT Bool) (PacketT Int)
+
+-- The two types observe the same root and fields. Only Nothing inhabits
+-- the optional field in this source, so its view needs no leaf conversion.
+payloadM :: M.Th Int -> M.MemoristM Views
+payloadM = sharedPacket (pure . (+ 1))
+
+payloadWorkM :: M.Th Int -> M.Th Int -> M.MemoristM Views
+payloadWorkM x y = sharedPacket (\n -> M.tick >> (double . (n +) <$> M.force y)) x
+
+sharedPacket :: (Int -> M.MemoristM Int) -> M.Th Int -> M.MemoristM Views
+sharedPacket whenPositive x = do
+    M.tick
+    root <- M.lazy $ do
+        n <- M.force x
+        let selected | n > 0 = whenPositive n
+                     | otherwise = pure 0
+        n `seq` (PacketT <$> M.lazy selected <*> M.lazy (pure M.NothingT))
+    pure (M.PairT root (view root))
+  where
+    view (M.Th key packet annotation) = M.Th key (convert packet) annotation
+    convert (PacketT fixed (M.Th key _ annotation)) =
+        PacketT fixed (M.Th key M.NothingT annotation)

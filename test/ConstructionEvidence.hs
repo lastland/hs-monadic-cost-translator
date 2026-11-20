@@ -11,6 +11,7 @@ import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeTyp
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
+import ConstructionMethods (Methods, homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding, shrinkSupport)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -79,9 +80,10 @@ methodNames rt modules = do
     pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
-data Site = FieldBody Name | Site String (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
+data Site = FieldBody Name | Site String (Either Name SrcSpan) (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
     | StockFacts [(Name, Name, Type, [Use])]
     | TagFacts Platform [TyCon]
+    | MethodFacts Methods
 
 data RetainedEvidence = RetainedEvidence
     { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
@@ -164,7 +166,8 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
                         (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
                     rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
-                        StockFacts stockFacts : DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
+                        StockFacts stockFacts : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
+                        DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
@@ -190,7 +193,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
         (Strict.Just p, Strict.Just e) -> Just (p, e)
         _ -> Nothing
     record location = recordRole (supportAt utilities checked location) location
-    recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) owner role) us
+    recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) site owner role) us
       where owner = contextSite homes site
 
 -- Collect the complete home graph before validating any caller. Source-only
@@ -203,27 +206,31 @@ checkEvidence rt homes demands sites = concatMap check sites
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
         , stockFacts = concat [facts | StockFacts facts <- sites]
+        , methodFacts = [retainedMethods [(origin, u) | Site _ origin _ _ u <- sites] facts |
+            MethodFacts facts <- sites]
         , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
-    observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) _ u <- sites]
+    observed = Map.fromListWith (++) [(field, [u]) | Site _ _ (Just field) _ u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
     check (DefaultFacts _) = []
     check (StockFacts _) = []
     check (TagFacts _ _) = []
+    check (MethodFacts _) = []
     check (MissingCertificate why) = [why]
-    check (Site location field role u) = map ((location ++ ": ") ++) (checkSelected role [] field u)
+    check (Site location origin field role u) = map ((location ++ ": ") ++) (checkSelected origin role [] field u)
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
     , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
-    , stockFacts :: [(Name, Name, Type, [Use])], tagFacts :: [(Platform, [TyCon])] }
+    , stockFacts :: [(Name, Name, Type, [Use])], tagFacts :: [(Platform, [TyCon])]
+    , methodFacts :: [Methods] }
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: MethodRules -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
-checkUse rules utility = check
+checkUse :: MethodRules -> Either Name SrcSpan -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
+checkUse rules origin utility = check
   where
     rt = auditedRuntime rules
     homes = homeRepresentations rules
@@ -235,6 +242,8 @@ checkUse rules utility = check
                 | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
                 | isDataDefault rules use = Nothing
                 | tagUse use = Nothing
+                | family == UnknownMethod && conditionalMethod rt (methodFacts rules) origin use = Nothing
+                | family == UnknownMethod && concreteMethod [] use = Nothing
                 | family == UnknownMethod = Just "unknown executable method/default dependency"
                 | otherwise = case (types, dictionaries) of
             (ty : _, evidence : _) -> case family of
@@ -255,6 +264,13 @@ checkUse rules utility = check
             _ -> Just "unsaturated selector has no selected instance evidence"
         root (Super _ _ parent) = root parent
         root evidence = evidence
+        concreteMethod active obligation
+            | Just (method, obligations) <- selectedMethod rt (methodFacts rules) obligation,
+              method `notElem` active =
+                all (closedDependency method (method : active)) obligations
+            | otherwise = False
+        closedDependency _ active obligation@(Use _ _ UnknownMethod _ _) = concreteMethod active obligation
+        closedDependency method _ obligation = null (checkUse rules (Left method) Nothing [] Nothing obligation)
         utilityMethod (Use selected cls _ ts [ev])
             | Just roles <- utility, not (null roles), all (\role -> roleOf rt selected == Just role &&
                   role `elem` [AbstractMethod, FullMethod, UsageMethod]) roles,
@@ -424,6 +440,7 @@ usesExcept qc boundary selected = walk
                 _ -> []
     selectedFamily identifier = case Map.lookup (getName identifier) selected of
         Just family -> Just family
+        Nothing | Just cls <- defaultClass identifier -> Just (UnknownMethod, cls)
         Nothing | isDefaultMethodOcc (nameOccName (getName identifier)) -> Just (UnknownMethod, getName identifier)
         Nothing | Just cls <- isClassOpId_maybe identifier, identifier `notElem` classSCSelIds cls -> Just (UnknownMethod, getName cls)
         _ -> Nothing
