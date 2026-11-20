@@ -154,6 +154,14 @@ nestedM x = M.tick >> (result <$> M.force x)
 caseRowsM :: M.Th Int -> M.Th Bool -> M.MemoristM Int
 caseRowsM x _ = M.tick >> ((\n -> if n <= 0 then pred n else 0) <$> M.force x)
 
+coveredRowsM :: M.Th Int -> M.Th (M.MaybeT a) -> M.MemoristM Int
+coveredRowsM x m = do
+    M.tick
+    tag <- M.force m
+    case tag of
+        M.NothingT -> pure 1
+        M.JustT _ -> (\n -> if n <= 0 then pred n else 0) <$> M.force x
+
 equationM :: M.Th Int -> M.Th Int -> M.MemoristM Int
 equationM first second = do
     M.tick

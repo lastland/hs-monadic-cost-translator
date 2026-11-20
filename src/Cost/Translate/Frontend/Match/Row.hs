@@ -39,7 +39,7 @@ type GuardEnd = Env -> (O.Expr -> Result) -> Result
 type Body = Env -> GuardEnd -> Result
 
 data Row = Row
-    { scalarPositions :: Set.Set [Int]
+    { scalarPositions :: Set.Set Position
     , nextEquation :: String
     , rowStep :: Step
     }
@@ -47,7 +47,7 @@ data Row = Row
 data Step = Ready Sources Env Body | Inspect Subject Check
 
 data Subject = Subject
-    { position :: [Int]
+    { position :: Position
     , reference :: O.Expr
     , matchedName :: String
     }
@@ -77,7 +77,7 @@ prepareRow env sources (location, patterns, body) =
         indexed = zip [0 ..] patterns
         next = actionName env "nextEquation" location
         root (index, (thunk, pat)) =
-            ([index],thunk,) <$> rowPattern env pat (patternRoot pat index)
+            (Root index,thunk,) <$> rowPattern env pat (patternRoot pat index)
         row bindings = Row (Set.fromList (map fst bindings)) next
         advance _ scope bindings [] =
             Right (row bindings (Ready bindings scope body))
@@ -100,8 +100,8 @@ prepareRow env sources (location, patterns, body) =
                                 ]
                         subject = Subject column thunk name
                     row (bindings' ++ pending) . Inspect subject <$> makeCheck
-                descend slots fields =
-                    let child (i, slot, p) = (i : column, O.v slot, p)
+                descend con slots fields =
+                    let child (i, slot, p) = (Slot column con i, O.v slot, p)
                         siblings = Set.fromList (IntMap.elems slots)
                         pending = map child fields ++ rest
                      in advance (used <> siblings) bound bindings' pending
@@ -140,14 +140,14 @@ prepareBranch ::
     Env ->
     Head ->
     [(Int, Pattern)] ->
-    (Slots -> [(Int, String, Pattern)] -> Either String Row) ->
+    (String -> Slots -> [(Int, String, Pattern)] -> Either String Row) ->
     Either String Branch
 prepareBranch used env head' fields descend = do
     (target, count) <- resolveHead env head' (length fields)
     names <- traverse (traverse field) live
     pure $
         Branch target count used (IntMap.fromList names) $ \slots ->
-            descend slots [(i, slotAt slots i, p) | (i, p) <- live]
+            descend target slots [(i, slotAt slots i, p) | (i, p) <- live]
     where
         live = filter (needsField . snd) fields
         field pat = do

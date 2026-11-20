@@ -77,7 +77,9 @@ emitGuardStatements ::
     [(GuardLStmt GhcRn, Bool)] ->
     GuardEnd ->
     Either String O.Expr
-emitGuardStatements scope body [] _ = emitExpr scope body
+emitGuardStatements scope body [] _
+    | probingMatchExit scope = Right (O.tuple [])
+    | otherwise = emitExpr scope body
 emitGuardStatements env body ((L _ (BodyStmt _ expr _ _), later) : gs) next
     | constantCondition env expr == Just True = yes next env
     | otherwise =

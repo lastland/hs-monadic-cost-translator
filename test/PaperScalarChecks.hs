@@ -46,7 +46,7 @@ checkPaperScalarOutput binding = do
                 let sites = [() | HsApp _ op arg <- collectAst body,
                                  maybe False (named "M.force") (expressionVariable op),
                                  expressionVariable arg == Just x]
-                in countError name "one RHS input force" (== 1) sites
+                 in countError name "one RHS input force" (== 1) sites
             ([_], Just body) ->
                 -- Count forces through aliases as well as the original thunk.
                 let sites = [() | HsVar _ op <- collectAst body :: [HsExpr GhcPs],
@@ -81,6 +81,12 @@ shapes =
     , ("viaCaseM", ["input"], entry "input" (ret (Call "+" [value, value])))
     , ("caseRowsM", ["input", "unused"], entry "input" $ If (Call ">" [value, Number 0])
         (ret (Number 0)) (ret (Call "-" [value, Number 1])))
+    , ("coveredRowsM", ["input", "optional"], Block [tick, Bind "tag" (force "optional")] $
+        Case (Use "tag")
+            [ ("M.JustT", ["_"], Block [Bind "scalar" (force "input")] $
+                If (Call ">" [value, Number 0]) (ret (Number 0)) (ret (Call "-" [value, Number 1])))
+            , ("M.NothingT", [], ret (Number 1))
+            ])
     , ("equationM", ["first", "second"], entry "first" $ If (Call ">" [value, Number 0])
         (force "second") (Block [Bind "other" (force "second")] (ret (Call "-" [value, Use "other"]))))
     , ("checkedFlagM", ["flag"], entry "flag" $ If value
@@ -160,9 +166,12 @@ checkEquation roles shape equation = case (bindPatterns roles (m_pats equation),
     _ -> Left "expected named parameters and one unguarded body"
 
 bindPatterns :: [String] -> [LPat GhcPs] -> Maybe Scope
-bindPatterns roles pats
-    | length roles == length pats = (`zip` roles) <$> traverse patternVariable pats
-    | otherwise = Nothing
+bindPatterns [] [] = Just []
+bindPatterns ("_":roles) (L _ (WildPat _):pats) = bindPatterns roles pats
+bindPatterns (role:roles) (pat:pats) = do
+    name <- patternVariable pat
+    ((name, role) :) <$> bindPatterns roles pats
+bindPatterns _ _ = Nothing
 
 match :: Scope -> Shape -> Expr -> Either String ()
 match scope shape expression = case shape of

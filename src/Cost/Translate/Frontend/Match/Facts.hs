@@ -1,5 +1,6 @@
 module Cost.Translate.Frontend.Match.Facts
     ( Facts
+    , Position (..)
     , Sources
     , scrutinee
     , bindAliases
@@ -15,8 +16,10 @@ import Cost.Translate.Sharing.Specialization (closedScalar)
 import Data.Map.Strict qualified as Map
 import GHC
 
-type Facts = Map.Map [Int] O.Expr
-type Sources = [([Int], (Name, Type))]
+data Position = Root Int | Slot Position String Int deriving (Eq, Ord)
+
+type Facts = Map.Map Position O.Expr
+type Sources = [(Position, (Name, Type))]
 
 inheritScalars :: Env -> Env -> Env
 inheritScalars incoming target =
@@ -37,10 +40,10 @@ learnedFacts env sources =
 
 scrutinee :: Env -> LHsExpr GhcRn -> Sources
 scrutinee env expr = case reference env expr of
-    Just pair@(_, ty) | closedScalar ty -> [([0], pair)]
+    Just pair@(_, ty) | closedScalar ty -> [(Root 0, pair)]
     _ -> []
 
-bindAliases :: Env -> [Int] -> [Name] -> Sources
+bindAliases :: Env -> Position -> [Name] -> Sources
 bindAliases env pos names =
     [ (pos, (n, ty))
     | n <- names

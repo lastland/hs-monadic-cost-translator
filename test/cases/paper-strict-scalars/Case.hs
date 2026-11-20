@@ -251,11 +251,16 @@ rowProbes =
     [ scalarSource ("case/wildcard-guard/" ++ show n) (const (Source.caseRows n undefined)) $ \s ->
         call2 caseRowsM (priced (repeats s) n) (bad "wildcard scrutinee")
     | n <- [-2, 0, 3] ] ++
+    [ scalarSource ("case/covered-just/" ++ show n) (const (Source.coveredRows n (Just undefined))) $ \s ->
+        call2 coveredRowsM (priced (repeats s) n) (M.tick >> (M.JustT <$> M.lazy (bad "unused field")))
+    | n <- [-2, 0, 3] ] ++
     [ scalarSource ("equation/swapped-binders/" ++ show n) (Source.equation n . rhs) $ \s ->
         call2 equationM (priced 2 n) (priced 3 (rhs s))
     | n <- [-2, 1] ] ++
     [ failure "case/wildcard-guard-demands-x" $ \_ ->
         call2 caseRowsM (bad "condition") (pure False)
+    , scalarSource "case/covered-nothing-skips-guard" (const (Source.coveredRows undefined Nothing)) $ \_ ->
+        call2 coveredRowsM (bad "skipped scalar") (priced 2 M.NothingT)
     , shallowBox "case/join-skips-guard-and-field" $ \_ ->
         call2 joinRowsM (bad "skipped guard and field") (priced 1 False)
     , failure "case/join-pattern-miss-demands-field" $ \_ ->

@@ -121,6 +121,13 @@ caseRows x b = case b of
     _ | x > 0 -> 0
     _ -> x - 1
 
+-- Nothing consumes the pattern-miss edge, leaving only guard failure.
+coveredRows :: Int -> Maybe a -> Int
+coveredRows x m = case m of
+    Just _ | x > 0 -> 0
+    Nothing -> 1
+    _ -> x - 1
+
 equation :: Int -> Int -> Int
 equation x y | x > 0 = y
 equation y x = y - x
