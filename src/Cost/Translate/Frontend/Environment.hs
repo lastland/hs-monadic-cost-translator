@@ -45,6 +45,7 @@ data Env = Env
     , inferredExpressions :: Map.Map SourceKey (Type, O.Ty)
     , scalarEvidence :: Map.Map SourceKey Type
     , knownScalarValues :: Map.Map Name [(Type, O.Expr)]
+    , probingMatchExit :: Bool
     , scalarAliases :: [(Type, Set.Set Name)]
     , sourceDatatypes :: [TyCon]
     , reflectiveBindings :: Set.Set Name

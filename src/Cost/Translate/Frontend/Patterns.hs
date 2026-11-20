@@ -10,7 +10,7 @@ import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Expression.Thunks (failureExpr)
 import Cost.Translate.Frontend.Expression.Values (knownValue)
 import Cost.Translate.Frontend.Match.Facts
-import Cost.Translate.Frontend.Match.Fallback (withFallback)
+import Cost.Translate.Frontend.Match.Fallback (freeTerms, withFallback)
 import Cost.Translate.Frontend.Match.Row
 import Cost.Translate.Output qualified as O
 import Data.List (partition)
@@ -19,6 +19,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
+import GHC.Types.Name.Occurrence (varName)
 
 type End = Env -> Facts -> (O.Expr -> Result) -> Result
 
@@ -52,7 +53,7 @@ matchRows env original equations end = do
 
 rootFacts :: Env -> Maybe (LHsExpr GhcRn) -> Sources -> Facts
 rootFacts env original sources = case original >>= knownValue env of
-    Just (_, v) | not (null sources) -> Map.singleton [0] v
+    Just (_, v) | not (null sources) -> Map.singleton (Root 0) v
     _ -> Map.empty
 
 matchGuard ::
@@ -74,59 +75,97 @@ underRows :: Env -> Facts -> [Row] -> End -> Result
 underRows env facts [] end = end env facts Right
 underRows env facts allRows@(Row _ name step : rows) end = case step of
     Ready bindings scope finish ->
-        finish (refine facts bindings (inheritScalars env scope)) $
-            \incoming build ->
-                resume
-                    rows
-                    name
-                    (inheritScalars incoming env)
-                    (learnedFacts incoming bindings facts)
-                    build
+        let entry = scope {probingMatchExit = probingMatchExit env}
+         in finish (refine facts bindings (inheritScalars env entry)) $
+                \incoming build ->
+                    resume
+                        rows
+                        name
+                        (inheritScalars incoming env)
+                        (learnedFacts incoming bindings facts)
+                        build
     Inspect subject check ->
         let (neighbors, rest) = spanMap (sameSubject subject) rows
             checks = (name, check) :| neighbors
-            matched = matchedName subject
-            pos = position subject
-            force = O.bind matched (O.call "M.force" [reference subject])
             lastName = fst (NE.last checks)
-            test fs value = compileChecks env fs value (NE.toList checks)
-            single = onlyConstructor env checks
-            inspected fs value
-                | Just group <- single =
-                    let compile rs = underRows env fs rs (resume rest lastName)
-                     in O.caseE value . pure <$> emitBranch group compile
-                | otherwise = following fs lastName rest (test fs value)
-            remember value = inspected (Map.insert pos value facts) value
-         in case Map.lookup pos facts of
-                Just value -> remember value
-                Nothing
-                    | any (Set.member pos . scalarPositions) allRows ->
-                        O.doE [force] <$> remember (O.v matched)
-                    | Just _ <- single ->
-                        O.doE [force] <$> inspected facts (O.v matched)
-                _ ->
-                    following facts lastName rest $
-                        fmap (O.doE [force]) . test facts (O.v matched)
+            tracked = Set.member (position subject) . scalarPositions
+            scalar = any tracked allRows
+         in inspect env facts subject scalar checks (resume rest lastName)
     where
         resume [] _ scope fs build = end scope fs build
         resume rest n scope fs build = do
             next <- underRows scope fs rest end
             withFallback n next build
-        following fs n rest = resume rest n env fs
         sameSubject subject (Row _ next (Inspect other check))
             | position subject == position other = Just (next, check)
         sameSubject _ _ = Nothing
 
-onlyConstructor :: Env -> NonEmpty (String, Check) -> Maybe (NonEmpty Branch)
-onlyConstructor env checks = do
-    group <- traverse branch checks
-    let name = tag (NE.head group)
-    if Set.member name (singleConstructors env) && all ((== name) . tag) group
-        then Just group
-        else Nothing
+inspect ::
+    Env -> Facts -> Subject -> Bool -> NonEmpty (String, Check) -> End -> Result
+inspect env facts subject scalar checks end = case Map.lookup pos facts of
+    Just value -> inspected facts value id
+    Nothing
+        | scalar -> inspected (Map.insert pos matched facts) matched force
+        | otherwise -> inspected facts matched force
+    where
+        pos = position subject
+        name = matchedName subject
+        matched = O.v name
+        force = O.doE [O.bind name (O.call "M.force" [reference subject])]
+        inspected fs value wrap = do
+            route <- soleRoute env fs checks
+            let test = compileChecks env fs value (NE.toList checks)
+            case route of
+                Just build -> wrap <$> build value end
+                Nothing
+                    | scalar -> wrap <$> end env fs test
+                    | otherwise -> end env fs (fmap wrap . test)
+
+soleRoute ::
+    Env ->
+    Facts ->
+    NonEmpty (String, Check) ->
+    Either String (Maybe (O.Expr -> End -> Result))
+soleRoute env fs checks = case traverse branch checks of
+    Just bs | exhaustive env (map tag (NE.toList bs)) ->
+        case partitionBranches (NE.toList bs) of
+            [one] -> pure $ Just $ \value end ->
+                O.caseE value . pure <$> openArm end one
+            groups | not (probingMatchExit env) -> do
+                only <- uniqueExit (reaches env fs) groups
+                pure (render groups <$> only)
+            _ -> pure Nothing
+    _ -> pure Nothing
     where
         branch (_, Choose constructor) = Just constructor
         branch _ = Nothing
+        openArm end group = emitBranch group (\rs -> underRows env fs rs end)
+        render groups sole value end =
+            let key = tag . NE.head
+                arm group
+                    | key group == key sole = openArm end group
+                    | otherwise = emitBranch group closed
+             in O.caseE value <$> mapM arm groups
+        closed rs = compileRows env fs rs unreachable
+        unreachable = failureExpr "source pattern match failure"
+
+uniqueExit :: (a -> Either String Bool) -> [a] -> Either String (Maybe a)
+uniqueExit test = go Nothing
+    where
+        go prior [] = Right prior
+        go prior (x : xs) = do
+            live <- test x
+            case (live, prior) of
+                (False, _) -> go prior xs
+                (True, Nothing) -> go (Just x) xs
+                (True, Just _) -> Right Nothing
+
+reaches :: Env -> Facts -> NonEmpty Branch -> Either String Bool
+reaches env fs group = do
+    let probe = env {probingMatchExit = True}
+        marker = "match exit"
+    (_, body) <- emitBranch group (\rs -> compileRows probe fs rs (O.v marker))
+    pure (O.rdr varName marker `Set.member` freeTerms body)
 
 compileChecks :: Env -> Facts -> O.Expr -> [(String, Check)] -> O.Expr -> Result
 compileChecks _ _ _ [] failure = Right failure
@@ -150,12 +189,16 @@ compileChecks env fs value ((name, Choose first) : checks) failure =
 
 alternatives ::
     Env -> Facts -> [Branch] -> O.Expr -> Either String [(O.Pat, O.Expr)]
-alternatives _ _ [] _ = Right []
-alternatives env fs (first : branches) failure = do
+alternatives env fs branches failure =
+    mapM (`emitBranch` compile) (partitionBranches branches)
+    where
+        compile rows = compileRows env fs rows failure
+
+partitionBranches :: [Branch] -> [NonEmpty Branch]
+partitionBranches [] = []
+partitionBranches (first : branches) =
     let (same, other) = partition ((== tag first) . tag) branches
-    let compile rows = compileRows env fs rows failure
-    branch <- emitBranch (first :| same) compile
-    (branch :) <$> alternatives env fs other failure
+     in (first :| same) : partitionBranches other
 
 withRest ::
     ([a] -> O.Expr -> Result) ->
