@@ -18,3 +18,10 @@ throughValue :: M.Th Bool -> Q.Property
 throughValue t = let observed = M.tval t in
     let ?seen = observed in
     let flag = ?seen :: Bool in Q.property flag
+
+reboundCall :: M.Th Bool -> Q.Property
+reboundCall t = let ?seen = M.tval t in
+    Q.property $ ?seen && (let ?seen = False in helper ())
+  where
+    helper :: (?seen :: Bool) => () -> Bool
+    helper () = True

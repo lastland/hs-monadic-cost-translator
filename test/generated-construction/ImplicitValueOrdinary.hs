@@ -25,3 +25,9 @@ pass x = x
 
 handed :: M.Th Bool -> Q.Property
 handed t = let ?seen = M.tval t in Q.property (pass ?seen)
+
+applied :: M.Th Bool -> Q.Property
+applied t = let ?seen = M.tval t in Q.property (pass $ ?seen)
+
+nested :: M.Th Bool -> Q.Property
+nested t = let ?seen = let dead () = M.tval t in True in Q.property ?seen
