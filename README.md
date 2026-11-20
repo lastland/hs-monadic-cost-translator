@@ -130,9 +130,11 @@ operation can use that value at the same type. A lazy consumer still receives
 the original thunk.
 For example, the guard in `take` forces the count; the selected cons branch
 can suspend the decrement using that count, while the recursive call stays
-inside the tail thunk. These choices preserve the demanded value and its
-ticks, but private thunk names, allocations, and usage annotations may differ
-from a translation that suspends every operand.
+inside the tail thunk. For a given demand on the whole call, the value and
+tick count must agree. Private thunk names, allocations, and usage annotations
+may differ from a translation that suspends every operand. A caller that
+inspects those names to choose its result is observing the allocator and is
+outside this contract.
 
 ### Laziness and Local Sharing
 
