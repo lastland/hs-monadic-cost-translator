@@ -71,6 +71,13 @@ Issue links are relative to this map; consumers should resolve them under
 
 ## Decisions so far
 
+- Five cases are explicitly promoted to the passing partition after integrated
+  complete-output, ordinary caller and O0/O2 reference verification:
+  `higher-kinded-polykinded-field`, `polymorphic-checked-payload-kinds`,
+  `polymorphic-dependent-payload-kinds`, `polymorphic-vacuous-quantification`
+  and `mutually-recursive-captured-helpers`. The historical 33-row audit table
+  above is preserved; `test/ReferenceSelection.hs` records the current 28
+  deferred cases. No assertions or fixture/reference bytes changed.
 - Issues 01–05 preserve cost and identity failures separately from construction
   failures in issues 06–08. Grouping fixtures by evidenced behavior is not a
   claim that every extra tick has one common cause.

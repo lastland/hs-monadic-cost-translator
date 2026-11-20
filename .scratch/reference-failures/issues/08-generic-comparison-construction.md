@@ -52,6 +52,7 @@ sh scripts/stack-test.sh --test-arguments=mutually-recursive-captured-helpers
   controls, direct-function and source-scope checks pass in the same focused run.
   Both pinned integration reviews have zero findings. This establishes recovery
   of this case without granting arbitrary open `Eq` dictionaries permission.
-- The initial split inventory remains pinned to `e5d4652` until its implementation
-  and review fixes are integrated. Promote this recovered key explicitly at that
-  point; recording this receipt does not silently rewrite that inventory.
+- After split integration, this case passed again through the per-source runner
+  with complete guards, ordinary callers and O0/O2 comparisons. Its catalog entry
+  is explicitly removed in the promotion checkpoint. The historical `e5d4652`
+  failure receipt remains preserved; this case is now a passing regression.

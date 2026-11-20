@@ -77,6 +77,8 @@ sh scripts/stack-test.sh --test-arguments=polymorphic-vacuous-quantification
 - `higher-kinded-demands` was independently rerun at `758e058` and still fails
   the complete construction guard. The above recoveries do not establish its
   field obligations or either growing-recursion case.
-- These four recoveries require explicit reviewed promotion after the reference
-  split and its review fixes are integrated. The initial `e5d4652` catalog is
-  unchanged by these receipts.
+- After split integration, all four recoveries passed again through the
+  per-source runner with complete guards, ordinary callers and O0/O2 comparisons.
+  Their catalog entries are explicitly removed in the promotion checkpoint;
+  the remaining three cases in this issue stay deferred. The historical
+  `e5d4652` audit remains unchanged.
