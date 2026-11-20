@@ -170,6 +170,7 @@ test-suite cost-translate-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    ConstructionEvidenceTypes
+                     ConstructionConstraintAliases
                      ConditionChecks
                      GeneratedSyntax
                      PaperScalarChecks

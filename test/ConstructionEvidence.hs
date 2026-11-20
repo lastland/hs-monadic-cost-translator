@@ -4,6 +4,7 @@ module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 
 import ConstructionDictionary
 import ConstructionSuper (validSuper)
+import ConstructionConstraintAliases (constraintAliases)
 import ConstructionArithmetic (callerArithmetic)
 import ConstructionScalarComparison (callerComparison)
 import ConstructionActionFields (typedActions)
@@ -101,20 +102,20 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
         environment = Map.fromList [(getName binder, rhs) | (binder, rhs) <- bindings]
         givens = Set.fromList ([getName var | ab <- collectAst (tm_typechecked_source checked) :: [AbsBinds], var <- abs_ev_vars ab] ++
             [getName var | (_, rhs) <- bindings, var <- coreGivens rhs])
-        bindingSites env given bs = concat
+        bindingSites aliases env given bs = concat
             [let role = supportBinding utilities (getName binder)
                  collect = case role of
-                     Just _ -> usesExcept qc (sourceBinding utilities)
-                     Nothing -> uses qc
+                     Just _ -> usesExcept qc (sourceBinding utilities) aliases
+                     Nothing -> uses qc aliases
              in (if shrinkSupport role then [] else
                     recordRole role (coreLocation locals binder) (Left (getName binder)) (collect selected env given rhs)) ++
                  concat [recordRole (supportBinding utilities (getName v)) (coreLocation locals v)
-                     (Left (getName v)) (usesExcept qc (sourceBinding utilities) selected env given body) |
+                      (Left (getName v)) (usesExcept qc (sourceBinding utilities) aliases selected env given body) |
                      Just _ <- [role], (v, body) <- allBindings [C.NonRec binder rhs],
                      getName v /= getName binder, sourceBinding utilities (getName v),
                      not (shrinkSupport role) || independentBinding locals (getName v), not (isQuickCheckBinding qc v)]
             | (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
-        rootSites = bindingSites environment givens (C.flattenBinds program)
+        rootSites = bindingSites (constraintAliases environment) environment givens (C.flattenBinds program)
     session <- getSession
     flags <- getSessionDynFlags
     let global = fst (tm_internals_ checked)
@@ -163,26 +164,28 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     rawBindings = allBindings (C.Rec raw : retainedDictionaries retained)
                     rawEnv = Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]
                     env = Map.union rawEnv environment
+                    aliases = constraintAliases env
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    stock = stockMethods rt checked env (uses qc selected env allGivens)
+                    stock = stockMethods rt checked env (uses qc aliases selected env allGivens)
                     rawSites = TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
-                        StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
-                        DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
+                         StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc aliases selected env allGivens)) :
+                         DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites aliases env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
                             let localEnv = Map.union (Map.fromList [(getName v, rhs) | (v, rhs) <- allBindings [C.Rec bs]]) env
-                            in record at (Right at) (concat [uses qc selected localEnv allGivens rhs | (_, rhs) <- bs])
+                                localAliases = constraintAliases localEnv
+                            in record at (Right at) (concat [uses qc localAliases selected localEnv allGivens rhs | (_, rhs) <- bs])
                         | (at, group) <- zip patterns (patternBindings retained)]
                     fieldSites = concat [case field of
                         Nothing -> [MissingCertificate (pretty rhs ++ ": no retained local pattern component")]
-                        Just e -> record rhs (Right rhs) (uses qc selected env allGivens e)
+                        Just e -> record rhs (Right rhs) (uses qc aliases selected env allGivens e)
                         | ((_, rhs), field) <- zip fields (componentBodies retained)]
-                    actionSites = concat [record at (Right at) (uses qc selected env allGivens body) |
+                    actionSites = concat [record at (Right at) (uses qc aliases selected env allGivens body) |
                         (e, body) <- zip actions (retainedActions retained), let at = getLocA e]
-                in rawSites ++ patternSites ++ fieldSites ++ actionSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc selected env allGivens expression,
+                in rawSites ++ patternSites ++ fieldSites ++ actionSites ++ concat [case [u | expression <- candidates, u@(Use actual _ _ arguments dictionaries') <- uses qc aliases selected env allGivens expression,
                             actual == name, not (null arguments), not (null dictionaries')] of
                         [] -> [MissingCertificate (pretty location ++ ": no selected method certificate for " ++ describeName name)]
                         certificates -> record location (Right location) certificates
@@ -292,6 +295,7 @@ checkUse rules origin utility = check
         supportEvidence (Super selector endpoint parent) =
             validSuper selector endpoint parent && supportEvidence parent
         supportEvidence ev@Application{} = proofScoped (const True) ev
+        supportEvidence Equality{} = True
         supportEvidence _ = False
         tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
             tagMethod selected predicate && case getClassPredTys_maybe predicate of
@@ -417,11 +421,12 @@ checkUse rules origin utility = check
                 _ -> False
             _ -> False
 
-uses :: QuickCheck -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
+uses :: QuickCheck -> Environment -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
 uses qc = usesExcept qc (const False)
 
-usesExcept :: QuickCheck -> (Name -> Bool) -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
-usesExcept qc boundary selected = walk
+usesExcept :: QuickCheck -> (Name -> Bool) -> Environment -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
+usesExcept qc boundary aliases selected environment initial expression =
+    walk (Map.union aliases environment) initial expression
   where
     walk env given expression = case expression of
         C.Lam binder body -> walk env (if isId binder && isPredTy (idType binder)
@@ -436,7 +441,7 @@ usesExcept qc boundary selected = walk
         _ -> case C.collectArgs expression of
             (C.Var identifier, arguments) | Just (family, cls) <- selectedFamily identifier ->
                 Use (getName identifier) cls family [ty | C.Type ty <- arguments]
-                    [trace env given Set.empty argument | argument <- arguments,
+                    [trace env (given `Set.difference` Map.keysSet aliases) Set.empty argument | argument <- arguments,
                         not (C.isTyCoArg argument), isPredTy (exprType argument)] :
                     concat [walk env given argument | argument <- arguments,
                         not (C.isTyCoArg argument), not (isPredTy (exprType argument))]

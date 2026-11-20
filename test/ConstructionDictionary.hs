@@ -13,10 +13,11 @@ import Control.Monad (guard)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType, typeKind)
+import GHC.Builtin.Types (eqDataCon, eqTyCon)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
-import GHC.Core.Coercion (Role(..), coercionLKind, coercionRKind)
-import GHC.Core.Coercion.Axiom (toBranchedAxiom)
+import GHC.Core.Coercion (Role(..), coercionLKind, coercionRKind, coercionRole)
+import GHC.Core.Coercion.Axiom (toBranchedAxiom, coAxiomRole, coAxiomTyCon)
 import GHC.Core.TyCo.Rep (Coercion(..), MCoercion(..))
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.FamInstEnv (emptyFamInstEnv, reduceTyFamApp_maybe)
@@ -26,7 +27,7 @@ import GHC.Core.Reduction (reductionReducedType)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import qualified GHC.Core.TyCo.Subst as T
-import GHC.Core.TyCon (isClosedSynFamilyTyConWithAxiom_maybe, newTyConCo_maybe, tyConSingleDataCon)
+import GHC.Core.TyCon (isClosedSynFamilyTyConWithAxiom_maybe, newTyConCo_maybe, tyConSingleDataCon, isFamilyTyCon)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, splitTyConApp_maybe, substTyWith,
     splitForAllTyCoVar_maybe, splitFunTy_maybe, typeKind)
 import GHC.Core.Utils (exprType)
@@ -58,9 +59,16 @@ trace env given seen expression = case expression of
         Transport (coercionRKind co) source
     C.Cast body co | liftedTransport co, let source = trace env given seen body,
         Just result <- certifiedCast (MCo co) source -> result
+    C.Cast body co | equalityTransport co, let source = trace env given seen body,
+        Just p <- predicateOf source, eqType p (coercionLKind co) ->
+            Transport (coercionRKind co) source
     C.Cast{} -> Unknown "coerced dictionary"
     _ -> case C.collectArgs expression of
         (C.Var identifier, arguments)
+            | identifier == dataConWorkId eqDataCon,
+              [C.Type _, C.Type left, C.Type right, C.Coercion proof] <- arguments,
+              nominalFamily proof, eqType left (coercionLKind proof), eqType right (coercionRKind proof) ->
+                Equality (exprType expression) proof
             | isDFunId identifier -> Instance identifier (exprType expression) [ty | C.Type ty <- arguments]
                 [trace env given seen arg | arg <- arguments, not (C.isTyCoArg arg), isPredTy (exprType arg)]
             | null arguments, getName identifier `Set.member` given -> Given (getName identifier) (idType identifier)
@@ -97,6 +105,7 @@ renderEvidence (Application p f arg) = "apply " ++ pretty p ++ " {" ++ renderEvi
     TypeArgument t -> pretty t ++ "}"
     EvidenceArgument d -> renderEvidence d ++ "}"
 renderEvidence (Lifted co source) = "lifted " ++ pretty (coercionRKind co) ++ " {" ++ renderEvidence source ++ "}"
+renderEvidence (Equality p _) = "boxed nominal equality " ++ pretty p
 
 substitute :: T.Subst -> [(Name, Evidence)] -> Evidence -> Evidence
 substitute substitution env ev = case ev of
@@ -123,6 +132,7 @@ substitute substitution env ev = case ev of
         TypeArgument t -> TypeArgument (ty t)
         EvidenceArgument d -> EvidenceArgument (sub d))
     Lifted co source -> Lifted (T.substCo substitution co) (sub source)
+    Equality p proof -> Equality (ty p) (T.substCo substitution proof)
   where
     ty = T.substTy substitution
     sub = substitute substitution env
@@ -207,6 +217,7 @@ proofScoped owned = go owned
     go scope (EvidenceLambda _ v body) = go (\n -> n == getName v || scope n) body
     go scope (Application target f a) = validApplication target f a && go scope f &&
         case a of TypeArgument _ -> True; EvidenceArgument d -> go scope d
+    go _ Equality{} = True
     go _ _ = False
 
 -- Only structural lifts of validated nominal closed-family equations.
@@ -230,6 +241,30 @@ liftedTransport = lifted
     reflexive Refl{} = True
     reflexive (GRefl Nominal _ MRefl) = True
     reflexive _ = False
+
+-- Inert boxed equality fields retain nominal family proofs, never coercion
+-- variables or arbitrary casts. They confer no runtime method permission.
+equalityTransport :: Coercion -> Bool
+equalityTransport co = equality (coercionLKind co) && equality (coercionRKind co) && lifted co
+  where
+    equality t = case splitTyConApp_maybe t of Just (tc, _) -> tc == eqTyCon; _ -> False
+    lifted (SubCo proof) = nominalFamily proof
+    lifted (SymCo proof) = lifted proof
+    lifted (TyConAppCo Representational tc proofs) = tc == eqTyCon && all nominalFamily proofs
+    lifted _ = False
+
+nominalFamily :: Coercion -> Bool
+nominalFamily co | coercionRole co /= Nominal = False
+nominalFamily Refl{} = True
+nominalFamily (GRefl Nominal _ MRefl) = True
+nominalFamily (SymCo co) = nominalFamily co
+nominalFamily (TransCo a b) = eqType (coercionRKind a) (coercionLKind b) &&
+    nominalFamily a && nominalFamily b
+nominalFamily (TyConAppCo Nominal _ arguments) = all nominalFamily arguments
+nominalFamily (AppCo a b) = nominalFamily a && nominalFamily b
+nominalFamily (AxiomInstCo ax _ arguments) =
+    coAxiomRole ax == Nominal && isFamilyTyCon (coAxiomTyCon ax) && all nominalFamily arguments
+nominalFamily _ = False
 
 -- Only called after source validation or on GHC push-rule derivations.
 certifiedCast :: MCoercion -> Evidence -> Maybe Evidence
@@ -399,6 +434,7 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False
     normalize _ given@Given{} = Just given
     normalize _ Unknown{} = Nothing
     normalize _ builtin@BuiltinTag{} = Just builtin
+    normalize _ proof@Equality{} = Just proof
     normalize _ _ = Nothing
     progress sel df origin (prevSel, prevDf, prev) = sel /= prevSel || df /= prevDf || descendant origin prev
 projected _ ev = Just ev
@@ -424,6 +460,8 @@ sameEvidence (Application p f a) (Application q g b) = eqType p q && sameEvidenc
 sameEvidence (Lifted co d) (Lifted other e) =
     eqType (coercionLKind co) (coercionLKind other) &&
     eqType (coercionRKind co) (coercionRKind other) && sameEvidence d e
+sameEvidence (Equality p a) (Equality q b) = eqType p q &&
+    eqType (coercionLKind a) (coercionLKind b) && eqType (coercionRKind a) (coercionRKind b)
 sameEvidence _ _ = False
 
 sameArgument :: Argument -> Argument -> Bool
