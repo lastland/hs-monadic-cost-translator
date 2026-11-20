@@ -10,6 +10,7 @@ import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
+import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, homeDemandTypes)
 import ConstructionRuntime (resolveExport, runtime)
@@ -77,9 +78,9 @@ checkGeneratedConstruction output = do
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
-        qcResult <- quickCheckResult
+        qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
-        let uses = quickCheckUses qcResult
+        let uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
             locals = localBindings rt qc checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do

@@ -168,6 +168,7 @@ test-suite cost-translate-test
                      ConstructionDefaults
                      ConstructionEvidence
                      ConstructionRoles
+                     ConstructionQuickCheckTypes
                      ConstructionQuickCheckUses
                      ConstructionOperandTransfers
                      ConstructionSyntax

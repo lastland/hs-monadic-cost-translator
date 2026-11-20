@@ -4,20 +4,22 @@
 module ConstructionOperandTransfers (ordinaryOperandTransfers) where
 
 import ConstructionAst (children, collectAst, pretty, typedVariable)
+import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
 import Data.Data (Data, cast)
 import Data.Foldable (toList)
-import Data.List (nub)
+import Data.List (nub, nubBy)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.ConLike (ConLike(..))
 import GHC.Core.DataCon (dataConImplBangs, dataConOrigArgTys, dataConOrigResTy, isBanged)
+import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (getTyVar_maybe, mkScaledFunTys, mkTyVarTy, splitAppTys, splitFunTys, splitPiTys, substTy)
+import GHC.Core.Type (getTyVar_maybe, mkScaledFunTys, mkTyVarTy, splitAppTys, splitFunTys, splitPiTys, splitTyConApp_maybe, substTy)
 import GHC.Core.Unify (tcMatchTy)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsExprType, hsLPatType, lhsExprType)
@@ -32,14 +34,14 @@ type Call = (SrcSpan, Name, Type)
 
 -- The template contains the equation's skolems, shared with its operand
 -- types. AbsBinds exports can use different quantified variables.
-data Body = Body { template :: Type, forcedOperands :: [Type], calls :: [Call] }
+data Body = Body { definingHome :: Module, template :: Type, forcedOperands :: [Type], calls :: [Call] }
 
-ordinaryOperandTransfers :: (Type -> Bool) -> QuickCheck -> [TypecheckedModule] -> [String]
+ordinaryOperandTransfers :: (Module -> Type -> Bool) -> QuickCheck -> [TypecheckedModule] -> [String]
 ordinaryOperandTransfers result qc modules = concatMap report sources
   where
-    sources = map tm_typechecked_source modules
-    bodies = Map.fromList (concatMap (mapMaybe (bindingBody qc) . collectAst) sources)
-    exports = Map.fromList [(getName poly, getName mono) | source <- sources, ABE poly mono _ _ <- collectAst source]
+    sources = [(checkedHome m, tm_typechecked_source m) | m <- modules]
+    bodies = Map.fromList [(n, body) | (home, source) <- sources, b <- collectAst source, Just (n, body) <- [bindingBody home qc b]]
+    exports = Map.fromList [(getName poly, getName mono) | (_, source) <- sources, ABE poly mono _ _ <- collectAst source]
     resolve seen name
         | Just body <- Map.lookup name bodies = Just (name, body)
         | Set.member name seen = Nothing
@@ -51,34 +53,41 @@ ordinaryOperandTransfers result qc modules = concatMap report sources
 
     -- For a first-order value only its outer type constructor decides the
     -- role. Carry open heads across statically named calls, including aliases.
-    -- The domain is finite: only free variables of each retained template can
-    -- be added, paired with the written call that introduced the ordinary
-    -- force. Recursive calls never require unfolding a growing type or RHS.
-    open body ty = do
-        v <- getTyVar_maybe (fst (splitAppTys ty))
-        if v `elemVarSet` tyCoVarsOfType (template body) then Just v else Nothing
-    seeds = Map.map (\body -> Set.fromList [(v, Nothing) | v <- mapMaybe (open body) (forcedOperands body)]) bodies
+    -- A family head also needs its arguments. Intern only the family operands
+    -- actually present in a retained signature or use. These and a template's
+    -- free variable heads are a finite domain even for polymorphic recursion.
+    families = Map.map (\body -> concatMap familyOperands (template body : forcedOperands body ++ [rho t | (_, _, t) <- calls body])) bodies
+    open key body ty
+        | Just v <- getTyVar_maybe (fst (splitAppTys ty)), v `elemVarSet` tyCoVarsOfType (template body) = Just (mkTyVarTy v)
+        | Just (tc, _) <- splitTyConApp_maybe ty, isTypeFamilyTyCon tc, any (eqType ty) (families Map.! key) = Just ty
+        | otherwise = Nothing
+    seeds = Map.mapWithKey (\k body -> [(t, Nothing) | t <- mapMaybe (open k body) (forcedOperands body)]) bodies
     edges = Map.map (mapMaybe (\call@(_, n, _) -> (n,) <$> instantiate call) . calls) bodies
     close known =
-        let step name body = Set.union (seeds Map.! name) $ Set.fromList
-                [(v, Just (fromMaybe called origin)) | (called, (child, _, sub)) <- edges Map.! name,
-                    (h, origin) <- Set.toList (known Map.! child),
-                    Just v <- [open body (substTy sub (mkTyVarTy h))]]
+        let step name body = nubBy same (known Map.! name ++
+                [(t, Just (fromMaybe called origin)) | (called, (child, _, sub)) <- edges Map.! name,
+                    (h, origin) <- known Map.! child, Just t <- [open name body (substTy sub h)]])
             next = Map.mapWithKey step bodies
-        in if next == known then known else close next
-    heads = close seeds
+        in if fmap length next == fmap length known then next else close next
+    same (a, via) (b, other) = via == other && eqType a b
+    heads = close (fmap (nubBy same) seeds)
 
     -- The occurrence is checked even inside a QC body. Report only an
     -- obligation that becomes QC at this instantiation. An already concrete
     -- operand is checked at its own ordinary declaration, not at every caller.
-    report source = nub
+    report (home, source) = nub
         [pretty location ++ ": QuickCheck value used outside a generator or property: " ++ describeName name
             ++ " (operand in ordinary callee" ++ (if origin == name then "" else " " ++ describeName origin) ++ " at this instantiation)"
         | e <- collectAst source, Just call@(location, name, _) <- [typedCall e],
           Just (key, body, sub) <- [instantiate call],
-          let becomes ty = not (result ty) && result (substTy sub ty),
+           let becomes ty = not (result (definingHome body) ty) && result home (substTy sub ty),
            origin <- [name | any becomes (forcedOperands body)] ++
-               [fromMaybe name via | (v, via) <- Set.toList (heads Map.! key), becomes (mkTyVarTy v)]]
+               [fromMaybe name via | (t, via) <- heads Map.! key, becomes t]]
+
+familyOperands :: Type -> [Type]
+familyOperands ty = case splitTyConApp_maybe ty of
+    Just (tc, args) -> [ty | isTypeFamilyTyCon tc] ++ concatMap familyOperands args
+    Nothing -> concatMap familyOperands (snd (splitAppTys ty))
 
 rho :: Type -> Type
 rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
@@ -86,8 +95,8 @@ rho ty = let (_, _, body) = tcSplitSigmaTy ty in body
 firstOrder :: Type -> Bool
 firstOrder = all (null . fst . splitPiTys . scaledThing) . fst . splitFunTys
 
-bindingBody :: QuickCheck -> HsBind GhcTc -> Maybe (Name, Body)
-bindingBody qc binding = do
+bindingBody :: Module -> QuickCheck -> HsBind GhcTc -> Maybe (Name, Body)
+bindingBody home qc binding = do
     identifier <- bindingId binding
     let record scheme rhs
             | firstOrder scheme =
@@ -95,7 +104,7 @@ bindingBody qc binding = do
                     -- A property may force its own operands. Its statically
                     -- named home calls still carry their own ordinary forces.
                     ordinary = if isQuickCheckBinding qc identifier then [] else observed
-                in Just (getName identifier, Body scheme ordinary direct)
+                in Just (getName identifier, Body home scheme ordinary direct)
             | otherwise = Nothing
     case binding of
         FunBind _ _ matches -> let MatchGroupTc args res _ = mg_ext matches in record (mkScaledFunTys args res) matches

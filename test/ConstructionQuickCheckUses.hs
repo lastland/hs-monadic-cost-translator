@@ -4,28 +4,16 @@ module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
 import ConstructionAst (collectAst, typedVariable)
-import ConstructionRuntime (resolveType)
+import ConstructionQuickCheckTypes (quickCheckPackage, quickCheckResult)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys, splitTyConApp_maybe)
-import GHC.Data.FastString (mkFastString)
+import GHC.Core.Type (splitForAllTyVars, splitFunTys, splitPiTys)
 import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsLPatType, lhsExprType)
 import GHC.Types.Id.Make (seqId)
 import GHC.Types.SrcLoc (getBufSpan)
-
-quickCheckPackage :: String
-quickCheckPackage = "QuickCheck"
-
-quickCheckResult :: Ghc (Type -> Bool)
-quickCheckResult = do
-    qc <- findModule (mkModuleName "Test.QuickCheck") (Just (mkFastString quickCheckPackage))
-    constructors <- mapM (resolveType qc) ["Gen", "Property"]
-    pure $ \ty -> case splitTyConApp_maybe (snd (splitPiTys ty)) of
-        Just (constructor, _) -> constructor `elem` constructors
-        Nothing -> False
 
 data QuickCheckUses = QuickCheckUses
     { valueAt :: SrcSpan -> Name -> Bool

@@ -5,6 +5,7 @@ module ConstructionRoles
     ) where
 
 import ConstructionAst
+import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionRuntime
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
@@ -24,7 +25,7 @@ newtype QuickCheck = QuickCheck (Set.Set Name)
 isQuickCheckBinding :: NamedThing a => QuickCheck -> a -> Bool
 isQuickCheckBinding (QuickCheck names) = (`Set.member` names) . getName
 
-quickCheckRoles :: (Type -> Bool) -> [TypecheckedModule] -> Ghc QuickCheck
+quickCheckRoles :: (Module -> Type -> Bool) -> [TypecheckedModule] -> Ghc QuickCheck
 quickCheckRoles result modules = do
     let declared = Set.fromList [name | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
             binding <- collectAst group, Just name <- [bindingName binding]]
@@ -35,8 +36,9 @@ quickCheckRoles result modules = do
         locals m = map unLoc (functionBinders m) ++
             [v | ABE poly mono _ _ <- collectAst (tm_typechecked_source m), v <- [poly, mono]]
     things <- mapM lookupName (filter isExternalName (Set.toList declared))
-    let ids = [v | Just (AnId v) <- things] ++ concatMap locals modules
-    pure (QuickCheck (Set.fromList [getName v | v <- ids, result (idType v)]))
+    let ids = [(nameModule (getName v), v) | Just (AnId v) <- things] ++
+            [(checkedHome m, v) | m <- modules, v <- locals m]
+    pure (QuickCheck (Set.fromList [getName v | (home, v) <- ids, result home (idType v)]))
 
 -- One selector can have both a Gen-valued implementation and an ordinary one.
 -- Match the implementation at its binder token in this module's input buffer;
