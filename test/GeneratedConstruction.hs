@@ -103,6 +103,7 @@ configureArtifact output = do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
     checksImplicitForcing
     checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
