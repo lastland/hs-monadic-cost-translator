@@ -1,12 +1,10 @@
 module Cost.Translate.Frontend.LocalValues
     ( localSignatures
     , bodyTypeRenamings
-    , strictLocalValue
-    , forceWhnf
+    , withLocalThunk
     , allocateSpecialized
     , allocateShared
     , nativeAlias
-    , allocateAlias
     , usedNames
     , typedDeclarations
     , localFunctions
@@ -34,6 +32,7 @@ import Cost.Translate.Sharing
     , renameAllocation
     , vacuousSharing
     )
+import Cost.Translate.Sharing.Specialization (closedScalar)
 import Cost.Translate.Typed (hasFreeVariables)
 import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
@@ -124,13 +123,35 @@ strictLocalValue scope binding name bindingType =
                     )
             Nothing -> False
 
-forceWhnf :: O.Expr -> O.Expr -> O.Expr
-forceWhnf reference continuation =
-    O.doE
-        [O.bind value (O.call "M.force" [reference])]
-        (O.call "Prelude.seq" [O.v value, continuation])
+withLocalThunk ::
+    Env ->
+    LHsBind GhcRn ->
+    Name ->
+    Maybe Type ->
+    O.Expr ->
+    (Env -> Either String O.Expr) ->
+    Either String O.Expr
+withLocalThunk scope binding name bindingType reference done
+    | strictLocalValue scope binding name bindingType = do
+        value <-
+            maybe
+                (Left "missing strict local name")
+                Right
+                (Map.lookup name (plannedStrictValues (namePlan scope)))
+        let inner = case bindingType of
+                Just ty
+                    | closedScalar ty ->
+                        rememberScalar (name, ty) (O.v value) bound
+                _ -> bound
+        continuation <- done inner
+        pure
+            ( O.doE
+                [O.bind value (O.call "M.force" [reference])]
+                (O.call "Prelude.seq" [O.v value, continuation])
+            )
+    | otherwise = done bound
     where
-        value = freshPrimed (usedNames continuation) "strictValue"
+        bound = insertEnv name (Thunk reference) scope
 
 usedNames :: O.Expr -> Set.Set String
 usedNames continuation =
@@ -275,15 +296,6 @@ nativeAlias scope bindingType match = do
         _ -> Nothing
     where
         rhs = m_grhss match
-
-allocateAlias ::
-    Map.Map Name O.Ty -> Env -> Name -> O.Expr -> Bool -> O.Expr -> O.Expr
-allocateAlias signatures scope name thunk strict continuation =
-    O.letE
-        (typedDeclarations signatures scope name (O.val target [] thunk))
-        (if strict then forceWhnf (O.v target) continuation else continuation)
-    where
-        target = localName scope name
 
 allocateShared ::
     Map.Map Name O.Ty ->

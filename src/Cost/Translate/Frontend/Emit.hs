@@ -1,6 +1,6 @@
 module Cost.Translate.Frontend.Emit (emitBind, emitExpr, emitCondition) where
 
-import Control.Monad (unless, zipWithM)
+import Control.Monad (unless, void, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Expression.Arguments
@@ -10,6 +10,7 @@ import Cost.Translate.Frontend.Expression.Values (knownValue, returningScalar)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
 import Cost.Translate.Frontend.Match.Fallback (withFallback)
+import Cost.Translate.Frontend.Match.Pattern qualified as P
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Patterns
 import Cost.Translate.Frontend.Polymorphic
@@ -30,7 +31,7 @@ emitBind :: Env -> LHsBind GhcRn -> Either String O.Decl
 emitBind outer binding = case unLoc binding of
     FunBind _ name matches -> do
         let params = parameterNames outer (unLoc name) matches
-        body <- emitMatches outer (map O.v params) (unLoc (mg_alts matches))
+        body <- matchesWith emitMatchBody outer Nothing (map O.v params) matches
         fname <- case lookupEnv (unLoc name) outer of
             Just (Function n _) -> Right n
             _ -> Left "expected function binding"
@@ -42,29 +43,21 @@ emitBind outer binding = case unLoc binding of
             )
     _ -> bindingError binding
 
-emitMatches ::
-    Env -> [O.Expr] -> [LMatch GhcRn (LHsExpr GhcRn)] -> Either String O.Expr
-emitMatches env args matches =
-    matchRows
-        env
-        [ (getLocA located, zip args (m_pats match), (`emitMatchBody` match))
-        | located@(L _ match) <- matches
-        ]
-        (failureExpr "source pattern match failure")
-
 emitGuards ::
     Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
 emitGuards _ [] fallback = Right fallback
-emitGuards env [L _ (GRHS _ [] body)] _ = emitExpr env body
-emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback =
-    case guards of
-        L _ (BodyStmt _ expr _ _) : gs ->
-            underCondition emitThunk emitExpr env expr $ \scope choose ->
-                following scope $ \miss -> do
-                    yes <- emitGuardStatements scope body gs miss
-                    choose yes miss
-        _ -> following env (emitGuardStatements env body guards)
+emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
+    let failures = scanr ((||) . canMiss) False guards
+    unless (or failures) (void (emitGuards env rest fallback))
+    emitGuardStatements env body (zip guards (drop 1 failures)) following
     where
+        canMiss (L _ statement) = case statement of
+            LetStmt {} -> False
+            BodyStmt _ expr _ _ -> constantCondition env expr /= Just True
+            BindStmt _ pat _ -> case P.patternAt (const Nothing) pat "" of
+                Right (P.Pattern _ _ P.Skip) -> False
+                _ -> True
+            _ -> True
         following scope build = do
             next <- emitGuards scope rest fallback
             withFallback label next build
@@ -81,23 +74,33 @@ emitMatchBody env match failure =
 emitGuardStatements ::
     Env ->
     LHsExpr GhcRn ->
-    [GuardLStmt GhcRn] ->
-    O.Expr ->
+    [(GuardLStmt GhcRn, Bool)] ->
+    GuardEnd ->
     Either String O.Expr
 emitGuardStatements scope body [] _ = emitExpr scope body
-emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next =
-    underCondition emitThunk emitExpr scope expr $ \scope' choose -> do
-        remaining <- emitGuardStatements scope' body gs next
-        choose remaining next
-emitGuardStatements scope body (s@(L _ (BindStmt _ pat expr)) : gs) next =
-    let n = actionName scope "guardThunk" (getLocA s)
-     in withMatchThunk scope n expr $ \reference ->
-            matchPatterns
-                scope
-                [(reference, pat)]
-                (\scope' -> emitGuardStatements scope' body gs next)
-                next
-emitGuardStatements scope body (L _ (LetStmt _ locals) : gs) next =
+emitGuardStatements env body ((L _ (BodyStmt _ expr _ _), later) : gs) next
+    | constantCondition env expr == Just True = yes next env
+    | otherwise =
+        underCondition emitThunk emitExpr env expr $ \common choose ->
+            if later
+                then next common $ \miss ->
+                    let joined _ build = build miss
+                     in choose (yes joined) (const (Right miss))
+                else choose (yes next) (`next` Right)
+    where
+        yes end scope = emitGuardStatements scope body gs end
+emitGuardStatements scope body ((s@(L _ (BindStmt _ pat expr)), _) : gs) next =
+    withMatchThunk scope (actionName scope "guardThunk" site) expr $ \ref ->
+        matchGuard
+            scope
+            site
+            expr
+            (ref, pat)
+            (\s' -> emitGuardStatements s' body gs)
+            next
+    where
+        site = getLocA s
+emitGuardStatements scope body ((L _ (LetStmt _ locals), _) : gs) next =
     withLocals scope locals (\scope' -> emitGuardStatements scope' body gs next)
 emitGuardStatements _ _ _ _ = Left "unsupported guard statement"
 
@@ -186,20 +189,18 @@ emitLocalValue signatures scope binding name match done = do
     let source = unLoc name
         n = localName scope source
         bindingType = Map.lookup source (inferredBindings scope)
+        remaining = withLocalThunk scope binding source bindingType (O.v n) done
         payload =
             bindingType >>= (\ty -> constructorPayload scope source ty match)
     case (nativeAlias scope bindingType match, payload) of
         (Just thunk, _) -> do
-            rest <- done (insertEnv source (Thunk (O.v n)) scope)
-            pure $ allocateAlias signatures scope source thunk strict rest
+            rest <- remaining
+            let alias = typedDeclarations signatures scope source
+            pure (O.letE (alias (O.val n [] thunk)) rest)
         (_, Just plan)
             | let instances = plannedSpecializations (namePlan scope)
             , Map.notMember (unLoc name) instances -> do
-                remaining <- done (insertEnv (unLoc name) (Thunk (O.v n)) scope)
-                let continuation =
-                        if strict
-                            then forceWhnf (O.v n) remaining
-                            else remaining
+                continuation <- remaining
                 allocatePayload
                     (emitExpr scope)
                     (emitCondition scope)
@@ -208,13 +209,6 @@ emitLocalValue signatures scope binding name match done = do
                     plan
                     continuation
         _ -> emitOrdinaryLocalValue signatures scope binding name match done
-    where
-        strict =
-            strictLocalValue
-                scope
-                binding
-                (unLoc name)
-                (Map.lookup (unLoc name) (inferredBindings scope))
 
 emitOrdinaryLocalValue ::
     Map.Map Name O.Ty ->
@@ -253,12 +247,9 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
             let reference
                     | isJust paths = O.call n [O.tuple []]
                     | otherwise = O.v n
-            remaining <- done (insertEnv source (Thunk reference) scope)
-            let continuation =
-                    if strictLocalValue scope binding source bindingType
-                        then forceWhnf reference remaining
-                        else remaining
-                producer =
+            let withThunk = withLocalThunk scope binding source bindingType
+            continuation <- withThunk reference done
+            let producer =
                     bindingType
                         >>= phantomAllocation signatures scope source action
                 allocate = case producer of
@@ -292,10 +283,8 @@ emitExpr env located = case unLoc located of
             located
             <$> emitExpr env expr
     HsIf _ condition yes no ->
-        underCondition emitThunk emitExpr env condition $ \scope choose -> do
-            yesAction <- emitExpr scope yes
-            noAction <- emitExpr scope no
-            choose yesAction noAction
+        underCondition emitThunk emitExpr env condition $ \_ choose ->
+            choose (`emitExpr` yes) (`emitExpr` no)
     HsLet _ locals body -> withLocals env locals (`emitExpr` body)
     ExplicitTuple _ [Present _ a, Present _ b] Boxed ->
         emitConstructor env located "M.PairT" [a, b]
@@ -305,8 +294,8 @@ emitExpr env located = case unLoc located of
         _ -> unsupportedExpression located
     HsCase _ scrutinee matches ->
         let name = actionName env "caseThunk" (getLocA located)
-         in withMatchThunk env name scrutinee $ \reference ->
-                emitMatches env [reference] (unLoc (mg_alts matches))
+            compile = matchesWith emitMatchBody env (Just scrutinee)
+         in withMatchThunk env name scrutinee $ \ref -> compile [ref] matches
     ExplicitList _ elements -> emitList env located 0 elements
     HsApp {} -> emitApplication env located
     OpApp _ left operator right -> emitOperator env located left operator right
@@ -315,7 +304,8 @@ emitExpr env located = case unLoc located of
 emitCondition ::
     Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr
 emitCondition env located yes no =
-    underCondition emitThunk emitExpr env located (\_ choose -> choose yes no)
+    underCondition emitThunk emitExpr env located $ \_ choose ->
+        choose (const (Right yes)) (const (Right no))
 
 emitApplication :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitApplication env located = case unLoc fun of

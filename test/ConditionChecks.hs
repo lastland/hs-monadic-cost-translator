@@ -2,7 +2,7 @@ module ConditionChecks (checkConditionOutput) where
 
 import Control.Monad (unless, when)
 import Data.List (unsnoc)
-import GHC (GhcPs, HsDoFlavour(..), HsExpr(..), Match(..), unLoc)
+import GHC (GhcPs, HsDoFlavour(..), HsExpr(..), Match(..), StmtLR(..), unLoc)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (rdrNameOcc)
 import GeneratedSyntax
@@ -16,12 +16,15 @@ checkConditionOutput binding = do
         fail "guardedM: exhaustive otherwise guard retained a failure path"
     binding "prefixIfM" >>= checkComparison "prefixIfM"
     chain <- binding "threeWayM"
-    let branches = [() | HsIf{} <- expressions chain]
+    let tree = expressions chain
+        branches = [() | HsIf{} <- tree]
+        localActions = [() | HsDo _ _ ss <- tree, s <- unLoc ss, LetStmt{} <- [unLoc s]]
         ordered = do
             (first, _, remaining) <- oneRhs chain >>= tailIf
             (second, _, _) <- tailIf remaining
             pure (comparison "<" first && comparison "==" second)
-    unless (length branches == 2 && ordered == Just True) $
+    unless (length branches == 2 && null localActions && null [() | HsLet{} <- tree] &&
+            ordered == Just True) $
         fail "threeWayM: two ordered comparisons should branch directly into their alternatives"
     known <- expressions <$> binding "knownM"
     unless (null [() | HsIf {} <- known] && not (any failureName known)) $

@@ -202,20 +202,20 @@ keepM x
            unusedbody = pure (error "unused")
        unusedanchor <- M.lazy unusedbody
        let unused = mapThunk Void.absurd unusedanchor
-       arg1 <- M.lazy
-                 (do xValue <- M.force (x :: M.Th Int)
-                     pure (xValue < (xValue + (1 :: Int))))
-       lhs <- M.force arg1
-       undefinedValue <- if lhs then
-                             pure True
-                         else
-                             do arg2 <- M.lazy
-                                          (pure (error "source undefined") :: M.MemoristM Bool)
-                                M.force arg2
-       if undefinedValue then
-           (M.force x :: M.MemoristM Int)
-       else
-           (M.force unused :: M.MemoristM Int)
+       xValue <- M.force (x :: M.Th Int)
+       (let arg1 = pure xValue
+        in
+          if xValue < (xValue + (1 :: Int)) then
+              arg1
+          else
+              do undefinedValue <- do arg2 <- M.lazy
+                                                (pure (error "source undefined") ::
+                                                   M.MemoristM Bool)
+                                      M.force arg2
+                 if undefinedValue then
+                     arg1
+                 else
+                     (M.force unused :: M.MemoristM Int))
 
 pickM :: forall (a :: Type). Num a => M.Th Char -> M.MemoristM a
 pickM c

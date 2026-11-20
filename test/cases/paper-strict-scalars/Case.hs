@@ -106,7 +106,17 @@ boxProbes (spelling, make) = concat
 
 guardProbes :: [Probe]
 guardProbes =
-    [ shallowBox "guard/skipped-test-and-field" (const (guard False))
+    [ boolean "guard/checked-condition" $ \s ->
+        M.lazy (priced (repeats s) (leftDemand s)) >>= checkedFlagM
+    , failure "guard/checked-condition-demand" $ \_ ->
+        fromEnum <$> (M.lazy (bad "annotated flag") >>= checkedFlagM)
+    , boolean "guard/irrefutable-alias-skips-bad-input" $ \_ ->
+        aliasIdentity False (bad "skipped scalar")
+    , boolean "guard/irrefutable-alias-identity" $ \s ->
+        aliasIdentity True (priced 2 (number s))
+    , failure "guard/irrefutable-alias-entered" $ \_ ->
+        fromEnum <$> aliasIdentity True (bad "tested scalar")
+    , shallowBox "guard/skipped-test-and-field" (const (guard False))
     , failure "guard/skipped-test-demanded-field" (\_ -> guard False >>= fieldValue)
     , failure "guard/demanded-test" (\_ -> fromEnum . isJustT <$> guard True)
     , shallowBox "guard/finite-outer" finite
@@ -123,8 +133,20 @@ guardProbes =
         call2 boxQuotM (bad "captured flag") (priced 2 (-1 - abs (number s)))
     , fullBox "quot/finite-full" $ \s ->
         call2 boxQuotM (priced 1 (leftDemand s)) (priced 2 (1 + abs (number s)))
-    ]
+    ] ++
+    [ scalarSource (label ++ "/" ++ show n) (const (source n)) $ \s ->
+        M.lazy (priced (repeats s) n) >>= translated
+    | (label, source, translated) <- [("guard/let", Source.letGuard, letGuardM),
+                                      ("guard/variable", Source.variableGuard, variableGuardM)]
+    , n <- [3, -2] ]
   where
+    aliasIdentity enabled input = do
+        x <- M.lazy input
+        flag <- M.lazy (priced 1 enabled)
+        result <- aliasGuardM flag x
+        pure $ case result of
+            M.JustT y -> M.tname x == M.tname y
+            M.NothingT -> False
     guard flag = call2 guardedM (priced 1 flag) (bad "conditional operand")
     finite s = call2 guardedM (priced 1 (leftDemand s)) (priced 2 (number s))
     distinctInputs s = (2 * abs (number s) + 1, 2 * abs (other s) + 2)
@@ -197,9 +219,44 @@ evidenceProbes =
         M.lazy (bad "boxed summand") >>= givenAddM >>= fieldValue
     ]
 
+shortCircuitProbes :: [Probe]
+shortCircuitProbes = concat
+    [ [ scalar (label ++ "/skipped") $ \_ ->
+            call2 translated (priced 1 (not entered)) (bad "skipped RHS")
+      , failure (label ++ "/entered-bad") $ \_ ->
+            call2 translated (priced 1 entered) (bad "demanded RHS")
+      , scalarSource (label ++ "/entered") (source entered . number) $ \s ->
+            call2 translated (priced 1 entered) (priced 3 (number s))
+      ]
+    | (label, entered, source, translated) <-
+        [ ("and", True, Source.afterAnd, afterAndM), ("or", False, Source.afterOr, afterOrM)
+        , ("nested-and", True, Source.nestedAnd, nestedAndM) ]
+    ]
+
+patternProbes :: [Probe]
+patternProbes = concat
+    [ [ scalarSource (label ++ "/" ++ show input) (const (source input)) $ \s ->
+            M.lazy (priced (repeats s) input) >>= translated
+      | input <- [0, 1, -3] ] ++
+      [ failure (label ++ "/failed-scrutinee") $ \_ -> M.lazy (bad "scrutinee") >>= translated ]
+    | (label, source, translated) <- [("literal", Source.literal, literalM), ("case", Source.inspect, inspectM)]
+    ] ++
+    [ scalarSource ("pattern/" ++ label) (const (Source.zeroSign n)) $ \s ->
+        M.lazy (priced (repeats s) n) >>= zeroSignM
+    | (label, n) <- [("negative-zero", -0.0), ("positive-zero", 0.0), ("nonzero", 1)]
+    ]
+
 probes :: [Probe]
 probes =
-    [ scalarSource "work/ticked-input" (Source.work . number) $ \s ->
+    [ scalarSource "case/direct-alias" (Source.viaCase . number) $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= viaCaseM
+    , scalarSource "work/ticked-input" (Source.work . number) $ \s ->
         M.lazy (priced (repeats s) (number s)) >>= workM
-    ] ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
+    , scalarSource "bang/work-then-add" (Source.bangNext . number) $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= bangNextM
+    , failure "bang/failed-work" $ \_ -> M.lazy (bad "work input") >>= bangNextM
+    , scalarSource "nested/value-and-cost" (Source.nested . number) $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= nestedM
+    , failure "nested/comparison-demands-input" $ \_ -> M.lazy (bad "input") >>= nestedM
+    ] ++ patternProbes ++ shortCircuitProbes ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
     guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes

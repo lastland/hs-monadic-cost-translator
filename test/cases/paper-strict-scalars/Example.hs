@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BangPatterns, FlexibleContexts #-}
 -- shadowForward and shadowPlus test shadowing; givenAdd tests a closed
 -- constraint at an expression whose caller supplies the standard dictionary.
 {-# OPTIONS_GHC -Wno-name-shadowing -Wno-simplifiable-class-constraints #-}
@@ -16,6 +16,48 @@ take n xs =
 
 work :: Int -> Int
 work z = z + z
+
+afterAnd, afterOr, nestedAnd :: Bool -> Int -> Int
+afterAnd flag x = if flag && x > 0 then x + 1 else 0
+afterOr flag x = if flag || x > 0 then 0 else x - 1
+nestedAnd flag x = if flag && (x > 0 && x < 8) then x + 2 else 0
+
+bangNext :: Int -> Int
+bangNext x = let !y = work x in y + 1
+
+letGuard, variableGuard :: Int -> Int
+letGuard x
+    | let y = x, x > 0 = y
+    | otherwise = x - 1
+variableGuard x
+    | y <- x, x > 0 = y
+    | otherwise = x - 1
+
+checkedFlag :: Bool -> Bool
+-- Keep both Bool uses visible to the translator.
+{- HLINT ignore checkedFlag "Redundant if" -}
+{- HLINT ignore checkedFlag "Redundant ==" -}
+checkedFlag flag = if (flag :: Bool) then flag == True else False
+
+aliasGuard :: Bool -> Int -> Maybe Int
+aliasGuard enabled x
+    | y <- x, enabled, x > 0 = Just y
+    | otherwise = Just x
+
+literal :: Int -> Int
+literal x@0 = x + 1
+literal y@1 = y + 2
+literal _ = 0
+
+inspect :: Int -> Int
+inspect x = case x of
+    0 -> x + 1
+    _ -> x - 1
+
+-- Both signed zeros match 0; the arithmetic must use the actual input.
+zeroSign :: Double -> Int
+zeroSign x@0 = if 1 / x < 0 then -1 else 1
+zeroSign _ = 0
 
 boxNext :: Int -> Maybe Int
 boxNext x = if x > 0 then Just (work (x + 1)) else Nothing
@@ -67,3 +109,9 @@ mappedGuards x y
 {-# LINE 100 "Guard.hs" #-}
     , y > 0 = x - y
     | otherwise = 0
+
+viaCase :: Int -> Int
+viaCase x = case x of y -> y + x
+
+nested :: Int -> Int
+nested x = if x + 1 > 0 then x + 2 else x

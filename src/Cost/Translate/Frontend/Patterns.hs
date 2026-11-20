@@ -1,76 +1,141 @@
-module Cost.Translate.Frontend.Patterns (matchRows, matchPatterns) where
+module Cost.Translate.Frontend.Patterns
+    ( GuardEnd
+    , matchGuard
+    , matchesWith
+    ) where
 
 import Cost.Translate.Datatypes (constructors)
 import Cost.Translate.Frontend.Environment
+import Cost.Translate.Frontend.Expression.Thunks (failureExpr)
+import Cost.Translate.Frontend.Expression.Values (knownValue)
+import Cost.Translate.Frontend.Match.Facts
 import Cost.Translate.Frontend.Match.Fallback (withFallback)
 import Cost.Translate.Frontend.Match.Row
 import Cost.Translate.Output qualified as O
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
 
-matchPatterns ::
+type End = Facts -> (O.Expr -> Result) -> Result
+
+type GuardEnd = Env -> (O.Expr -> Result) -> Result
+
+matchesWith ::
+    (Env -> Match GhcRn (LHsExpr GhcRn) -> O.Expr -> Result) ->
     Env ->
-    [(O.Expr, LPat GhcRn)] ->
-    (Env -> Result) ->
-    O.Expr ->
+    Maybe (LHsExpr GhcRn) ->
+    [O.Expr] ->
+    MatchGroup GhcRn (LHsExpr GhcRn) ->
     Result
-matchPatterns env pats success =
-    matchRows env [(noSrcSpan, pats, \scope _ -> success scope)]
+matchesWith body env original args matches =
+    matchRows env original equations $ \_ build ->
+        build (failureExpr "source pattern match failure")
+    where
+        equations =
+            [ (getLocA m, zip args (m_pats row), (`body` row))
+            | m@(L _ row) <- unLoc (mg_alts matches)
+            ]
 
 matchRows ::
-    Env -> [(SrcSpan, [(O.Expr, LPat GhcRn)], Body)] -> O.Expr -> Result
-matchRows env equations failure = do
-    rows <- mapM (prepareRow env) equations
-    compileRows env rows failure
+    Env ->
+    Maybe (LHsExpr GhcRn) ->
+    [(SrcSpan, [(O.Expr, LPat GhcRn)], Body)] ->
+    GuardEnd ->
+    Result
+matchRows env original equations end = do
+    let sources = maybe [] (scrutinee env) original
+        known = rootFacts env original sources
+    rows <- mapM (prepareRow env sources) equations
+    underRows env known rows (\facts -> end (refine facts sources env))
 
-compileRows :: Env -> [Row] -> O.Expr -> Result
-compileRows _ [] failure = Right failure
-compileRows env (Row name step : rows) failure = case step of
-    Ready finish -> following name rows finish
+rootFacts :: Env -> Maybe (LHsExpr GhcRn) -> Sources -> Facts
+rootFacts env original sources = case original >>= knownValue env of
+    Just (_, v) | not (null sources) -> Map.singleton [0] v
+    _ -> Map.empty
+
+matchGuard ::
+    Env ->
+    SrcSpan ->
+    LHsExpr GhcRn ->
+    (O.Expr, LPat GhcRn) ->
+    (Env -> GuardEnd -> Result) ->
+    GuardEnd ->
+    Result
+matchGuard env site expr subject success end = do
+    let sources = scrutinee env expr
+        known = rootFacts env (Just expr) sources
+        joined scope miss = success scope (\_ build -> build miss)
+    row <- prepareRow env sources (site, [subject], joined)
+    case rowStep row of
+        Ready scope _ -> success (scope known) end
+        Inspect {} ->
+            underRows env known [row] (\facts -> end (refine facts sources env))
+
+compileRows :: Env -> Facts -> [Row] -> O.Expr -> Result
+compileRows env facts rows failure =
+    underRows env facts rows (\_ finish -> finish failure)
+
+underRows :: Env -> Facts -> [Row] -> End -> Result
+underRows _ facts [] end = end facts Right
+underRows env facts allRows@(Row _ name step : rows) end = case step of
+    Ready scope finish -> following facts name rows (finish (scope facts))
     Inspect subject check ->
         let (neighbors, rest) = spanMap (sameSubject subject) rows
             checks = (name, check) :| neighbors
             matched = matchedName subject
+            pos = position subject
             force = O.bind matched (O.call "M.force" [reference subject])
-            finish =
-                fmap (O.doE [force])
-                    . compileChecks env (O.v matched) (NE.toList checks)
-         in following (fst (NE.last checks)) rest finish
+            lastName = fst (NE.last checks)
+            test fs value = compileChecks env fs value (NE.toList checks)
+            inspected value =
+                let fs = Map.insert pos value facts
+                 in following fs lastName rest (test fs value)
+         in case Map.lookup pos facts of
+                Just value -> inspected value
+                Nothing
+                    | any (Set.member pos . scalarPositions) allRows ->
+                        O.doE [force] <$> inspected (O.v matched)
+                _ ->
+                    following facts lastName rest $
+                        fmap (O.doE [force]) . test facts (O.v matched)
     where
-        following = withRest (compileRows env) failure
-        sameSubject subject (Row next (Inspect other check))
+        following fs n rest finish = end fs $ \failure ->
+            withRest (compileRows env fs) failure n rest finish
+        sameSubject subject (Row _ next (Inspect other check))
             | position subject == position other = Just (next, check)
         sameSubject _ _ = Nothing
 
-compileChecks :: Env -> O.Expr -> [(String, Check)] -> O.Expr -> Result
-compileChecks _ _ [] failure = Right failure
-compileChecks env value ((name, Compare expected advance) : rest) failure =
-    withRest (compileChecks env value) failure name rest $ \miss -> do
+compileChecks :: Env -> Facts -> O.Expr -> [(String, Check)] -> O.Expr -> Result
+compileChecks _ _ _ [] failure = Right failure
+compileChecks env fs value ((name, Compare expected advance) : rest) failure =
+    withRest (compileChecks env fs value) failure name rest $ \miss -> do
         row <- advance
-        yes <- compileRows env [row] miss
+        yes <- compileRows env fs [row] miss
         pure (O.ifE (O.op "==" value expected) yes miss)
-compileChecks env value ((name, Choose first) : checks) failure =
+compileChecks env fs value ((name, Choose first) : checks) failure =
     let (neighbors, rest) = spanMap asConstructor checks
         choices = (name, first) :| neighbors
         group = map snd (NE.toList choices)
         complete = exhaustive env (map tag group)
-        following = withRest (compileChecks env value) failure
+        following = withRest (compileChecks env fs value) failure
      in following (fst (NE.last choices)) rest $ \miss -> do
-            branches <- alternatives env group miss
+            branches <- alternatives env fs group miss
             pure (O.caseE value (branches ++ [(O.p "_", miss) | not complete]))
     where
         asConstructor (next, Choose branch) = Just (next, branch)
         asConstructor _ = Nothing
 
-alternatives :: Env -> [Branch] -> O.Expr -> Either String [(O.Pat, O.Expr)]
-alternatives _ [] _ = Right []
-alternatives env (first : branches) failure = do
+alternatives ::
+    Env -> Facts -> [Branch] -> O.Expr -> Either String [(O.Pat, O.Expr)]
+alternatives _ _ [] _ = Right []
+alternatives env fs (first : branches) failure = do
     let (same, other) = partition ((== tag first) . tag) branches
-    branch <- emitBranch (first :| same) (\rows -> compileRows env rows failure)
-    (branch :) <$> alternatives env other failure
+    let compile rows = compileRows env fs rows failure
+    branch <- emitBranch (first :| same) compile
+    (branch :) <$> alternatives env fs other failure
 
 withRest ::
     ([a] -> O.Expr -> Result) ->

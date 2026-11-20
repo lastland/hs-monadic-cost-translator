@@ -65,6 +65,7 @@ moduleEnvironment strict datatypes literals types evidence scopes group =
                 expressionTypes
                 (certifiedScalars evidence)
                 Map.empty
+                []
                 datatypes
                 reflected
                 ( Set.fromList

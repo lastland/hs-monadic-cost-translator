@@ -7,6 +7,7 @@ module Cost.Translate.Frontend.NamePlan
 import Cost.Translate.Callable (expressions, spine)
 import Cost.Translate.Frontend.Allocation
 import Cost.Translate.Frontend.Match.Paths
+import Cost.Translate.Frontend.Strict (strictBindNames)
 import Cost.Translate.Frontend.Syntax
 import Cost.Translate.Primitive (saturatedPrimitive)
 import Cost.Translate.Sharing (Specialization)
@@ -28,6 +29,7 @@ data NamePlan = NamePlan
     , plannedMatches :: Map.Map String String
     , plannedAnchors :: Map.Map Name String
     , plannedBodies :: Map.Map Name String
+    , plannedStrictValues :: Map.Map Name String
     , plannedSpecializations :: Map.Map Name [(Specialization, String)]
     , plannedNativeSchemas :: NativeSchemas
     }
@@ -42,6 +44,7 @@ plannedTemporaryNames plan =
         ++ Map.elems (plannedMatches plan)
         ++ Map.elems (plannedAnchors plan)
         ++ Map.elems (plannedBodies plan)
+        ++ Map.elems (plannedStrictValues plan)
         ++ concatMap (map snd) (Map.elems (plannedSpecializations plan))
 
 planNames ::
@@ -78,10 +81,13 @@ planNames datatypes globalNames layouts specialized syntax =
             assignBindingNames "anchor" locals afterMatches names
         (bodies, afterBodies) =
             assignBindingNames "body" locals afterAnchors names
+        strict = strictBindNames binds
+        (strictValues, afterStrictValues) =
+            assignBindingNames "Value" locals afterBodies strict
         (specializations, used) =
             assignSpecializations
                 locals
-                afterBodies
+                afterStrictValues
                 [ (name, types)
                 | name <- names
                 , Just types <- [Map.lookup name specialized]
@@ -96,6 +102,7 @@ planNames datatypes globalNames layouts specialized syntax =
             matches
             anchors
             bodies
+            strictValues
             specializations
             schemas
 

@@ -30,7 +30,35 @@ checkPaperScalarOutput binding = do
         pure $ case checkEquation parameters shape actual of
             Left reason -> Left (name ++ ": " ++ reason)
             Right () -> Right ()
-    unless (null (lefts results)) (fail (unlines (lefts results)))
+    guards <- forM ["letGuardM", "variableGuardM"] $ \name -> do
+        equation <- binding name
+        pure $ case failedGuard equation of
+            Left reason -> Left (name ++ ": " ++ reason)
+            ok -> ok
+    unless (null (lefts (guards ++ results))) (fail (unlines (lefts (guards ++ results))))
+    counts <- forM ["afterAndM", "afterOrM", "nestedAndM", "bangNextM", "literalM", "inspectM"] $ \name -> do
+        equation <- binding name
+        pure $ case (m_pats equation, oneRhs equation) of
+            ([_, p], Just body) | Just x <- patternVariable p ->
+                -- Count just the RHS scalar, regardless of the control-flow
+                -- encoding. Skipped-path demand is checked by the cost oracle.
+                let sites = [() | HsApp _ op arg <- collectAst body,
+                                 maybe False (named "M.force") (expressionVariable op),
+                                 expressionVariable arg == Just x]
+                in countError name "one RHS input force" (== 1) sites
+            ([_], Just body) ->
+                -- Count forces through aliases as well as the original thunk.
+                let sites = [() | HsVar _ op <- collectAst body :: [HsExpr GhcPs],
+                                 named "M.force" (unLoc op)]
+                in if name == "bangNextM"
+                   then countError name "at most one force for the bang" (<= 1) sites
+                   else countError name "one scrutinee force across all rows" (== 1) sites
+            _ -> Left (name ++ ": unexpected equation")
+    unless (null (lefts counts)) (fail (unlines (lefts counts)))
+  where
+    countError name wanted ok sites
+        | ok (length sites) = Right ()
+        | otherwise = Left (name ++ ": expected " ++ wanted ++ ", got " ++ show (length sites))
 
 shapes :: [(String, [String], Shape)]
 shapes =
@@ -46,6 +74,12 @@ shapes =
     , ("boxNextM", ["input"], box)
     , ("boxPrefixM", ["input"], box)
     , ("workM", ["input"], entry "input" (ret (Call "+" [value, value])))
+    , ("nestedM", ["input"], entry "input" $
+        If (Call ">" [Call "+" [value, Number 1], Number 0])
+            (ret (Call "+" [value, Number 2])) (ret value))
+    , ("viaCaseM", ["input"], entry "input" (ret (Call "+" [value, value])))
+    , ("checkedFlagM", ["flag"], entry "flag" $ If value
+        (ret (Call "==" [value, Call "True" []])) (ret (Call "False" [])))
     , ("givenAddM", ["input"], Block [tick, Bind "field" (suspend givenSum)]
         (ret (Call "M.JustT" [Use "field"])))
     ]
@@ -72,6 +106,21 @@ shapes =
         [ Bind "argument" (suspend (ret (Call op [value, Number 1])))
         , Bind "field" (suspend (Call callee (Use "argument" : forwarded)))
         ] (ret (Call constructor (heads ++ [Use "field"])))
+
+-- The successful branch may demand the original lazy alias. Only the failed
+-- comparison must use the scalar already obtained from the input.
+failedGuard :: Binding -> Either String ()
+failedGuard equation = case (m_pats equation, oneRhs equation >>= block) of
+    ([p], Just (steps, final))
+        | Just input <- patternVariable p
+        , Just (_, s) <- unsnoc steps, BindStmt _ binder action <- unLoc s
+        , Just scalar <- patternVariable binder
+        , HsIf _ predicate _ fallback <- bareExpression final -> do
+            match [(input, "input")] (Call "M.force" [Use "input"]) action
+            let scope = [(scalar, "scalar")]
+            match scope (Call ">" [Use "scalar", Number 0]) predicate
+            match scope (Call "pure" [Call "-" [Use "scalar", Number 1]]) fallback
+    _ -> Left "expected a scalar bind followed by the guard test"
 
 checkEquation :: [String] -> Shape -> Binding -> Either String ()
 checkEquation roles shape equation = case (bindPatterns roles (m_pats equation), oneRhs equation) of
