@@ -2,7 +2,7 @@
 module ConstructionAst
     ( collectAst, children, checkedModule, reachable, firstOrderCall, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
     , appliedDataCon, strictConstructorOperands, updateAlternatives, call, bindingName, strictNullaryRhs
-    , plainPattern, constructorPattern, oneRhs, equations
+    , plainPattern, constructorPattern, oneRhs, equations, immediateRegion, declarationAt
     ) where
 
 import Data.Data (Data, cast, gmapQ)
@@ -20,7 +20,8 @@ import qualified GHC.Data.Strict as Strict
 import GHC.Hs.Syn.Type (hsExprType, lhsExprType)
 import GHC.Tc.Types.Evidence (HsWrapper, TcEvBinds)
 import GHC.Tc.Utils.TcType (tcSplitSigmaTy)
-import GHC.Types.SrcLoc (BufSpan, getBufSpan, srcSpanToRealSrcSpan)
+import GHC.Types.Name (isInternalName)
+import GHC.Types.SrcLoc (BufSpan, getBufSpan, srcSpanToRealSrcSpan, bufSpanStart, bufSpanEnd)
 import GHC.Utils.Outputable (Outputable, ppr, showSDocUnsafe)
 
 collectAst :: (Data a, Data b) => b -> [a]
@@ -37,6 +38,33 @@ children walk value
 
 checkedModule :: TypecheckedModule -> Module
 checkedModule = ms_mod . pm_mod_summary . tm_parsed_module
+
+-- Select the immediate physical region in one checked input. Logical LINE
+-- locations are diagnostics, not declaration identities.
+immediateRegion :: [(SrcSpan, a)] -> SrcSpan -> Maybe a
+immediateRegion regions at = case
+    [value | (region, value) <- regions, at `within` region,
+        not (any (\(inner, _) -> getBufSpan inner /= getBufSpan region &&
+            inner `within` region && at `within` inner) regions)] of
+    [value] -> Just value
+    _ -> Nothing
+  where
+    within inner outer = case (getBufSpan inner, getBufSpan outer) of
+        (Strict.Just a, Strict.Just b) -> bufSpanStart b <= bufSpanStart a && bufSpanEnd a <= bufSpanEnd b
+        _ -> False
+
+-- Consumed local values remain part of their expression. Callable helpers and
+-- unused declarations start fresh boundaries, as they do for support roles.
+declarationAt :: (Name -> Bool) -> TypecheckedModule -> SrcSpan -> Maybe (Module, BufSpan)
+declarationAt independent checked at = do
+    physical <- immediateRegion regions at
+    pure (checkedModule checked, physical)
+  where
+    regions = [(getLocA b, physical) | Just (group, _, _, _, _) <- [tm_renamed_source checked],
+        b <- collectAst group :: [LHsBind GhcRn],
+        let names = collectHsBindBinders CollNoDictBinders (unLoc b),
+        not (not (null names) && all (\name -> isInternalName name && not (independent name)) names),
+        Strict.Just physical <- [getBufSpan (getLocA b)]]
 
 -- Index one module once. Keep every candidate in source order: GHC can
 -- retain several typed expressions at one token, with different wrappers.

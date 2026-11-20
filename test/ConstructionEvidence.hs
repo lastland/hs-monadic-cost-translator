@@ -11,7 +11,7 @@ import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeTyp
 import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
-import ConstructionMethods (Methods, homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod)
+import ConstructionMethods (Methods, MethodSite(..), homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding, Support, supportAt, supportBinding, sourceBinding, shrinkSupport)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -80,7 +80,7 @@ methodNames rt modules = do
     pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
-data Site = FieldBody Name | Site String (Either Name SrcSpan) (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
+data Site = FieldBody Name | Site String MethodSite (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
     | StockFacts [(Name, Name, Type, [Use])]
     | TagFacts Platform [TyCon]
     | MethodFacts Methods
@@ -193,8 +193,12 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
         (Strict.Just p, Strict.Just e) -> Just (p, e)
         _ -> Nothing
     record location = recordRole (supportAt utilities checked location) location
-    recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) site owner role) us
-      where owner = contextSite homes site
+    recordRole role location site us = [FieldBody field | Left _ <- [site], Just field <- [owner]] ++ map (Site (pretty location) origin owner role) us
+      where
+        owner = contextSite homes site
+        origin = case site of
+            Left name -> MethodBinding name
+            Right at -> MethodDeclaration (declarationAt (independentBinding locals) checked at)
 
 -- Collect the complete home graph before validating any caller. Source-only
 -- dead uses and compiler-generated uses are obligations of the same field.
@@ -229,7 +233,7 @@ data MethodRules = MethodRules
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: MethodRules -> Either Name SrcSpan -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
+checkUse :: MethodRules -> MethodSite -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
 checkUse rules origin utility = check
   where
     rt = auditedRuntime rules
@@ -270,7 +274,7 @@ checkUse rules origin utility = check
                 all (closedDependency method (method : active)) obligations
             | otherwise = False
         closedDependency _ active obligation@(Use _ _ UnknownMethod _ _) = concreteMethod active obligation
-        closedDependency method _ obligation = null (checkUse rules (Left method) Nothing [] Nothing obligation)
+        closedDependency method _ obligation = null (checkUse rules (MethodBinding method) Nothing [] Nothing obligation)
         utilityMethod (Use selected cls _ ts [ev])
             | Just roles <- utility, not (null roles), all (\role -> roleOf rt selected == Just role &&
                   role `elem` [AbstractMethod, FullMethod, UsageMethod]) roles,

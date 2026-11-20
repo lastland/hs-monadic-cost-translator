@@ -1,0 +1,4 @@
+module ConcreteFoldableCollision where
+
+import ConcreteFoldableCollisionA
+import ConcreteFoldableCollisionB

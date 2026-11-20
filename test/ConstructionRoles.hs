@@ -16,7 +16,7 @@ import Data.Foldable (toList)
 import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe, isJust)
-import Control.Monad (forM)
+import Control.Monad (forM, join)
 import qualified Data.Set as Set
 import GHC
 import GHC.Core.FamInstEnv (FamInst(..))
@@ -34,7 +34,7 @@ import GHC.Core.TyCon (tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
-import GHC.Types.SrcLoc (getBufSpan, bufSpanStart, bufSpanEnd)
+import GHC.Types.SrcLoc (getBufSpan)
 import GHC.Types.Name.Set (NameSet)
 import GHC.Types.Name (isInternalName)
 
@@ -118,15 +118,8 @@ supportRoles rt qc shrinkers programs = Support regions core declared shrinkWrap
     declared = Set.fromList (sourceNames ++ [poly | (poly, mono) <- exports, mono `elem` sourceNames])
 
 supportAt :: Support -> TypecheckedModule -> SrcSpan -> Maybe [Role]
-supportAt (Support modules _ _ _) checked at = case
-    [(region, role) | (region, role) <- regions, at `within` region,
-        not (any (\(inner, _) -> inner /= region && inner `within` region && at `within` inner) regions)] of
-    [(_, role)] -> role
-    _ -> Nothing
-  where regions = [(region, role) | (owner, region, role) <- modules, owner == checkedHome checked]
-        within inner outer = case (getBufSpan inner, getBufSpan outer) of
-            (Strict.Just a, Strict.Just b) -> bufSpanStart b <= bufSpanStart a && bufSpanEnd a <= bufSpanEnd b
-            _ -> False
+supportAt (Support modules _ _ _) checked at =
+    join (immediateRegion [(region, role) | (owner, region, role) <- modules, owner == checkedHome checked] at)
 
 supportBinding :: Support -> Name -> Maybe [Role]
 supportBinding (Support _ names _ _) name = Map.lookup name names
