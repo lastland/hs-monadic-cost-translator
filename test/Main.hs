@@ -102,6 +102,8 @@ runGroup environment (Semantic label sources) = do
     when (label == "caller-scalar-comparisons") (checkScalarComparisonCallers context artifacts)
     when (label == "recursive-tree-representation")
         (checkOptimizedReferenceCases "recursive Tree reprM" context artifacts)
+    when (label == "runtime-demand-bundle")
+        (checkOptimizedReferenceCases "acyclic runtime demand bundle" context artifacts)
     mapM_ (checkGeneratedArtifacts label) artifacts
     putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
 runGroup _ Diagnostics = checkDiagnostics

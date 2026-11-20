@@ -316,6 +316,9 @@ checkGeneratedConstructionSpecimens = do
     accepts "DemandConcreteSum.hs"
     accepts "DemandConcreteLargeSum.hs"
     accepts "RuntimeListLeaf.hs"
+    accepts "RuntimePairLeaf.hs"
+    accepts "RuntimeDemandCompositions.hs"
+    checksRuntimeDemandBoundaries
     checksParameterizedTags
     checksSelectedTags
     checksTagLaziness
@@ -594,6 +597,25 @@ checkGeneratedConstructionSpecimens = do
         requireAt reports "same-physical-roles.hs" [(50, reprFailure)]
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
+    checksRuntimeDemandBoundaries = do
+        mapM_ (\(name, firstLine) -> rejectsAt name
+            [(firstLine, selected "GHC.Classes.=="),
+             (firstLine + 2, selected "GHC.Classes.=="),
+             (firstLine + 4, selected "GHC.Internal.Show.show"),
+             (firstLine + 6, selected "GHC.Internal.Show.show")])
+            [("RuntimePairProtectedTh.hs", 9), ("RuntimePairProtectedAnnotated.hs", 9),
+             ("RuntimePairObservingEq.hs", 15), ("RuntimePairObservingShow.hs", 15),
+             ("RuntimePairDeadObserver.hs", 18), ("RuntimePairManual.hs", 15)]
+        rejectsAt "RuntimePairUnselectedSibling.hs"
+            [(10, forbidden tval), (16, selected "GHC.Classes.=="), (18, selected "GHC.Classes.==")]
+        rejectsAt "RuntimePairDeadObserver.hs" [(12, forbidden tval)]
+        rejectsAt "RuntimePairObservingEq.hs" [(7, forbidden tval)]
+        rejectsAt "RuntimePairObservingShow.hs" [(9, forbidden tval)]
+        rejectsAt "RuntimeForeignListD.hs"
+            [(13, selected "GHC.Classes.=="), (15, selected "GHC.Internal.Show.show")]
+        rejectsAt "RuntimeForeignClass.hs" [(12, unknown "RuntimeForeignClass.==")]
+        rejectsAt "RuntimePreludeList.hs"
+            [(8, selected "GHC.Classes.=="), (10, selected "GHC.Internal.Show.show")]
     checksParameterizedTags = do
         accepts "TagClosed.hs"
         output <- specimen "TagParameterized.hs"
