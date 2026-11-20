@@ -104,6 +104,9 @@ configureArtifact output = do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
+    accepts "BoxedActionControl.hs"
+    rejectsAt "ActionContainer.hs" [(16, forbidden tval), (25, forbidden tval), (34, forbidden tval)]
+    rejectsAt "ActionFieldEvidence.hs" [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance")]
     checksImplicitForcing
     checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
