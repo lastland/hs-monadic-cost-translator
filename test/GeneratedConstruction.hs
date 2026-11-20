@@ -58,7 +58,8 @@ checkGeneratedConstruction output = do
     unless (null problems) (fail (unlines problems))
 
 constructionReports :: FilePath -> IO [String]
-constructionReports output = runGhc (Just libdir) $ do
+constructionReports output =
+    runGhc (Just libdir) $ do
         configureArtifact output
         rt <- runtime
         target <- guessTarget output Nothing Nothing
@@ -450,7 +451,7 @@ checkGeneratedConstructionSpecimens = do
             Succeeded <- load LoadAllTargets
             summary <- getModSummary (mkModuleName "Generated")
             parseModule summary >>= typecheckModule >>= checkPhantomAllocation
-        cleanDefinitions (unlines diagnostics) output (map TopBinding ["viewsM", "makeM", "workM", "mapThunk"])
+        cleanDefinitions (unlines diagnostics) output (map TopBinding ["viewsM", "inferredM", "makeM", "workM", "mapThunk"])
         putStrLn "PASS: phantom producer / one suspended invocation, checked view, original constructor and fields"
     rejectsCompleteBox = do
         (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")

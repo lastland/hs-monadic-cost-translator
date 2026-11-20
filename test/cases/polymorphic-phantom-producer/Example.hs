@@ -15,3 +15,8 @@ views tag present left right =
     let shared :: forall f. Parcel f a
         shared = make tag present left right
     in (shared, shared)
+
+inferred :: Int -> Bool -> ((Parcel [] Int, Parcel Maybe Int), (Parcel [] Bool, Parcel Maybe Bool))
+inferred n b =
+    let go tag = let shared = make tag True n n in (shared, shared)
+    in (go n, go b)

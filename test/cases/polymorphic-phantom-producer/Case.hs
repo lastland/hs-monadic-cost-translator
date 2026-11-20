@@ -73,6 +73,15 @@ probes =
         let fresh = ordinary tag flag x y >>= bothFirst
         (+) <$> fresh <*> fresh
     , failure "parcel/demanded-bottom" (const (call True (error "demanded left") 0 >>= bothFirst))
+    , scalarSource "parcel/inferred-helper-at-two-types"
+        (\s -> let ((a,_),(_,b)) = S.inferred (number s) (leftDemand s)
+               in sourceField True a + sourceField False b) $ \s -> do
+        n <- paid (number s)
+        b <- paid (leftDemand s)
+        M.PairT left right <- G.inferredM n b
+        M.PairT x _ <- M.force left
+        M.PairT _ y <- M.force right
+        (+) <$> readField True x <*> readField False y
     , snapshot "parcel/alias-partition" $ \s -> M.value $ M.eval1 $ do
         tag <- M.lazy (pure 'x')
         flag <- paid (leftDemand s)

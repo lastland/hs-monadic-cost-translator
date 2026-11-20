@@ -134,16 +134,12 @@ buildMapping datatypes names name (tc, index, variable) = do
                 fields =
                     map scaledThing $
                         dataConInstOrigArgTys dc arguments
-                payloads = ["payload" ++ show n | n <- [0 .. length fields - 1]]
                 target = representationName (getName dc)
             views <-
                 maybe (Left "unsupported structural mapping") Right $
                     mapM (planView names [(variable, O.v "convert")]) fields
             pure
-                (
-                    ( O.conP target (map O.p payloads)
-                    , O.call target (zipWith viewThunk views (map O.v payloads))
-                    )
+                ( constructorView target views
                 , concatMap viewDependencies views
                 )
 

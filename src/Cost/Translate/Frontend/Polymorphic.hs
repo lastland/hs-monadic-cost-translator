@@ -1,5 +1,6 @@
 module Cost.Translate.Frontend.Polymorphic
     ( constructorPayload
+    , phantomAllocation
     , allocatePayload
     ) where
 
@@ -16,11 +17,17 @@ import Cost.Translate.Frontend.Expressions
 import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)
+import Cost.Translate.Frontend.Signatures
+    ( monadicType
+    , thunkType
+    , translatedSignatureAs
+    )
 import Cost.Translate.Frontend.Syntax (argumentKey)
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
-import Cost.Translate.Sharing (nativeSharing, sharingType)
+import Cost.Translate.Sharing (nativeSharing, renameAllocation, sharingType)
 import Cost.Translate.Sharing.Schema (planNativeSchemas)
+import Cost.Translate.Sharing.Structural (phantomBranches)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC
@@ -32,6 +39,7 @@ import GHC.Core.Type
     ( getTyVar_maybe
     , isLiftedTypeKind
     , isManyTy
+    , mkSpecForAllTys
     , mkTyVarTy
     , splitForAllForAllTyBinders
     , splitForAllTyVars
@@ -77,19 +85,77 @@ constructorPayload env name ty match = do
             scoped <- originalScope env name ty variables
             plan OriginalPayload scoped
         checked = do
-            let schemas = plannedNativeSchemas (namePlan env)
-            case nativeSharing schemas Map.empty ty of
-                Right Nothing -> pure ()
-                _ -> Nothing
-            scoped <- payloadScope env name ty
-            _ <-
-                either
-                    (const Nothing)
-                    Just
-                    (payloadBinders CheckedPayload env variables)
+            scoped <- checkedScope env name ty variables
             plan CheckedPayload scoped
     guard (not (null variables))
     original <|> checked
+
+checkedScope :: Env -> Name -> Type -> [TyVar] -> Maybe [TyVar]
+checkedScope env name ty variables = do
+    let schemas = plannedNativeSchemas (namePlan env)
+    Right Nothing <- pure (nativeSharing schemas Map.empty ty)
+    scoped <- payloadScope env name ty
+    Right _ <- pure (payloadBinders CheckedPayload env variables)
+    pure scoped
+
+phantomAllocation ::
+    Map.Map Name O.Ty ->
+    Env ->
+    Name ->
+    O.Expr ->
+    Type ->
+    Maybe (O.Expr -> O.Expr)
+phantomAllocation signatures env name action ty = do
+    let (variables, result) = splitForAllTyVars ty
+        datatypes = sourceDatatypes env
+    guard (not (null variables))
+    branches <- phantomBranches datatypes variables result
+    _ <- checkedScope env name ty variables
+    Right (allocatorType, payload) <- pure (phantomTypes env name action ty)
+    producer <- case Map.lookup name signatures of
+        Nothing -> Just action
+        Just _ -> do
+            Right source <-
+                pure (translatedSignatureAs False monadicType datatypes 0 ty)
+            pure (O.ann action source)
+    let plan = namePlan env
+        local = localName env name
+    root <- Map.lookup name (plannedAnchors plan)
+    allocate <- Map.lookup name (plannedBodies plan)
+    let value = O.caseE (O.v "produced") branches
+        retag = O.app (typedOperation "pure" payload) [value]
+        body =
+            suspendPayload payload $
+                O.doE [O.bind "produced" (O.v "producer")] retag
+        definition = O.val allocate [O.p "producer"] body
+        view = O.call "mapThunk" [instantiatePayload, O.v root]
+        shared =
+            [O.sig local sig | Just sig <- [Map.lookup name signatures]]
+                ++ [O.val local [] view]
+        allocation = O.bind root (O.call allocate [producer])
+        bind rest
+            | local `Set.notMember` usedNames rest = rest
+            | otherwise =
+                O.letE
+                    [O.sig allocate allocatorType, definition]
+                    (O.doE [allocation] (O.letE shared rest))
+    pure bind
+
+phantomTypes :: Env -> Name -> O.Expr -> Type -> Either String (O.Ty, O.Ty)
+phantomTypes env name action ty = do
+    let captures = tyCoVarsOfTypesWellScoped [ty]
+        closed = mkSpecForAllTys captures ty
+        names = bodyTypeRenamings Map.empty env name action closed
+        (variables, input) = splitForAllTyVars (renameAllocation names closed)
+        (fixed, varying) = splitAt (length captures) variables
+        binders = payloadBinders CheckedPayload env
+    outer <- binders fixed
+    inner <- binders varying
+    rendered <- renderType (sourceDatatypes env) input
+    let payload = O.forallT inner rendered
+        rhsType = O.forallT inner (monadicType rendered)
+        rootType = monadicType (thunkType payload)
+    pure (O.forallT outer (O.arrow rhsType rootType), payload)
 
 originalScope :: Env -> Name -> Type -> [TyVar] -> Maybe [TyVar]
 originalScope env name ty variables = do
@@ -231,7 +297,10 @@ payloadView :: O.Ty -> O.Expr -> O.Expr
 payloadView ty thunk =
     O.app
         (O.typeApp (O.v "mapThunk") ty)
-        [O.lam [O.p "payload"] (O.v "payload"), thunk]
+        [instantiatePayload, thunk]
+
+instantiatePayload :: O.Expr
+instantiatePayload = O.lam [O.p "payload"] (O.v "payload")
 
 emitPayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->
@@ -318,7 +387,7 @@ allocateUsedPayload emit env name (scoped, payload) continuation = do
         bodyType =
             O.forallT
                 sourceBinders
-                (O.tc "M.MemoristM" [O.tc "M.Th" [ty]])
+                (monadicType (thunkType ty))
         allocation = suspendPayload ty action
         declarations =
             if null scoped
@@ -329,9 +398,7 @@ allocateUsedPayload emit env name (scoped, payload) continuation = do
             Payload route variables source _ ->
                 O.forallT
                     <$> payloadBinders route env variables
-                    <*> ( O.tc "M.Th" . (: [])
-                            <$> renderType (sourceDatatypes env) source
-                        )
+                    <*> (thunkType <$> renderType (sourceDatatypes env) source)
     sharedType <- signature
     pure
         ( O.letE declarations $

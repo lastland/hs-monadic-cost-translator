@@ -1,5 +1,5 @@
 {-# LANGUAGE KindSignatures #-}
-module Generated (ParcelT, Body(..), viewsM) where
+module Generated (ParcelT, Body(..), viewsM, inferredM) where
 
 import Data.Kind (Type)
 import qualified Memorist.Data.List as L
@@ -14,6 +14,12 @@ viewsM :: M.Th a -> M.Th Bool -> M.Th Int -> M.Th Int
     -> M.MemoristM (M.PairT (ParcelT L.ListT a) (ParcelT M.MaybeT a))
 viewsM tag present left right = do
     M.tick
+    pair tag present left right
+
+type Views a = M.PairT (Body a) (Body a)
+
+pair :: M.Th a -> M.Th Bool -> M.Th Int -> M.Th Int -> M.MemoristM (Views a)
+pair tag present left right = do
     root <- M.lazy $ do
         M.tick
         selected <- M.force present
@@ -25,3 +31,12 @@ viewsM tag present left right = do
         M.tick
         n <- M.force input
         pure (n + n)
+
+inferredM :: M.Th Int -> M.Th Bool -> M.MemoristM (M.PairT (Views Int) (Views Bool))
+inferredM n b = do
+    M.tick
+    let go tag = do
+            M.tick
+            present <- M.lazy (pure True)
+            pair tag present n n
+    M.PairT <$> M.lazy (go n) <*> M.lazy (go b)
