@@ -78,7 +78,7 @@ methodNames rt modules = do
     pure (Map.keys known ++ [getName method | m <- modules, tc <- tcg_tcs (fst (tm_internals_ m)),
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
-data Site = FieldBody Name | Site String (Maybe Name) (Maybe Role) Use | MissingCertificate String | DefaultFacts Defaults
+data Site = FieldBody Name | Site String (Maybe Name) (Maybe [Role]) Use | MissingCertificate String | DefaultFacts Defaults
     | StockFacts [(Name, Name, Type, [Use])]
     | TagFacts Platform [TyCon]
 
@@ -219,7 +219,7 @@ data MethodRules = MethodRules
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
 data Active = Active Name Evidence Evidence
 
-checkUse :: MethodRules -> Maybe Role -> [Active] -> Maybe Name -> Use -> [String]
+checkUse :: MethodRules -> Maybe [Role] -> [Active] -> Maybe Name -> Use -> [String]
 checkUse rules utility = check
   where
     rt = auditedRuntime rules
@@ -252,8 +252,8 @@ checkUse rules utility = check
         root (Super _ _ parent) = root parent
         root evidence = evidence
         utilityMethod (Use selected cls _ ts [ev])
-            | Just role <- utility, roleOf rt selected == Just role,
-              role `elem` [AbstractMethod, FullMethod, UsageMethod],
+            | Just roles <- utility, not (null roles), all (\role -> roleOf rt selected == Just role &&
+                  role `elem` [AbstractMethod, FullMethod, UsageMethod]) roles,
               Just (actual, args) <- predicateOf ev >>= getClassPredTys_maybe,
               getName actual == cls, length args == length ts, and (zipWith eqType args ts) =
                 supportEvidence ev

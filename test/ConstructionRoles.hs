@@ -10,6 +10,7 @@ import ConstructionQuickCheckTypes (checkedHome)
 import ConstructionRuntime
 import Data.List (nub)
 import Data.Foldable (toList)
+import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
@@ -25,21 +26,45 @@ import GHC.Types.Id (isDFunId)
 import qualified GHC.Data.Strict as Strict
 import GHC.Tc.Types (tcg_tcs, tcg_fam_insts)
 import GHC.Types.SrcLoc (getBufSpan)
+import GHC.Types.Name.Set (NameSet)
 
 -- Permission belongs to the nominal class field, never its dictionary or
 -- spelling. Every nested declaration starts a fresh ordinary obligation.
-data Support = Support [(SrcSpan, Maybe Role)] (Map.Map Name Role) (Set.Set Name)
+data Support = Support [(SrcSpan, Maybe [Role])] (Map.Map Name [Role]) (Set.Set Name)
 
-supportRoles :: Runtime -> [(TypecheckedModule, C.CoreProgram)] -> Support
-supportRoles rt programs = Support regions core declared
+supportRoles :: Runtime -> QuickCheck -> [(TypecheckedModule, C.CoreProgram)] -> Support
+supportRoles rt qc programs = Support regions core declared
   where
     modules = map fst programs
     roots = [(getLocA n, role) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
         ClsInstDecl{cid_binds = bs} <- collectAst group :: [ClsInstDecl GhcRn],
         L _ (FunBind _ n _) <- toList bs, Just role <- [roleOf rt (unLoc n)],
         role `elem` [AbstractMethod, FullMethod, UsageMethod]]
+    bindings = [(m, b) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+        b <- collectAst group :: [HsBind GhcRn]]
+    methods = [getLocA n | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+        inst <- collectAst group :: [ClsInstDecl GhcRn], L _ (FunBind _ n _) <- toList (cid_binds inst)] ++
+        [getLocA n | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m],
+        ClassDecl{tcdMeths = bs} <- collectAst group :: [TyClDecl GhcRn],
+        L _ (FunBind _ n _) <- toList bs]
+    helper (FunBind _ n _) = isExternalName (unLoc n) && getLocA n `notElem` methods
+    helper _ = False
+    references b = concat (children supportReferences b)
+    edges = Map.fromList [(n, references b) | (_, b) <- bindings, helper b, Just n <- [bindingName b]]
+    reached role = reachable edges (Set.fromList [n | (_, b@(FunBind _ binder _)) <- bindings,
+        lookup (getLocA binder) roots == Just role, n <- references b])
+    candidates = Set.unions (map reached [AbstractMethod, FullMethod, UsageMethod])
+    ordinary = reachable edges (Set.fromList [n | (m, b) <- bindings,
+        not (quickCheckBody qc m b), not (maybe False (`Set.member` candidates) (bindingName b) && helper b),
+        not (case b of FunBind _ binder _ -> getLocA binder `elem` map fst roots; _ -> False),
+        n <- references b])
+    helperRoles n = [role | role <- [AbstractMethod, FullMethod, UsageMethod],
+        n `Set.member` reached role, n `Set.notMember` ordinary, Map.member n edges]
+    sourceRole n = case lookup (getLocA n) roots of
+        Just role -> Just [role]
+        Nothing -> case helperRoles (unLoc n) of [] -> Nothing; roles -> Just roles
     regions = [(getLocA b, case unLoc b of
-            FunBind _ n _ -> lookup (getLocA n) roots
+            FunBind _ n _ -> sourceRole n
             _ -> Nothing) | m <- modules,
         Just (group, _, _, _, _) <- [tm_renamed_source m],
         b <- collectAst group :: [LHsBind GhcRn]]
@@ -55,7 +80,9 @@ supportRoles rt programs = Support regions core declared
         (selector, value) <- zip (classAllSelIds cls) values,
         Just role <- [roleOf rt (getName selector)], role `elem` [AbstractMethod, FullMethod, UsageMethod],
         (C.Var method, _) <- [C.collectArgs value]]
-    initial = Map.fromList (fields ++ [(name, role) | (name, at) <- typed, Just role <- [lookup at roots]])
+    sourceRoles = [(getLocA n, roles) | (_, FunBind _ n _) <- bindings, Just roles <- [sourceRole n]]
+    initial = Map.fromList ([(name, [role]) | (name, role) <- fields] ++
+        [(name, roles) | (name, at) <- typed, Just roles <- [lookup at sourceRoles]])
     close names = let next = Map.union names (Map.fromList
                          [(poly, role) | (poly, mono) <- exports, Just role <- [Map.lookup mono names]])
                   in if Map.size next == Map.size names then names else close next
@@ -64,18 +91,28 @@ supportRoles rt programs = Support regions core declared
         v <- collectHsBindBinders CollNoDictBinders b]
     declared = Set.fromList (sourceNames ++ [poly | (poly, mono) <- exports, mono `elem` sourceNames])
 
-supportAt :: Support -> SrcSpan -> Maybe Role
+supportAt :: Support -> SrcSpan -> Maybe [Role]
 supportAt (Support regions _ _) at = case
     [(region, role) | (region, role) <- regions, at `isSubspanOf` region,
         not (any (\(inner, _) -> inner /= region && inner `isSubspanOf` region && at `isSubspanOf` inner) regions)] of
     [(_, role)] -> role
     _ -> Nothing
 
-supportBinding :: Support -> Name -> Maybe Role
+supportBinding :: Support -> Name -> Maybe [Role]
 supportBinding (Support _ names _) name = Map.lookup name names
 
 sourceBinding :: Support -> Name -> Bool
 sourceBinding (Support _ _ names) name = Set.member name names
+
+-- References belong to the immediate equation. Nested definitions, including
+-- unused ones, have their own role and cannot borrow their parent's authority.
+supportReferences :: Data a => a -> [Name]
+supportReferences value
+    | Just (_ :: HsBind GhcRn) <- cast value = []
+    | Just (_ :: NameSet) <- cast value = []
+    | Just (HsVar _ n) <- cast value :: Maybe (HsExpr GhcRn) = [unLoc n]
+    | Just (HsRecSel _ field) <- cast value :: Maybe (HsExpr GhcRn) = [foExt field]
+    | otherwise = concat (children supportReferences value)
 
 -- Only the result after the binders counts: Gen in an argument, or inside
 -- MemoristM, does not turn a translated computation into a generator.

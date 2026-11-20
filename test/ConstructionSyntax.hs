@@ -177,10 +177,12 @@ checkSyntax rt utilities locals uses homes methods support checked = case tm_ren
         ([pretty location ++ ": unapproved " ++ (if runtimeOwns rt name then "runtime" else "external") ++
            " operation " ++ describeName name ++ " is forbidden in generated code"], [])
     utilityOperation location name = case (supportAt utilities location, roleOf rt name) of
-        (Just AbstractMethod, Just role) -> role `elem` [AbstractMethod, Payload]
-        (Just FullMethod, Just role) -> role == FullMethod
-        (Just UsageMethod, Just role) -> role `elem` [UsageMethod, EmptyAccounting, UnionAccounting]
+        (Just roles, Just operation) -> not (null roles) && all (`permits` operation) roles
         _ -> False
+    permits AbstractMethod role = role `elem` [AbstractMethod, Payload]
+    permits FullMethod role = role `elem` [FullMethod, Payload]
+    permits UsageMethod role = role `elem` [UsageMethod, EmptyAccounting, UnionAccounting]
+    permits _ _ = False
     permitted name | name `elem` restrictedViews support = False
     permitted name = case nameModule_maybe name of
         Nothing -> True

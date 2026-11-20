@@ -84,10 +84,10 @@ constructionReports output =
         programs <- mapM (fmap (mg_binds . coreModule) . desugarModule) checkedModules
         let checkedPrograms = zip checkedModules programs
             representations = homeReprs rt checkedPrograms
-            utilities = supportRoles rt checkedPrograms
         qcResult <- quickCheckResult checkedModules
         qc <- quickCheckRoles qcResult checkedModules
-        let uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
+        let utilities = supportRoles rt qc checkedPrograms
+            uses checked = quickCheckUses (qcResult (checkedHome checked)) checked
             locals = localBindings rt qc checkedModules
         views <- viewSupport rt locals homes checkedPrograms
         reports <- forM checkedPrograms $ \(checked, program) -> do
