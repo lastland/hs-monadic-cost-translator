@@ -120,6 +120,7 @@ checkGeneratedConstructionSpecimens = do
     checksOperandPropertyCall
     mixed "OperandWrappedProperty.hs" (map TopBinding ["draw", "prop_own", "prop_scalar"]) "OperandWrappedProperty.hs"
         [(10, wrappedForce "law"), (11, wrappedForce "relay")]
+    checksFamilyOperands
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
@@ -348,6 +349,15 @@ checkGeneratedConstructionSpecimens = do
         -- thunk and constructs its generator on the very same source line.
         unless (length reports == 1 && hasSite (12, qcValue "OperandPropertyCall.strict") reports) $
             fail (output ++ ": expected only the ordinary callee's operand diagnostic, got " ++ diagnostics)
+    checksFamilyOperands = do
+        output <- specimen "OperandFamilyCalls.hs"
+        upstream <- specimen "OperandFamilies.hs"
+        typechecks output
+        reports <- rejection output
+        requireAt reports output [(13, qcValue "OperandFamilies.h"), (14, qcValue "OperandFamilies.law"),
+            (15, qcValue "OperandFamilies.forceOpen"), (23, qcValue "OperandFamilies.generic"), (24, qcValue "OperandFamilies.strip")]
+        requireAt reports upstream [(24, forbidden tval)]
+        cleanDefinitions reports output (map TopBinding ["draw", "prop_scalar", "local"])
     checksNestedInstanceRoles = do
         output <- specimen "NestedInstanceRoles.hs"
         typechecks output
