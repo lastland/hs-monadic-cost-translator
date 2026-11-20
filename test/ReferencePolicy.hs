@@ -12,6 +12,7 @@ module ReferencePolicy
 import Control.Monad (foldM, forM, unless, void, zipWithM)
 import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.Data (Data, cast, gmapQ)
+import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, nub, sort, (\\))
 import Data.Maybe (fromMaybe, isJust)
 import GHC
@@ -23,7 +24,7 @@ import GHC
     , IE(..), IEWrappedName(..), ImportDecl(..), ImportDeclQualifiedStyle(..)
     , IsBootInterface(..), ImportListInterpretation(..)
     , getLocA, getSessionDynFlags, moduleNameString, runGhc, unLoc
-    , TyClDecl(..), tcdName
+    , TyClDecl(..), tcdName, HsDataDefn(..), ConDecl(..), IEWildcard(..)
     )
 import GHC.Data.Bag (bagToList)
 import GHC.Data.FastString (mkFastString, unpackFS)
@@ -429,13 +430,15 @@ externalModule name =
         (part, []) -> [part]
         (part, _:rest) -> part : splitModule rest
 
-data GeneratedNames = GeneratedNames [String] [String]
+data GeneratedNames = GeneratedNames [String] [String] [(String, String)]
 
 emptyGeneratedNames :: GeneratedNames
-emptyGeneratedNames = GeneratedNames [] []
+emptyGeneratedNames = GeneratedNames [] [] []
 
 generatedNames :: HsModule GhcPs -> GeneratedNames
 generatedNames ast = GeneratedNames (filter exported functions) (filter exported shapes)
+    [identity | identity <- declaredConstructors ast,
+                maybe True (any (constructorIncluded shapes identity . unLoc) . unLoc) (hsmodExports ast)]
   where
     functions = [occNameString (rdrNameOcc name) | ValD _ binding <- map unLoc (hsmodDecls ast),
                  name <- collectHsBindBinders CollNoDictBinders binding, isVarOcc (rdrNameOcc name)]
@@ -445,8 +448,32 @@ generatedNames ast = GeneratedNames (filter exported functions) (filter exported
         Nothing -> True
         Just entries -> name `elem` map (occNameString . rdrNameOcc) (collectNames entries)
 
+-- Retain the parent type for T(..), but never confuse a bare T export with
+-- its same-spelled data constructor. Only constructor declarations supply values.
+declaredConstructors :: HsModule GhcPs -> [(String, String)]
+declaredConstructors ast =
+    [(occNameString (rdrNameOcc (tcdName declaration)), occNameString (rdrNameOcc (unLoc name)))
+    | TyClD _ declaration@DataDecl { tcdDataDefn = definition } <- map unLoc (hsmodDecls ast),
+      constructor <- toList (dd_cons definition),
+      name <- case unLoc constructor of
+          ConDeclH98 { con_name = single } -> [single]
+          ConDeclGADT { con_names = multiple } -> toList multiple]
+
+constructorIncluded :: [String] -> (String, String) -> IE GhcPs -> Bool
+constructorIncluded types (parent, constructor) entry = case entry of
+    IEVar _ name _ -> wrappedName name == Just constructor
+    IEThingAbs _ name _ -> constructor `notElem` types && wrappedName name == Just constructor
+    IEThingAll _ name _ -> wrappedName name == Just parent
+    IEThingWith _ name wildcard children _ ->
+        wrappedName name == Just parent &&
+        (wildcard /= NoIEWildcard || any ((== Just constructor) . wrappedName) children)
+    _ -> False
+  where
+    wrappedName (L _ (IEName _ name)) = Just (occNameString (rdrNameOcc (unLoc name)))
+    wrappedName _ = Nothing
+
 catalogProblems :: GeneratedNames -> FilePath -> HsModule GhcPs -> [String]
-catalogProblems (GeneratedNames generatedFunctions generatedShapes) file ast =
+catalogProblems (GeneratedNames generatedFunctions generatedShapes generatedConstructors) file ast =
     exportProblems ++ signatureProblems ++ bindingProblems ++ shadowProblems
   where
     at = problem file
@@ -474,13 +501,14 @@ catalogProblems (GeneratedNames generatedFunctions generatedShapes) file ast =
                     let labels = [label | StaticProbe _ label _ <- entries]
                         successful = [entry | entry@(StaticProbe kind _ _) <- entries, kind `notElem` ["snapshot", "failure"]]
                         generated entry = any (reaches False (fromGenerated generatedFunctions ast)) (programFields entry)
+                        constructed entry = any (reachesSyntax True False (fromGeneratedConstructor generatedShapes generatedConstructors ast)) (programFields entry)
                         conversion entry = any (reaches False (runtimeConversion ast)) (programFields entry) &&
                             any (reaches True (fromGenerated generatedShapes ast)) (allFields entry)
                     in [at "probe catalog must contain a successful costed computation; failures and snapshots are supplementary" | null successful] ++
                        [at "probe labels must be nonempty static strings" | any null labels] ++
                        [at "probe labels must be unique" | length (nub labels) /= length labels] ++
-                        [at ("costed callback has no reachable Generated function or generated-instance conversion: " ++ label)
-                           | entry@(StaticProbe _ label _) <- successful, not (generated entry || conversion entry)]
+                        [at ("costed callback has no reachable Generated function, exported constructor, or generated-instance conversion: " ++ label)
+                           | entry@(StaticProbe _ label _) <- successful, not (generated entry || constructed entry || conversion entry)]
             _ -> [at "probes must be one unguarded, argument-free static catalog"]
         _ -> [at "Case must define exactly one top-level static probes catalog"]
     shadowProblems =
@@ -840,6 +868,27 @@ fromGenerated exported ast name = occNameString (rdrNameOcc name) `elem` exporte
             Qual qualifier _ -> moduleNameString qualifier == maybe "Generated" (moduleNameString . unLoc) (ideclAs declaration)
             _ -> False
 
+fromGeneratedConstructor :: [String] -> [(String, String)] -> HsModule GhcPs -> RdrName -> Bool
+fromGeneratedConstructor types exported ast name =
+    not locallyDeclared && any (resolves . unLoc) (hsmodImports ast)
+  where
+    constructor = occNameString (rdrNameOcc name)
+    locallyDeclared = case name of
+        Unqual _ -> constructor `elem` map snd (declaredConstructors ast)
+        _ -> False
+    resolves declaration = moduleNameString (unLoc (ideclName declaration)) == "Generated" &&
+        any (\identity@(_, selected) -> selected == constructor && included declaration identity) exported &&
+        case name of
+            Unqual _ -> ideclQualified declaration == NotQualified
+            Qual qualifier _ -> moduleNameString qualifier ==
+                maybe "Generated" (moduleNameString . unLoc) (ideclAs declaration)
+            _ -> False
+    included declaration identity = case ideclImportList declaration of
+        Nothing -> True
+        Just (interpretation, entries) ->
+            let selected = any (constructorIncluded types identity . unLoc) (unLoc entries)
+            in if interpretation == Exactly then selected else not selected
+
 runtimeConversion :: HsModule GhcPs -> RdrName -> Bool
 runtimeConversion ast name = occNameString (rdrNameOcc name) == "reprM" && any (resolves . unLoc) (hsmodImports ast)
   where
@@ -854,7 +903,10 @@ runtimeConversion ast name = occNameString (rdrNameOcc name) == "reprM" && any (
 -- tables keep their lexical bindings. This is syntactic reachability, not a
 -- proof that arbitrary Haskell uses its argument or takes a particular branch.
 reaches :: Bool -> (RdrName -> Bool) -> StaticValue -> Bool
-reaches includeTypes target = value 300 []
+reaches = reachesSyntax False
+
+reachesSyntax :: Bool -> Bool -> (RdrName -> Bool) -> StaticValue -> Bool
+reachesSyntax includeConstructors includeTypes target = value 300 []
   where
     value fuel _ _ | fuel <= 0 = False
     value fuel visited (Alias identifier definition)
@@ -872,7 +924,8 @@ reaches includeTypes target = value 300 []
         Just definition -> value (fuel - 1) visited definition
         Nothing -> target name
     expressionUses fuel visited environment located = case unLoc located of
-        HsVar _ name -> isVarOcc (rdrNameOcc (unLoc name)) && variable fuel visited environment (unLoc name)
+        HsVar _ name -> (includeConstructors || isVarOcc (rdrNameOcc (unLoc name))) &&
+            variable fuel visited environment (unLoc name)
         HsLam _ _ (MG _ alternatives) -> any (matchUses fuel visited environment . unLoc) (unLoc alternatives)
         HsLet _ locals body -> expressionUses (fuel - 1) visited (extendBindings (localBindings locals) environment) body
         HsCase _ subject (MG _ alternatives) -> expressionUses (fuel - 1) visited environment subject ||
@@ -1114,7 +1167,14 @@ sourceSpecimens =
     ,(CaseFile, "valid/CombinatorsCase.hs", [])
     ,(CaseFile, "valid/DemandCase.hs", [])
     ,(CaseFile, "public-constructor/Case.hs", [])
-    ,(ReferenceFile, "valid/Reference.hs", [])
+    ,(CaseFile, "constructor-only/ReachableCase.hs", [])
+    ,(CaseFile, "constructor-provenance/ExplicitCase.hs", [])
+    ] ++
+    [(CaseFile, "constructor-provenance" </> name ++ "Case.hs", ["costed callback has no reachable Generated"])
+        | name <- ["Runtime", "Type", "Pattern", "Unreachable", "Local", "Shadow", "Private",
+                   "Abstract", "Ambiguous", "Qualified", "Unqualified", "HiddenImport", "TypeImport",
+                   "SameNameImport", "Unrelated", "AbstractRuntime"]] ++
+    [(ReferenceFile, "valid/Reference.hs", [])
     ,(CaseFile, "custom-main/Case.hs", ["must declare module Case", "name main"])
     ,(CaseFile, "trial-knobs/Case.hs", ["name maxSuccess", "name quickCheckWith"])
     ,(CaseFile, "property/Case.hs", ["name Property"])
