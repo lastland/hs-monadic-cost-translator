@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Control.Monad (forM_, unless, when)
+import CapturedKeySharing (checkCapturedKeySharing)
 import Cost.Translate (translateFile)
 import Data.List (intercalate, isInfixOf, isPrefixOf, nub)
 import FixturePolicy (checkFixturePolicy)
@@ -37,6 +38,7 @@ data Group
     | GeneratedConstruction
     | RuntimeAllocator
     | ProducerSharing
+    | CapturedKeySharing
 
 groupName :: Group -> String
 groupName (Semantic label _) = label
@@ -50,6 +52,7 @@ groupName GeneratedFunctions = "generated-functions"
 groupName GeneratedConstruction = "generated-construction"
 groupName RuntimeAllocator = "runtime-allocator"
 groupName ProducerSharing = "opaque-producer-sharing"
+groupName CapturedKeySharing = "captured-key-sharing"
 
 main :: IO ()
 main = do
@@ -61,7 +64,7 @@ main = do
     selected <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
-            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing]
+            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing, CapturedKeySharing]
         names = map groupName registry
         unknown = nub (filter (`notElem` names) selected)
     unless (null unknown) $ do
@@ -83,6 +86,7 @@ needsReferenceEnvironment ReferenceHarness = True
 needsReferenceEnvironment GeneratedFunctions = True
 needsReferenceEnvironment GeneratedConstruction = True
 needsReferenceEnvironment ProducerSharing = True
+needsReferenceEnvironment CapturedKeySharing = True
 needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
@@ -106,6 +110,7 @@ runGroup environment GeneratedConstruction = do
     requireEnvironment environment >>= checkGeneratedConstructionLifecycle
 runGroup _ RuntimeAllocator = checkRuntimeAllocator
 runGroup environment ProducerSharing = requireEnvironment environment >>= checkProducerSharing
+runGroup environment CapturedKeySharing = requireEnvironment environment >>= checkCapturedKeySharing
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure
