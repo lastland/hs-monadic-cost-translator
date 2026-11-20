@@ -8,6 +8,7 @@ import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import ConstructionAllocation (checkPhantomAllocation)
 import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
+import ConstructionScalarComparison (scalarComparisonFacts)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionLocals (localBindings, independentBinding)
 import ConstructionOperandTransfers (ordinaryOperandTransfers)
@@ -97,7 +98,8 @@ constructionReports output =
             evidence <- collectEvidence rt utilities locals representations program (coreViewNames views checked) checked sites
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
-            checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
+            checkEvidence rt representations (homeDemandTypes rt checkedModules)
+                (scalarComparisonFacts output checkedModules) (concatMap snd reports))
 
 configureArtifact :: FilePath -> Ghc ()
 configureArtifact output = do
