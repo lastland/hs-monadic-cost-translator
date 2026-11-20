@@ -4,7 +4,7 @@ module ReferenceRunner
     ( ReferenceEnvironment, Artifacts(..), prepareReferenceEnvironment
     , runReferenceCase, checkReferenceHarness, checkGeneratedFunctionLifecycle
     , checkGeneratedConstructionLifecycle
-    , buildObserver, comparer
+    , buildObserver, buildObserverAt, comparer
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
@@ -93,12 +93,22 @@ buildObserver environment sandbox = do
     compile (supportDirectory environment) sandbox "Observe" ["MemoristANT", "QuickCheck"] executable
     pure executable
 
+buildObserverAt :: String -> ReferenceEnvironment -> FilePath -> IO FilePath
+buildObserverAt optimization environment sandbox = do
+    let executable = sandbox </> ("observe" ++ optimization)
+    compileAt [optimization] (supportDirectory environment) sandbox "Observe"
+        ["MemoristANT", "QuickCheck"] executable
+    pure executable
+
 compile :: FilePath -> FilePath -> String -> [String] -> FilePath -> IO ()
-compile support sandbox entry packages executable = do
-    let objects = sandbox </> (entry ++ "-objects")
+compile = compileAt []
+
+compileAt :: [String] -> FilePath -> FilePath -> String -> [String] -> FilePath -> IO ()
+compileAt options support sandbox entry packages executable = do
+    let objects = sandbox </> (entry ++ concat options ++ "-objects")
     createDirectoryIfMissing True objects
     (status, out, err) <- readProcessWithExitCode "ghc"
-        (["-v0", "-dynamic", "-Werror=unused-imports", "-i", "-i" ++ sandbox, "-i" ++ support,
+        (options ++ ["-v0", "-dynamic", "-Werror=unused-imports", "-i", "-i" ++ sandbox, "-i" ++ support,
           "-outputdir", objects, "-main-is", entry ++ ".main", support </> entry ++ ".hs",
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
