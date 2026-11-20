@@ -126,6 +126,10 @@ checkGeneratedConstructionSpecimens = do
          (15, forbidden "Memorist.Data.Interface.Demand.usage")]
     accepts "BoxSupportHelpers.hs"
     rejectsIn "BoxSupportHelperEscape.hs" "BoxSupportHelpers.hs" [(11, forbidden tval)]
+    accepts "BoxSupportAccounting.hs"
+    rejectsAt "BoxSupportSeparation.hs"
+        [(11, forbidden tval), (20, forbidden tval), (23, forbidden tval),
+         (25, forbidden "Memorist.Data.Interface.Data.abstract")]
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
     accepts "DemandScalarMethods.hs"
