@@ -42,7 +42,7 @@ import GHC.Types.SrcLoc
     , isRealSubspanOf, mkRealSrcLoc, mkRealSrcSpan, noLoc, srcSpanEndCol, srcSpanStartLine
     )
 import Paths_cost_translate (getDataFileName)
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>), takeBaseName, takeDirectory)
 import System.Directory (copyFile, getTemporaryDirectory)
 import System.Exit (ExitCode(..))
 import System.IO.Error (ioeGetErrorString)
@@ -104,8 +104,8 @@ configureArtifact output = do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     checksImplicitForcing
-    checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
-    checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
+    checkIntegralContext ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
+    checkIntegralContext ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
     accepts "NestedPatternConsumption.hs"
     rejectsAt "NestedPatternOrdinary.hs"
         [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance"),
@@ -431,7 +431,8 @@ checkGeneratedConstructionSpecimens = do
         translated <- translateFile input output
         either (fail . ((label ++ " must translate before artifact inspection: ") ++)) pure translated
         pure (directory, input, output)
-    checkIntegralContext label fixture = do
+    checkIntegralContext fixture = do
+        let label = takeBaseName fixture
         (_, _, output) <- completeArtifact label fixture
         signature <- runGhc (Just libdir) $ do
             configureArtifact output
