@@ -121,6 +121,7 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "CallerScalarEquality.hs"
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
     accepts "ConcreteFoldableClosure.hs"
