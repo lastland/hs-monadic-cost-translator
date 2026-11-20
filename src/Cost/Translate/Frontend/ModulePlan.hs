@@ -78,16 +78,14 @@ moduleEnvironment strict datatypes literals types hints checkedScopes group =
                           ]
                     )
                 )
-                ( planNames
-                    datatypes
-                    (reservedModuleNames datatypes group)
-                    (constructorLayouts datatypes)
-                    specialized
-                    group
-                )
+                (planNames datatypes globals layouts specialized group)
                 strict
                 (explicitScopes group)
+                Map.empty
      in (env, specialized)
+    where
+        globals = reservedModuleNames datatypes group
+        layouts = constructorLayouts datatypes
 
 topLevelGroups :: HsGroup GhcRn -> [(RecFlag, [LHsBind GhcRn])]
 topLevelGroups group = case hs_valds group of

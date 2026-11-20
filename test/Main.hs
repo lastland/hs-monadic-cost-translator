@@ -8,6 +8,7 @@ import GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources)
 import GeneratedConstruction (checkGeneratedConstructionSpecimens)
 import GeneratedFunctions (checkGeneratedFunctionSpecimens)
 import Paths_cost_translate (getDataFileName)
+import ProducerSharing (checkProducerSharing)
 import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverReferenceCases, validateReferenceCases)
 import ReferenceRunner
     ( ReferenceEnvironment, checkGeneratedConstructionLifecycle, checkGeneratedFunctionLifecycle, checkReferenceHarness
@@ -35,6 +36,7 @@ data Group
     | GeneratedFunctions
     | GeneratedConstruction
     | RuntimeAllocator
+    | ProducerSharing
 
 groupName :: Group -> String
 groupName (Semantic label _) = label
@@ -47,6 +49,7 @@ groupName ReferenceHarness = "reference-harness"
 groupName GeneratedFunctions = "generated-functions"
 groupName GeneratedConstruction = "generated-construction"
 groupName RuntimeAllocator = "runtime-allocator"
+groupName ProducerSharing = "opaque-producer-sharing"
 
 main :: IO ()
 main = do
@@ -58,7 +61,7 @@ main = do
     selected <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
-            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator]
+            [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing]
         names = map groupName registry
         unknown = nub (filter (`notElem` names) selected)
     unless (null unknown) $ do
@@ -79,6 +82,7 @@ needsReferenceEnvironment Semantic{} = True
 needsReferenceEnvironment ReferenceHarness = True
 needsReferenceEnvironment GeneratedFunctions = True
 needsReferenceEnvironment GeneratedConstruction = True
+needsReferenceEnvironment ProducerSharing = True
 needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
@@ -101,6 +105,7 @@ runGroup environment GeneratedConstruction = do
     checkGeneratedConstructionSpecimens
     requireEnvironment environment >>= checkGeneratedConstructionLifecycle
 runGroup _ RuntimeAllocator = checkRuntimeAllocator
+runGroup environment ProducerSharing = requireEnvironment environment >>= checkProducerSharing
 
 requireEnvironment :: Maybe ReferenceEnvironment -> IO ReferenceEnvironment
 requireEnvironment = maybe (fail "internal error: reference environment was not prepared") pure

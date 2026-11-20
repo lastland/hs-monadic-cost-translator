@@ -1,4 +1,4 @@
-module Cost.Translate.Frontend.Emit (emitBind) where
+module Cost.Translate.Frontend.Emit (emitBind, emitExpr) where
 
 import Control.Monad (unless, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)

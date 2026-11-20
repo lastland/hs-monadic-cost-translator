@@ -67,6 +67,7 @@ moduleExtensions ::
     Bool -> Bool -> Bool -> Env -> [O.Decl] -> [Extension.Extension]
 moduleExtensions magicHash specialized helpers env declarations =
     [Extension.MagicHash | magicHash]
+        ++ [Extension.LiberalTypeSynonyms | not (Map.null (producerCalls env))]
         ++ [Extension.ImpredicativeTypes | applications]
         ++ [Extension.TypeApplications | applications]
         ++ [ Extension.ScopedTypeVariables
