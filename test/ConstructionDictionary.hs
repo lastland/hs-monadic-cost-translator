@@ -1,6 +1,6 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
-    instantiateUse, instantiateTypes, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
+    instantiateUse, instantiateTypes, substitute, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse) where
 
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)

@@ -1,12 +1,14 @@
 -- | Narrow stock-method proofs. A deriving request identifies a definition,
 -- never a permission for a type or for a caller-supplied dictionary.
-module ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType) where
+module ConstructionDemandMethods (runtimeDemandMethod, StockMethods(..), Stock(..), StockMethod(..), stockMethods, safeHomeType, standardMethod) where
 
 import ConstructionAst (collectAst)
+import ConstructionDictionary (Environment, Evidence(..), Use(..), sameEvidence)
 import ConstructionRuntime
 import Control.Monad (guard)
+import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import GHC
+import GHC hiding (exprType)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon)
 import GHC.Core.DataCon (dataConInstOrigArgTys, dataConWorkId)
@@ -14,9 +16,11 @@ import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
+import GHC.Core.Type (isPredTy, mkTyVarTy, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
 import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
+import GHC.Types.Var (isId, isTyVar, varType)
+import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_insts)
 
 -- This summary covers only the two pinned stock instances at Demand.hs:13-14.
@@ -67,61 +71,93 @@ safeHomeType rt tc = isDataTyCon tc && not (isNewTyCon tc) &&
                 _ -> False)
         _ -> False
 
-stockMethods :: Runtime -> TypecheckedModule -> Map.Map Name C.CoreExpr -> [(Id, [(Name, C.CoreExpr)])]
-stockMethods rt checked env = do
-    (dfName, dictionary) <- Map.toList env
-    -- Recover the actual Id from the dictionary's constructor type and the
-    -- module's checked instance environment, not a DFun spelling.
-    df <- [v | instance' <- tcg_insts (fst (tm_internals_ checked)), let v = is_dfun instance', getName v == dfName, isDFunId v]
-    ([], body) <- [splitForAllTyVars (idType df)]
-    ([], predicate) <- [splitFunTys body]
-    (cls, [ty]) <- maybe [] pure (getClassPredTys_maybe predicate)
-    (tc, []) <- maybe [] pure (splitTyConApp_maybe ty)
-    guard ((getName cls, getName tc) `elem` requests && safeHomeType rt tc)
-    (C.Var worker, C.Type actual : fields) <- [C.collectArgs dictionary]
-    guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)) && eqType actual ty &&
-        length fields == length (classAllSelIds cls))
-    selected <- maybe [] pure (mapM (fieldBody cls fields) (zip (classAllSelIds cls) fields))
-    pure (df, concat selected)
+-- One catalogue serves declaration checking and concrete selected-field replay.
+-- Implementation identities and their own formal slots come from actual fields,
+-- never generated method spellings or source locations.
+data StockMethod = StockMethod Name (Maybe Name) Id [TyVar] [Id] [Use] (Maybe Name)
+data Stock = Stock Id [TyVar] [Id] Type [StockMethod]
+data StockMethods = StockMethods Environment [Stock]
+
+stockMethods :: Runtime -> TypecheckedModule -> Environment -> (C.CoreExpr -> [Use]) -> StockMethods
+stockMethods rt checked env collect = StockMethods env stocks
   where
-    fieldBody cls fields (selector, C.Var implementation) = do
+    stocks = do
+        inst <- tcg_insts (fst (tm_internals_ checked))
+        let df = is_dfun inst
+        guard (isDFunId df)
+        dictionary <- maybe [] pure (Map.lookup (getName df) env)
+        let (bs, body) = C.collectBinders dictionary
+            (vars, slots) = span isTyVar bs
+        guard (all (\v -> isId v && isPredTy (idType v)) slots)
+        (cls, [operand]) <- maybe [] pure (getClassPredTys_maybe (exprType body))
+        (tc, args) <- maybe [] pure (splitTyConApp_maybe operand)
+        guard (isDataTyCon tc && not (isNewTyCon tc) && not (isFamInstTyCon tc) &&
+            isLiftedTypeKind (tyConResKind tc) && all (isLiftedTypeKind . varType) vars &&
+            length args == length (tyConTyVars tc) && sameTypes args (map mkTyVarTy vars) &&
+            all isVanillaDataCon (tyConDataCons tc) &&
+            (getName cls, getName tc, length args) `elem` requests)
+        (C.Var worker, supplied) <- [C.collectArgs body]
+        guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)))
+        let fields = filter (not . C.isTyCoArg) supplied
+        guard (length fields == length (classAllSelIds cls))
+        methods <- maybe [] pure (mapM (field df vars slots (exprType body) cls) (zip (classAllSelIds cls) fields))
+        pure (Stock df vars slots (exprType body) methods)
+    field df vars slots predicate cls (selector, expression) = do
         guard (standardMethod rt (getName selector) cls)
+        (C.Var implementation, supplied) <- pure (C.collectArgs expression)
+        let typeArgs = [t | C.Type t <- supplied]
+            evArgs = filter (not . C.isTyCoArg) supplied
+        guard (length supplied == length vars + length slots &&
+            sameTypes typeArgs (map mkTyVarTy vars) &&
+            length evArgs == length slots && and (zipWith sameVar evArgs slots))
         rhs <- Map.lookup (getName implementation) env
-        -- A default wrapper is not a proof of its own default. Replay the
-        -- substantive selected method on which the pinned standard default rests.
-        let dependency label = do
-                name <- lookup ("Prelude." ++ label) (standardNames rt)
-                implementation' <- lookup name [(getName s, e) | (s, e) <- zip (classAllSelIds cls) fields]
-                case implementation' of
-                    C.Var v -> Map.lookup (getName v) env
-                    _ -> Nothing
-            defaultBody = case lookup (getName selector) [(n, label) |
-                    (occ, label) <- [("/=", "=="), ("show", "showsPrec"), ("showList", "showsPrec")],
-                    Just n <- [lookup ("Prelude." ++ occ) (standardNames rt)]] of
-                Just label -> dependency label
-                Nothing -> Just rhs
-        defRhs <- defaultBody
-        pure ((getName selector, rhs) : [(name, defRhs) |
-            (op, Just (name, _)) <- classOpItems cls, op == selector])
-    fieldBody _ _ _ = Nothing
-    -- On a data declaration the actual standard Eq/Show classes select stock
-    -- derivation by default. Explicit anyclass/via/newtype strategies do not
-    -- establish that proof. A manual instance cannot coexist with this request:
-    -- GHC rejects the duplicate before this checker can issue a certificate.
+        let (binders, _) = C.collectBinders rhs
+            (methodVars, afterTypes) = span isTyVar binders
+            methodSlots = take (length slots) afterTypes
+            ty = substTyWith vars (map mkTyVarTy methodVars)
+        guard (length methodVars == length vars && length methodSlots == length slots &&
+            all isId methodSlots && sameTypes (map idType methodSlots) (map (ty . idType) slots))
+        let obligations = collect rhs
+            self = Instance df (ty predicate) (map mkTyVarTy methodVars)
+                [Given (getName v) (idType v) | v <- methodSlots]
+            def = lookup selector [(s, n) | (s, Just (n, _)) <- classOpItems cls]
+            inherited = case obligations of
+                [Use selected actual ScalarMethod [t] [d]] |
+                    def == Just selected, actual == getName cls,
+                    Just (_, [target]) <- getClassPredTys_maybe (ty predicate),
+                    eqType t target, sameEvidence d self -> Just selected
+                _ -> Nothing
+        pure (StockMethod (getName selector) def implementation methodVars methodSlots obligations inherited)
+    sameTypes xs ys = length xs == length ys && and (zipWith eqType xs ys)
+    sameVar (C.Var actual) expected = actual == expected
+    sameVar _ _ = False
+    -- Only stock requests on fully generic ordinary data heads qualify.
     requests = case tm_renamed_source checked of
         Nothing -> []
         Just (group, _, _, _, _) ->
-            [(cls, unLoc target) |
-                DataDecl{tcdLName = target, tcdDataDefn = definition} <- collectAst group :: [TyClDecl GhcRn],
-                L _ clause <- dd_derivs definition,
-                stock (deriv_clause_strategy clause),
-                L _ HsSig{sig_body = L _ (HsTyVar _ _ name)} <- collectAst (deriv_clause_tys clause) :: [LHsSigType GhcRn],
-                let cls = unLoc name] ++
-            [(unLoc cls, unLoc target) |
+            [(cls, unLoc target, length (hsQTvExplicit variables)) |
+                DataDecl{tcdLName = target, tcdTyVars = variables, tcdDataDefn = definition} <-
+                    collectAst group :: [TyClDecl GhcRn],
+                L _ clause <- dd_derivs definition, stock (deriv_clause_strategy clause),
+                L _ HsSig{sig_body = sig} <- collectAst (deriv_clause_tys clause) :: [LHsSigType GhcRn],
+                Just (cls, []) <- [typeApps sig]] ++
+            [(cls, target, length vars) |
                 declaration <- collectAst group :: [DerivDecl GhcRn], stock (deriv_strategy declaration),
-                L _ HsSig{sig_body = L _ (HsAppTy _ (L _ (HsTyVar _ _ cls)) (L _ (HsTyVar _ _ target)))} <-
-                    collectAst (deriv_type declaration) :: [LHsSigType GhcRn]]
+                L _ HsSig{sig_body = sig} <- collectAst (deriv_type declaration) :: [LHsSigType GhcRn],
+                Just (cls, [operand]) <- [typeApps (unqualified sig)],
+                Just (target, arguments) <- [typeApps operand],
+                Just vars <- [mapM typeVariable arguments], length (nub vars) == length vars]
     stock :: Maybe (LDerivStrategy GhcRn) -> Bool
     stock Nothing = True
     stock (Just (L _ StockStrategy{})) = True
     stock _ = False
+    unqualified (L _ (HsForAllTy _ _ body)) = unqualified body
+    unqualified (L _ (HsQualTy _ _ body)) = unqualified body
+    unqualified body = body
+    typeApps (L _ (HsTyVar _ _ n)) = Just (unLoc n, [])
+    typeApps (L _ (HsAppTy _ f x)) = do (n, xs) <- typeApps f; pure (n, xs ++ [x])
+    typeApps (L _ (HsParTy _ t)) = typeApps t
+    typeApps _ = Nothing
+    typeVariable (L _ (HsTyVar _ _ n)) = Just (unLoc n)
+    typeVariable (L _ (HsParTy _ t)) = typeVariable t
+    typeVariable _ = Nothing
