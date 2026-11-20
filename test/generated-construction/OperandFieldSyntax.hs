@@ -18,3 +18,11 @@ strict p = Cell { soft = False, hard = p }
 
 forced :: Q.Property -> Cell Bool Q.Property
 forced p = Cell { hard = False, soft = p `seq` p }
+
+replaceSoft :: Cell Bool a -> Q.Property -> Cell Bool Q.Property
+replaceSoft cell p = cell { soft = p }
+
+data Choice a = Loose { member :: a } | Tight { member :: !a }
+
+replaceMixed :: Choice a -> Q.Property -> Choice Q.Property
+replaceMixed choice p = choice { member = p }
