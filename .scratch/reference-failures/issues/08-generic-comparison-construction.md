@@ -42,3 +42,16 @@ Prepare the runtime using `patches/README.md`, then run:
 ```sh
 sh scripts/stack-test.sh --test-arguments=mutually-recursive-captured-helpers
 ```
+
+## Comments
+
+- Recovery verified at integrated commit
+  `9b8492c3f9d354e2411bc3c2a5700aa89fc62aee`: the unchanged source, ordinary
+  caller and independent reference pass the complete shared lifecycle, including
+  O0/O2 boundary cases and 200 randomized value/cost comparisons. Construction
+  controls, direct-function and source-scope checks pass in the same focused run.
+  Both pinned integration reviews have zero findings. This establishes recovery
+  of this case without granting arbitrary open `Eq` dictionaries permission.
+- The initial split inventory remains pinned to `e5d4652` until its implementation
+  and review fixes are integrated. Promote this recovered key explicitly at that
+  point; recording this receipt does not silently rewrite that inventory.
