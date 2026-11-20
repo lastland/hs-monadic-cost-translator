@@ -9,6 +9,7 @@ data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id 
     | TypeLambda Type TyVar Evidence | EvidenceLambda Type Id Evidence
     | Application Type Evidence Argument | Lifted Coercion Evidence
     | Equality Type Coercion
+    | EqualityCase Type Evidence Evidence
 data Argument = TypeArgument Type | EvidenceArgument Evidence
 
 predicateOf :: Evidence -> Maybe Type
@@ -22,4 +23,5 @@ predicateOf (EvidenceLambda predicate _ _) = Just predicate
 predicateOf (Application predicate _ _) = Just predicate
 predicateOf (Lifted co _) = Just (coercionRKind co)
 predicateOf (Equality predicate _) = Just predicate
+predicateOf (EqualityCase predicate _ _) = Just predicate
 predicateOf Unknown{} = Nothing

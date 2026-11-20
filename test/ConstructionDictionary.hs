@@ -1,7 +1,7 @@
 -- | Finite selected dictionary syntax and substitution of field parameters.
 module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, renderEvidence,
     instantiateUse, instantiateTypes, substitute, predicateOf, closedFamilyStep, projected, descendant, sameEvidence, sameUse,
-    Argument(..), proofScoped) where
+    Argument(..), proofScoped, hasApplication) where
 
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
@@ -20,6 +20,7 @@ import GHC.Core.Coercion (Role(..), coercionLKind, coercionRKind, coercionRole)
 import GHC.Core.Coercion.Axiom (toBranchedAxiom, coAxiomRole, coAxiomTyCon)
 import GHC.Core.TyCo.Rep (Coercion(..), MCoercion(..))
 import GHC.Core.DataCon (dataConWorkId)
+import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.FamInstEnv (emptyFamInstEnv, reduceTyFamApp_maybe)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Opt.Arity (pushCoTyArg, pushCoValArg)
@@ -32,7 +33,7 @@ import GHC.Core.Type (getTyVar_maybe, isPredTy, splitTyConApp_maybe, substTyWith
     splitForAllTyCoVar_maybe, splitFunTy_maybe, typeKind)
 import GHC.Core.Utils (exprType)
 import GHC.Types.Id (isDFunId, realIdUnfolding, setIdType)
-import GHC.Types.Var (isId, isTyVar, varType)
+import GHC.Types.Var (isId, isTyVar, isCoVar, varType)
 import GHC.Types.Var.Set (elemVarSet)
 
 data Use = Use Name Name Family [Type] [Evidence]
@@ -49,6 +50,15 @@ trace env given seen expression = case expression of
     C.Lam binder body | isId binder, isPredTy (idType binder), isPredTy (exprType expression) ->
         EvidenceLambda (exprType expression) binder
             (trace env (Set.insert (getName binder) given) seen body)
+    C.Case scrutinee binder target [C.Alt C.DEFAULT [] body]
+        | isCoVar binder, not (binder `elemVarSet` exprFreeVars body),
+          (C.Var selector, arguments) <- C.collectArgs scrutinee,
+          Just cls <- tyConClass_maybe eqTyCon, selector `elem` classSCSelIds cls,
+          [actual] <- [arg | arg <- arguments, not (C.isTyCoArg arg)],
+          let source = trace env given seen actual, Just p <- predicateOf source,
+          Just (equalityTyCon, [_, _, _]) <- splitTyConApp_maybe p, equalityTyCon == eqTyCon,
+          validSuper selector (exprType scrutinee) source, eqType target (exprType body) ->
+            EqualityCase target source (trace env given seen body)
     C.Cast body co | Just (_, sel) <- superclassAxiom Unpack co,
             let source = trace env given seen body, Just predicate <- predicateOf source, eqType predicate (coercionLKind co) ->
         Super sel (coercionRKind co) source
@@ -106,6 +116,7 @@ renderEvidence (Application p f arg) = "apply " ++ pretty p ++ " {" ++ renderEvi
     EvidenceArgument d -> renderEvidence d ++ "}"
 renderEvidence (Lifted co source) = "lifted " ++ pretty (coercionRKind co) ++ " {" ++ renderEvidence source ++ "}"
 renderEvidence (Equality p _) = "boxed nominal equality " ++ pretty p
+renderEvidence (EqualityCase _ equality body) = "equality-case {" ++ renderEvidence equality ++ "} {" ++ renderEvidence body ++ "}"
 
 substitute :: T.Subst -> [(Name, Evidence)] -> Evidence -> Evidence
 substitute substitution env ev = case ev of
@@ -133,6 +144,7 @@ substitute substitution env ev = case ev of
         EvidenceArgument d -> EvidenceArgument (sub d))
     Lifted co source -> Lifted (T.substCo substitution co) (sub source)
     Equality p proof -> Equality (ty p) (T.substCo substitution proof)
+    EqualityCase p equality body -> EqualityCase (ty p) (sub equality) (sub body)
   where
     ty = T.substTy substitution
     sub = substitute substitution env
@@ -161,6 +173,7 @@ proofChildren (EvidenceLambda _ _ body) = [body]
 proofChildren (Lifted _ parent) = [parent]
 proofChildren (Application _ f (TypeArgument _)) = [f]
 proofChildren (Application _ f (EvidenceArgument d)) = [f, d]
+proofChildren (EqualityCase _ p body) = [p, body]
 proofChildren _ = []
 
 resultType :: Type -> Argument -> Maybe Type
@@ -218,7 +231,16 @@ proofScoped owned = go owned
     go scope (Application target f a) = validApplication target f a && go scope f &&
         case a of TypeArgument _ -> True; EvidenceArgument d -> go scope d
     go _ Equality{} = True
+    go scope (EqualityCase p equality body) = maybe False (eqType p) (predicateOf body) &&
+        go scope equality && go scope body
     go _ _ = False
+
+hasApplication :: Evidence -> Bool
+hasApplication Application{} = True
+hasApplication (Super _ _ parent) = hasApplication parent
+hasApplication (Transport _ parent) = hasApplication parent
+hasApplication (Lifted _ parent) = hasApplication parent
+hasApplication _ = False
 
 -- Only structural lifts of validated nominal closed-family equations.
 liftedTransport :: Coercion -> Bool
@@ -316,6 +338,10 @@ familyTransport co@(TyConAppCo Representational tc [SymCo step@(AxiomInstCo ax _
             isClosedSynFamilyTyConWithAxiom_maybe family == Just ax &&
             maybe False (eqType (coercionRKind step)) (closedFamilyStep (coercionLKind step))
         _ -> False
+familyTransport (SubCo (SymCo (TyConAppCo Nominal tc [step]))) =
+    familyTransport (TyConAppCo Representational tc [SymCo step])
+familyTransport (SubCo (TyConAppCo Nominal tc [SymCo step])) =
+    familyTransport (TyConAppCo Representational tc [SymCo step])
 familyTransport _ = False
 
 -- Retain both predicates for exact context-slot substitution. Only the actual
@@ -376,9 +402,10 @@ superclassAxiom direction co = do
 -- Follow the selected superclass field of the actual DFun. Never certify a
 -- superclass method merely because the parent instance was registered.
 projected :: HomeReprs -> Evidence -> Maybe Evidence
-projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False = normalize [] ev
+projected homes ev | case ev of Super{} -> True; Transport{} -> True; Application{} -> True; Lifted{} -> True; _ -> False = normalize [] ev
   where
     normalize path (Super sel predicate parent) = do
+        guard (validSuper sel predicate parent)
         origin@(Instance df p ts ds) <- normalize path parent
         (cls, _) <- getClassPredTys_maybe p
         guard (sel `elem` classSCSelIds cls && all (progress sel df origin) path)
@@ -411,6 +438,8 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False
             formals = filter isId binders
             fields = filter (not . C.isTyCoArg) args
         guard (length variables == length ts && length formals == length ds && length fields == length (classAllSelIds cls))
+        guard (all (isPredTy . idType) formals &&
+            and (zipWith (\v d -> maybe False (eqType (substTyWith variables ts (idType v))) (predicateOf d)) formals ds))
         field <- lookup sel (zip (classAllSelIds cls) fields)
         let names = map getName formals
             source = trace (dictionaryBindings homes) (Set.fromList names) Set.empty field
@@ -423,6 +452,20 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False
             _ -> False)
         pure result
     normalize path (Instance df ty ts ds) = Instance df ty ts <$> mapM (normalize path) ds
+    normalize path (Application target function argument) = do
+        guard (validApplication target function argument)
+        f <- normalize path function
+        a <- case argument of
+            TypeArgument t -> pure (TypeArgument t)
+            EvidenceArgument d -> EvidenceArgument <$> normalize path d
+        let result = apply f a
+        guard (maybe False (eqType target) (predicateOf result))
+        if sameEvidence result (Application target f a)
+            then pure result
+            else normalize path result
+    normalize _ term@TypeLambda{} = pure term
+    normalize _ term@EvidenceLambda{} = pure term
+    normalize path (Lifted co source) = normalize path source >>= certifiedCast (MCo co)
     normalize path (Transport ty source) = do
         result <- normalize path source
         -- Both wrappers were validated when traced. After exact substitution,
@@ -435,7 +478,12 @@ projected homes ev | case ev of Super{} -> True; Transport{} -> True; _ -> False
     normalize _ Unknown{} = Nothing
     normalize _ builtin@BuiltinTag{} = Just builtin
     normalize _ proof@Equality{} = Just proof
-    normalize _ _ = Nothing
+    normalize path (EqualityCase p equality body) = do
+        proof <- normalize path equality
+        guard (proofScoped (const False) proof)
+        result <- normalize path body
+        guard (maybe False (eqType p) (predicateOf result))
+        pure result
     progress sel df origin (prevSel, prevDf, prev) = sel /= prevSel || df /= prevDf || descendant origin prev
 projected _ ev = Just ev
 
@@ -462,6 +510,8 @@ sameEvidence (Lifted co d) (Lifted other e) =
     eqType (coercionRKind co) (coercionRKind other) && sameEvidence d e
 sameEvidence (Equality p a) (Equality q b) = eqType p q &&
     eqType (coercionLKind a) (coercionLKind b) && eqType (coercionRKind a) (coercionRKind b)
+sameEvidence (EqualityCase p a d) (EqualityCase q b e) = eqType p q &&
+    sameEvidence a b && sameEvidence d e
 sameEvidence _ _ = False
 
 sameArgument :: Argument -> Argument -> Bool

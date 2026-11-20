@@ -3,19 +3,25 @@
 module ConstructionConstraintAliases (constraintAliases) where
 
 import Control.Monad (guard)
+import ConstructionDictionary (trace, hasApplication)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import GHC hiding (exprType, typeKind)
 import qualified GHC.Core as C
+import GHC.Core.FVs (exprFreeVars)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.Type (isPredTy, substTyWith, typeKind)
 import GHC.Core.Utils (exprType, cheapEqExpr)
 import GHC.Types.Var (isId, isTyVar, varType)
+import GHC.Types.Unique.Set (nonDetEltsUniqSet)
 
 constraintAliases :: Map.Map Name C.CoreExpr -> Map.Map Name C.CoreExpr
 constraintAliases env = Map.mapMaybe unique (Map.fromListWith (++)
     [(getName binder, [source]) | rhs <- Map.elems env, expression <- expressions rhs,
         Just (binder, source) <- [alias expression]])
   where
+    roots = Set.fromList [getName v | rhs <- Map.elems env,
+        v <- nonDetEltsUniqSet (exprFreeVars rhs), isId v, isPredTy (idType v)]
     unique (rhs:rest) | all (cheapEqExpr rhs) rest = Just rhs
     unique _ = Nothing
     alias expression = do
@@ -37,6 +43,9 @@ constraintAliases env = Map.mapMaybe unique (Map.fromListWith (++)
             eqType result (instantiate (exprType body)) && eqType result (exprType expression))
         C.Lam binder _ <- pure continuation
         guard (isId binder && isPredTy (idType binder) && eqType predicate (idType binder))
+        -- This slice recovers only an applied quantified proof, not arbitrary
+        -- concrete dictionaries passed to otherwise identical callbacks.
+        guard (hasApplication (trace env roots Set.empty source))
         pure (binder, source)
     telescope binders local (C.Lam v body) = telescope (binders ++ [v]) local body
     telescope binders local (C.Let (C.NonRec v (C.Var source)) body) = do

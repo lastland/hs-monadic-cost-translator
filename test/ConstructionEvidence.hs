@@ -88,6 +88,7 @@ data Site = FieldBody Name | Site String MethodSite (Maybe Name) (Maybe [Role]) 
     | StockFacts StockMethods
     | TagFacts Platform [TyCon]
     | MethodFacts Methods
+    | DictionaryFacts Environment
 
 data RetainedEvidence = RetainedEvidence
     { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
@@ -169,7 +170,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
                     stock = stockMethods rt checked env (uses qc aliases selected env allGivens)
-                    rawSites = TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
+                    rawSites = DictionaryFacts rawEnv : TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
                          StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc aliases selected env allGivens)) :
                          DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites aliases env allGivens raw
                     patternSites = concat [case group of
@@ -211,7 +212,8 @@ checkEvidence :: Runtime -> HomeReprs -> [TyCon] -> [(Name, Type)] -> [Site] -> 
 checkEvidence rt homes demands scalars sites = concatMap check sites
   where
     checkSelected = checkUse MethodRules
-        { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands, scalarFacts = scalars
+        { auditedRuntime = rt, homeRepresentations = withDictionaries homes
+            (Map.unions [env | DictionaryFacts env <- sites]), demandTypes = demands, scalarFacts = scalars
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
         , stockFacts = [facts | StockFacts facts <- sites]
@@ -225,6 +227,7 @@ checkEvidence rt homes demands scalars sites = concatMap check sites
     check (StockFacts _) = []
     check (TagFacts _ _) = []
     check (MethodFacts _) = []
+    check (DictionaryFacts _) = []
     check (MissingCertificate why) = [why]
     check (Site location origin field role u) = map ((location ++ ": ") ++) (checkSelected origin role [] field u)
 
@@ -337,6 +340,7 @@ checkUse rules origin utility = check
             _ | hasApplication evidence && ownedApplication evidence,
                     Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
                 getName cls == reprClass && eqType argument ty
+            Application{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
             _ | fieldSlot (root evidence), Just (cls, [argument]) <- predicateOf evidence >>= getClassPredTys_maybe ->
                 getName cls == reprClass && eqType argument ty
             Super{} | Just actual@Instance{} <- projected homes evidence -> concreteRepr ty actual
@@ -366,11 +370,6 @@ checkUse rules origin utility = check
         appliedRoot (Lifted _ parent) = appliedRoot parent
         appliedRoot given@Given{} = fieldSlot given
         appliedRoot _ = False
-        hasApplication Application{} = True
-        hasApplication (Super _ _ parent) = hasApplication parent
-        hasApplication (Transport _ parent) = hasApplication parent
-        hasApplication (Lifted _ parent) = hasApplication parent
-        hasApplication _ = False
         -- Contexts are arguments, not method calls. Check their exact predicates
         -- and provenance here; replay decides which fields are executed.
         contextChild predicate child = case predicateOf child of
@@ -404,6 +403,12 @@ checkUse rules origin utility = check
         -- site erased from Core. It must still have a fully selected origin.
         resolved (Instance _ _ _ children') = all resolved children'
         resolved (Transport _ parent) = resolved parent
+        resolved ev@TypeLambda{} = proofScoped (methodContext homes field) ev
+        resolved ev@EvidenceLambda{} = proofScoped (methodContext homes field) ev
+        resolved ev@Lifted{} = proofScoped (methodContext homes field) ev
+        resolved Equality{} = True
+        resolved ev@Application{} = ownedApplication ev ||
+            maybe False (\actual -> case actual of Instance{} -> resolved actual; _ -> False) (projected homes ev)
         resolved ev@Super{}
             | fieldSlot (root ev) = True
             | Just actual@Instance{} <- projected homes ev = resolvedProjection ev actual

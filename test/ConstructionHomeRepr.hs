@@ -1,7 +1,7 @@
 -- | Link a home Repr dictionary to its actual reprM implementation.
 -- These are conditional certificates: every module body and retained source
 -- site is checked, and every caller must supply the audited carrier.
-module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, contextDeclaration, dictionaryBindings, Field(..)) where
+module ConstructionHomeRepr (HomeReprs, homeReprs, selectedHome, methodCarrier, methodContext, contextSite, contextDeclaration, dictionaryBindings, withDictionaries, Field(..)) where
 
 import ConstructionAst (collectAst, checkedModule)
 import ConstructionRuntime
@@ -148,3 +148,7 @@ contextDeclaration _ _ = Nothing
 
 dictionaryBindings :: HomeReprs -> Map.Map Name C.CoreExpr
 dictionaryBindings (HomeReprs _ _ dictionaries) = dictionaries
+
+withDictionaries :: HomeReprs -> Map.Map Name C.CoreExpr -> HomeReprs
+withDictionaries (HomeReprs heads scopes dictionaries) retained =
+    HomeReprs heads scopes (Map.union retained dictionaries)
