@@ -8,7 +8,7 @@ module ReferenceRunner
     , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
     ) where
 
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when, void)
 import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
@@ -207,6 +207,7 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
 
 checkSourceScopeLifecycle :: ReferenceEnvironment -> IO ()
 checkSourceScopeLifecycle environment = do
+    checkPackageEnvironmentLifecycle environment
     artifacts <- runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"])
     forM_ artifacts $ \artifact -> do
         result <- try (checkGeneratedConstruction (generatedDirectory artifact </> "Generated.hs"))
@@ -253,6 +254,19 @@ checkSourceScopeLifecycle environment = do
          "ordinary originating-source term reference Example.keep"]
     checkChangedInclude environment
     putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
+
+checkPackageEnvironmentLifecycle :: ReferenceEnvironment -> IO ()
+checkPackageEnvironmentLifecycle environment = do
+    root <- createTempDirectory (environmentRoot environment) "origin-package-environment-"
+    let packageEnvironment = root </> "packages"
+    (status, out, err) <- readProcessWithExitCode "ghc-pkg" ["field", "base", "id", "--simple-output"] ""
+    unless (status == ExitSuccess && length (words out) == 1)
+        (fail ("cannot identify the actual base package for the lifecycle: " ++ err))
+    writeFile packageEnvironment ("package-id " ++ unwords (words out) ++ "\n")
+    previous <- lookup "GHC_ENVIRONMENT" <$> getEnvironment
+    bracket_ (setEnv "GHC_ENVIRONMENT" packageEnvironment)
+        (maybe (unsetEnv "GHC_ENVIRONMENT") (setEnv "GHC_ENVIRONMENT") previous) $
+        void (runReferenceCase environment ("source-map", ["test/cases/source-map/Example.hs"]))
 
 checkChangedInclude :: ReferenceEnvironment -> IO ()
 checkChangedInclude environment = do
