@@ -120,6 +120,8 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "ShrinkerLocalValue.hs"
+    rejectsAt "ShrinkerNestedOrdinary.hs" [(17, forbidden tval), (18, forbidden tval)]
     mappedSupport <- specimen "MappedSupportGraph.hs"
     typechecks mappedSupport
     rejection mappedSupport >>= onlySite "SharedSupport.hs" (50, forbidden tval)
