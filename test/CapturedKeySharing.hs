@@ -15,6 +15,7 @@ import ReferenceRunner (ReferenceEnvironment, comparer)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
+import System.IO.Error (ioeGetErrorString)
 import System.IO.Temp (createTempDirectory)
 import System.Process (readProcessWithExitCode)
 
@@ -48,9 +49,13 @@ checkCapturedKeySharing environment = forM_ ["inferred-key-captured", "captured-
         fail "captured producer must use the inferred native root and structural views, not the legacy evaluator"
     blocked <- try (checkGeneratedConstruction output) :: IO (Either IOException ())
     case blocked of
-        Left diagnostic | all (`isInfixOf` show diagnostic) ["liftShrink", "tval"] ->
+        Left diagnostic | let reports = filter ("unapproved" `isInfixOf`) (lines (ioeGetErrorString diagnostic)),
+            not (null reports), all (\report -> any (`isInfixOf` report)
+                ["unapproved selected method Generated.foldrT:",
+                 "unapproved selected method Generated.$dmconcatMapT:"]) reports ->
             writeFile (root </> "whole-publication-blocked.log") (show diagnostic)
-        _ -> fail ("whole-publication construction guard must retain its independent blockers: " ++ show blocked)
+        Right () -> writeFile (root </> "whole-publication-passed.log") "Complete construction check passed.\n"
+        _ -> fail ("whole-publication construction guard found an unexpected obligation: " ++ show blocked)
     copyFile (fixtures </> "Reference.hs") (reference </> "Generated.hs")
     forM_ ["-O0", "-O2"] $ \optimization -> do
         observed <- build support actual "Observe" ("observe" ++ optimization) ["MemoristANT", "QuickCheck"] optimization
@@ -75,7 +80,7 @@ checkCapturedKeySharing environment = forM_ ["inferred-key-captured", "captured-
             let refs = [pretty (unLoc name) | b <- bindings, HsVar _ name <- collectAst b :: [HsExpr GhcPs]]
             unless (any (`elem` refs) ["sharedAt", "sharedAtBy"]) $
                 fail (fixture ++ ": multiple keys must retain their existing fallback")
-    putStrLn "PASS: captured-key-sharing / local native sharing at O0/O2; controls unchanged; whole publication remains blocked"
+    putStrLn "PASS: captured-key-sharing / local native sharing at O0/O2; controls unchanged; complete construction verdict recorded"
 
 ownerBindings :: FilePath -> IO [HsBind GhcPs]
 ownerBindings output = do

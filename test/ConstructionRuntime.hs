@@ -12,6 +12,7 @@ import qualified Data.Map.Strict as Map
 import GHC
 import GHC.Builtin.Types (intTyCon, integerTyCon, boolTyCon, charTyCon, floatTyCon, doubleTyCon, unitTyCon, unitDataCon, nilDataCon, consDataCon)
 import GHC.Core.ConLike (ConLike(..))
+import GHC.Core.Class (classOpItems)
 import GHC.Core.DataCon (dataConRepArity)
 import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
@@ -24,8 +25,8 @@ import GHC.Iface.Syntax (ifDFun)
 
 data Role
     = Primitive | Derived | Representation | DemandData
-    | View | Payload | EmptyAccounting | UnionAccounting | Annotation
-    | ReprMethod | AbstractMethod | FullMethod | UsageMethod | MinimumMethod | DemandArbitraryMethod
+    | View | Payload | ThunkAccounting | EmptyAccounting | UnionAccounting | Annotation
+    | ReprMethod | AbstractMethod | FullMethod | UsageMethod | MinimumMethod | DemandArbitraryMethod | DemandShrink
     deriving (Eq, Show)
 
 data Runtime = Runtime
@@ -80,6 +81,11 @@ runtime = do
         actual <- owner label
         name <- resolveValue actual occurrence
         pure (name, role)
+    defaults <- fmap concat $ forM entries $ \(name, role) -> do
+        thing <- lookupName name
+        pure [(actual, role) | Just (AnId identifier) <- [thing],
+            Just cls <- [isClassOpId_maybe identifier], (method, Just (actual, _)) <- classOpItems cls,
+            getName method == name]
     types <- fmap concat $ forM typeSummaries $ \(label, occurrences) -> do
         actual <- owner label
         forM occurrences $ \occurrence -> do
@@ -91,7 +97,7 @@ runtime = do
         pure (label ++ "." ++ occurrence, name)
     standard <- standardInstances ordinary
     proxy <- proxyWitness
-    pure (Runtime (moduleUnit root) (Map.fromList entries) (Map.fromList types)
+    pure (Runtime (moduleUnit root) (Map.fromList (entries ++ defaults)) (Map.fromList types)
         (Map.fromList (standard ++ concat [is | (_, _, is) <- owners]))
         (("syntax.()", getName unitDataCon) : ("syntax.[]", getName nilDataCon) : ("syntax.:", getName consDataCon) : proxy : ordinary))
 
@@ -143,6 +149,7 @@ summaries =
     [("Memorist.Data.List", name, DemandData) | name <- ["NilD", "ConsD"]] ++
     [ ("Memorist.Base.Thunk", "Th", View)
     , ("Memorist.Base.Thunk", "tval", Payload)
+    , ("Memorist.Base.Thunk", "useThunk", ThunkAccounting)
     , ("Memorist.Base.Thunk", "empty", EmptyAccounting)
     , ("Memorist.Base.Thunk", "union", UnionAccounting)
     , ("Memorist.Base.Core", "Annotated", Annotation)
