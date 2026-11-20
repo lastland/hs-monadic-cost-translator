@@ -6,13 +6,14 @@ import ConstructionDictionary
 import ConstructionHomeRepr (HomeReprs)
 import ConstructionMethods (MethodSite(..))
 import ConstructionRuntime hiding (runtime)
+import ConstructionSuper (validSuper)
 import Control.Monad (guard)
 import Data.List (deleteFirstsBy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType)
 import qualified GHC.Core as C
-import GHC.Core.Class (classAllSelIds, classSCSelIds, classTyCon, classTyVars)
+import GHC.Core.Class (classAllSelIds, classTyCon)
 import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -161,11 +162,6 @@ stockUse rt homes programs origin tag use =
         Nothing -> []
     permutation eq xs ys = length xs == length ys && null (deleteFirstsBy eq xs ys)
     sameTypes xs ys = length xs == length ys && and (zipWith eqType xs ys)
-    validSuper sel predicate parent = case predicateOf parent >>= getClassPredTys_maybe of
-        Just (cls, args) -> case lookup sel (zip (classSCSelIds cls) (classSCTheta cls)) of
-            Just formal -> eqType predicate (substTyWith (classTyVars cls) args formal)
-            _ -> False
-        _ -> False
     resolve path (Transport target source) = do
         actual <- resolve path source
         pure $ case actual of
