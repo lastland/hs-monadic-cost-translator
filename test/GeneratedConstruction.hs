@@ -120,6 +120,9 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    mappedSupport <- specimen "MappedSupportGraph.hs"
+    typechecks mappedSupport
+    rejection mappedSupport >>= onlySite "SharedSupport.hs" (50, forbidden tval)
     accepts "StandaloneDemandShrink.hs"
     rejectsAt "StandaloneDemandShrinkBypass.hs"
         [(7, unknown "StandaloneDemandShrink.shrinkDemandCompatible"),
