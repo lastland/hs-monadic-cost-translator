@@ -2,8 +2,9 @@
 -- including unused ones, start in the construction role.
 module ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax) where
 
+import ConstructionActionFields (sourceActions)
 import ConstructionAst
-import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), implicitBodies, nestedSource, quickCheckBindings)
+import ConstructionLocals (Locals, SourceBody(..), SourceSite(..), checkedActions, implicitBodies, nestedSource, quickCheckBindings)
 import ConstructionQuickCheckUses (QuickCheckUses, strictPatternAt, valueAt)
 import ConstructionRoles (isQuickCheckBinding, quickCheckBody)
 import ConstructionRuntime
@@ -68,7 +69,7 @@ checkParsedSyntax parsed =
 
 checkSyntax :: Runtime -> Locals -> (TypecheckedModule -> QuickCheckUses) -> [Module] -> [Name] -> ViewSupport -> TypecheckedModule -> ([String], [SourceSite])
 checkSyntax rt locals uses homes methods support checked = case tm_renamed_source checked of
-    Just (group, _, _, _, _) -> foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group)
+    Just (group, _, _, _, _) -> foldr (plus . walk noSrcSpan) (walk noSrcSpan group) (implicitBodies group ++ sourceActions (checkedActions locals checked))
     Nothing -> ([pretty (ms_mod (pm_mod_summary (tm_parsed_module checked))) ++ ": GHC did not retain renamed source"], [])
   where
     qc = quickCheckBindings locals

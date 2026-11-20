@@ -1,8 +1,9 @@
 -- | Keep a QuickCheck expression's consumed local values in that expression.
 -- Independently callable helpers and unused definitions still have bodies.
-module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
+module ConstructionLocals (Locals, quickCheckBindings, checkedActions, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
     nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
+import ConstructionActionFields (ActionFields, actionFields, inModule, sourceActions)
 import ConstructionAst (bindingName, children, collectAst, nestedBindings, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
@@ -24,7 +25,7 @@ import GHC.Types.Name.Set (NameSet)
 
 data Locals = Locals
     { quickCheckBindings :: QuickCheck, expressionValues :: Set.Set Name, independentIds :: Set.Set Name
-    , ipSites :: Map.Map Name SrcSpan }
+    , ipSites :: Map.Map Name SrcSpan, checkedActions :: TypecheckedModule -> ActionFields }
 
 data SourceSite = MethodAt SrcSpan Name | PatternAt SrcSpan | ComponentAt SrcSpan SrcSpan
 
@@ -91,11 +92,13 @@ implicitBodies :: HsGroup GhcRn -> [LHsExpr GhcRn]
 implicitBodies group = [rhs | IPBind _ _ rhs <- collectAst group]
 
 localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
-localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionaries) (reachable aliases independent)) dictionaries
+localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionaries) (reachable aliases independent)) dictionaries (inModule actions)
   where
     groups = [group | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
     roots = [bodyParts b | group <- groups, b <- fst (parts group)]
     ips = [parts rhs | group <- groups, rhs <- implicitBodies group]
+    actions = actionFields rt qc modules
+    actionRefs = concat [snd (parts rhs) | fields <- Map.elems actions, rhs <- sourceActions fields]
     local b = concat [(b, ns, refs) : concatMap local nested | (ns, (nested, refs)) <- regions]
       where
         regions | value b, Just fields <- components b =
@@ -115,7 +118,7 @@ localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionar
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
     live = reachable deps (Set.fromList (concatMap snd roots ++ concat [refs | (b, _, refs) <- locals, generator b]))
     consumed ns = not (null ns) && all (`Set.member` live) ns
-    ordinary = reachable deps (Set.fromList (concatMap snd ips ++ [ref | (b, ns, refs) <- locals, not (generator b),
+    ordinary = reachable deps (Set.fromList (actionRefs ++ concatMap snd ips ++ [ref | (b, ns, refs) <- locals, not (generator b),
         not (value b && consumed ns), ref <- refs]))
     values = Set.fromList [n | (b, ns, _) <- locals, value b, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
     independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
