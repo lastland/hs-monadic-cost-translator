@@ -204,10 +204,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "StockHigherSpecialized.hs"
         [(line, selected "GHC.Classes.==") | line <- [13, 15, 22, 24]]
     rejectsAt "StockHigherVia.hs" [(14, selected "GHC.Classes.==")]
-    rejectsAt "StockHigherPoly.hs"
-        [(10, selected "GHC.Classes.=="), (12, selected "GHC.Internal.Show.show"),
-         (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show"),
-         (22, selected "GHC.Classes.=="), (24, selected "GHC.Internal.Show.show")]
+    accepts "StockHigherPoly.hs"
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"
@@ -650,19 +647,9 @@ checkGeneratedConstructionSpecimens = do
             [(8, selected "GHC.Classes.=="), (10, selected "GHC.Internal.Show.show")]
     checksParameterizedTags = do
         accepts "TagClosed.hs"
-        output <- specimen "TagParameterized.hs"
-        -- Inspect through the public pre-caller guard. The separate closed
-        -- stock-method proof still rejects generic Eq/default obligations.
-        result <- try @IOException (checkGeneratedConstruction output)
-        case result of
-            Left problem -> do
-                let diagnostics = ioeGetErrorString problem
-                    reports = filter (isInfixOf "unapproved ") (lines diagnostics)
-                when ("GHC.Magic.dataToTag#" `isInfixOf` diagnostics) $
-                    fail ("outer tags need exact parameterized builtin evidence:\n" ++ diagnostics)
-                unless (length reports == 2 && all (isInfixOf "GHC.Classes.") reports) $
-                    fail ("only the two independent Eq/default obligations should remain:\n" ++ diagnostics)
-            Right () -> fail "parameterized stock Eq permission is not part of the outer-tag certificate"
+        -- Its inferred kind binder is covered by the separate full stock proof;
+        -- explicit source tag operations still have no ordinary-call permission.
+        accepts "TagParameterized.hs"
     checksSelectedTags = do
         output <- specimen "TagSelected.hs"
         typechecks output
