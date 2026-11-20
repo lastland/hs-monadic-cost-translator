@@ -88,15 +88,15 @@ copyCase fixture destination = do
     copyFile source destination
 
 buildObserver :: ReferenceEnvironment -> FilePath -> IO FilePath
-buildObserver environment sandbox = do
-    let executable = sandbox </> "observe"
-    compile (supportDirectory environment) sandbox "Observe" ["MemoristANT", "QuickCheck"] executable
-    pure executable
+buildObserver = buildObserverWith []
 
 buildObserverAt :: String -> ReferenceEnvironment -> FilePath -> IO FilePath
-buildObserverAt optimization environment sandbox = do
-    let executable = sandbox </> ("observe" ++ optimization)
-    compileAt [optimization] (supportDirectory environment) sandbox "Observe"
+buildObserverAt optimization = buildObserverWith [optimization]
+
+buildObserverWith :: [String] -> ReferenceEnvironment -> FilePath -> IO FilePath
+buildObserverWith options environment sandbox = do
+    let executable = sandbox </> ("observe" ++ concat options)
+    compileAt options (supportDirectory environment) sandbox "Observe"
         ["MemoristANT", "QuickCheck"] executable
     pure executable
 
