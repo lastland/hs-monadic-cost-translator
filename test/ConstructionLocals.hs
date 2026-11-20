@@ -182,6 +182,8 @@ nestedSource :: Locals -> HsBind GhcRn -> [SourceBody]
 nestedSource locals = concatMap boundary . fst . bodyParts
   where
     boundary b | Just fields <- components b, any (covered . fst) fields = concatMap field fields
+               | forcedBinder b, Just n <- bindingName b, isQuickCheckBinding (quickCheckBindings locals) n =
+                   nestedSource locals b
                | consumed (names b) = nestedSource locals b
                | otherwise = [Declaration b]
     consumed ns = not (null ns) && all (`Set.member` expressionValues locals) ns

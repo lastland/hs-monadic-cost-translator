@@ -3,7 +3,7 @@
 module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, quickCheckOperand, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
-import ConstructionAst (appliedDataCon, collectAst, spine, strictConstructorOperands, typedVariable, updateAlternatives)
+import ConstructionAst (appliedDataCon, collectAst, spine, strictConstructorOperands, strictNullaryRhs, typedVariable, updateAlternatives)
 import ConstructionRuntime (resolveType)
 import Data.Foldable (toList)
 import Data.Maybe (mapMaybe)
@@ -59,8 +59,12 @@ quickCheckUses result = inModule
         forwarded = Set.fromList $ concatMap (mapMaybe variableSite . lazyFields) expressions ++
             [(bytes, unLoc n) | e <- concatMap lazyUpdateFields (collectAst source),
                 (L _ (HsVar _ n), []) <- [spine e], Just bytes <- [inputSpan (getLocA n)]]
-        bangs = Set.fromList [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
-            result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]]
+        bangs = Set.fromList $
+            [span' | pat@(L _ BangPat{}) <- collectAst source :: [LPat GhcTc],
+                quickCheckOperand result (hsLPatType pat), Just span' <- [inputSpan (getLocA pat)]] ++
+            [span' | FunBind _ n matches <- collectAst source :: [HsBind GhcTc],
+                strictNullaryRhs matches, quickCheckOperand result (mg_res_ty (mg_ext matches)),
+                Just span' <- [inputSpan (getLocA n)]]
         used location name = maybe False (\span' -> Set.member (span', name) sites) (inputSpan location)
         forced location = maybe False (`Set.member` bangs) (inputSpan location)
         -- For `seq x ...` report the QC operand itself. In a section or

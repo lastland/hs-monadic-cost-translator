@@ -92,11 +92,13 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
         | Just (_ :: HsType GhcRn) <- cast value = ([], [])
         | Just (_ :: Sig GhcRn) <- cast value = ([], [])
         | Just (_ :: HsMatchContext (LIdP GhcRn)) <- cast value = ([], [])
-        | Just binding <- cast value, exempt binding =
+        | Just binding <- cast value, exempt binding, not (strictBinding binding) =
             foldr (plus . nested location) ([], []) (nestedSource locals binding)
         | Just (FunBind _ name matches) <- cast value :: Maybe (HsBind GhcRn) =
              if (getLocA name, unLoc name) `elem` views then expansionProblems matches
-             else walk (getLocA name) matches
+             else ([pretty (getLocA name) ++ ": strict binding forces a QuickCheck value outside a generator or property"
+                    | strictNullaryRhs matches, strictPatternAt qcUses (getLocA name)], []) `plus`
+                 walk (getLocA name) matches
         | Just (PatSynBind _ PSB{psb_id = name}) <- cast value :: Maybe (HsBind GhcRn) =
             ([pretty (getLocA name) ++ ": unsupported executable form: pattern synonym"], [])
         | Just expression <- cast value :: Maybe (LHsExpr GhcRn) =
@@ -145,6 +147,8 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
       where
         bad form = ([pretty location ++ ": unsupported executable form: " ++ form], [])
     descend location value = foldr plus ([], []) (children (walk location) value)
+    strictBinding FunBind{fun_matches = matches} = strictNullaryRhs matches
+    strictBinding _ = False
     nested location (Declaration binding) = walk location binding `plus`
         ([], [PatternAt (getLocA pat) | PatBind{pat_lhs = pat} <- [binding], Nothing <- [bindingName binding]])
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
