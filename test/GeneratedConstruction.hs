@@ -557,10 +557,10 @@ checkGeneratedConstructionSpecimens = do
         diagnostics <- constructionReports output
         writeFile (directory </> "construction-reports.txt") (unlines diagnostics)
         -- These are actual generated dictionaries, not a model of the emitter.
-        -- Neither observers nor standalone shrinkers are computations. Unrelated
-        -- selected-method blockers are still inspected in this complete output.
-        unless (not (null diagnostics) && any (isInfixOf "Generated.foldrT") diagnostics) $
-            fail ("anf-demand must retain unrelated construction rejections:\n" ++ unlines diagnostics)
+        -- Concrete inherited Foldable defaults close against their actual
+        -- selected fields. Inspect the complete graph, including support bodies.
+        unless (null diagnostics) $
+            fail ("anf-demand must satisfy construction:\n" ++ unlines diagnostics)
         when (any (isInfixOf "liftShrink") diagnostics) $
             fail ("anf-demand shrinker helpers must have support roles:\n" ++ unlines diagnostics)
         let pureMethod report = any (`isInfixOf` report)
