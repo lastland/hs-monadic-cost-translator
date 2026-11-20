@@ -5,32 +5,31 @@ module Cost.AcceptedSource
     ) where
 
 import Control.Monad (unless)
-import GHC hiding (extensions)
-import GHC.Data.EnumSet qualified as EnumSet
+import Cost.AcceptedOptions
+import GHC
 import GHC.Data.StringBuffer
-import GHC.Driver.Session (xopt)
-import GHC.LanguageExtensions.Type qualified as Extension
 import System.Directory (canonicalizePath)
 
-data AcceptedSource = AcceptedSource Module String [Bool] [Int]
+data AcceptedSource = AcceptedSource Module String AcceptedOptions
 
-acceptedSummary :: ModSummary -> IO (ModSummary, AcceptedSource)
-acceptedSummary summary = do
+acceptedSummary :: HscEnv -> ModSummary -> IO (ModSummary, AcceptedSource)
+acceptedSummary session summary = do
     buffer <-
         maybe
             (hGetStringBuffer (ms_hspp_file summary))
             pure
             (ms_hspp_buf summary)
+    options <- acceptedOptions session summary
     let accepted =
             AcceptedSource
                 (ms_mod summary)
                 (lexemeToString buffer (len buffer))
-                (extensions summary)
-                (options summary)
+                options
     pure (summary {ms_hspp_buf = Just buffer}, accepted)
 
-verifyAccepted :: [FilePath] -> AcceptedSource -> [ModSummary] -> IO [Module]
-verifyAccepted paths (AcceptedSource owner snapshot exts opts) summaries = do
+verifyAccepted ::
+    HscEnv -> [FilePath] -> AcceptedSource -> [ModSummary] -> IO [Module]
+verifyAccepted session paths (AcceptedSource owner snapshot opts) summaries = do
     matches <- mapM verify summaries
     pure [ms_mod summary | (summary, True) <- zip summaries matches]
     where
@@ -51,16 +50,16 @@ verifyAccepted paths (AcceptedSource owner snapshot exts opts) summaries = do
                                 pure
                                 (ms_hspp_buf summary)
                         let contents = lexemeToString buffer (len buffer)
+                        actualOptions <- acceptedOptions session summary
                         let changed =
                                 [ label
                                 | (label, different) <-
                                     [ ("module/unit", ms_mod summary /= owner)
                                     , ("frontend buffer", contents /= snapshot)
-                                    , ("extensions", extensions summary /= exts)
-                                    , ("general flags", options summary /= opts)
                                     ]
                                 , different
                                 ]
+                                    ++ changedOptions opts actualOptions
                         unless
                             (null changed)
                             ( fail
@@ -69,16 +68,3 @@ verifyAccepted paths (AcceptedSource owner snapshot exts opts) summaries = do
                                 )
                             )
                         pure True
-
-extensions :: ModSummary -> [Bool]
-extensions summary =
-    [ xopt flag (ms_hspp_opts summary)
-    | flag <- [minBound .. maxBound :: Extension.Extension]
-    ]
-
-options :: ModSummary -> [Int]
-options summary =
-    [ fromEnum flag
-    | flag <- EnumSet.toList (generalFlags (ms_hspp_opts summary))
-    , flag /= Opt_IgnoreInterfacePragmas
-    ]

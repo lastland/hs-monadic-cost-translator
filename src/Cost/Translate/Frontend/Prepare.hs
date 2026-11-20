@@ -45,7 +45,8 @@ generate file targetModule = runGhc (Just libdir) $ do
     graph <- depanal [] False
     case mgModSummaries graph of
         [summary] -> do
-            (accepted, receipt) <- liftIO (acceptedSummary summary)
+            session <- getSession
+            (accepted, receipt) <- liftIO (acceptedSummary session summary)
             (result, logs) <- generateChecked file targetModule flags accepted
             pure (fmap (,receipt) result, logs)
         _ -> pure (sourceFailure file ": expected one source module")

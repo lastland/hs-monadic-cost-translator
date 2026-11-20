@@ -27,7 +27,7 @@ import GHC
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
     , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), ModSummary(..), SuccessFlag(..), TyThing(AnId)
     , backend, findModule, getLocA, getModSummary, getName, idType, lookupName, mkModuleName
-    , getSessionDynFlags, guessTarget, importPaths, mgModSummaries
+    , getSession, getSessionDynFlags, guessTarget, importPaths, mgModSummaries
     , coreModule, desugarModule, load, noBackend, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , tm_renamed_source, unLoc, ghcLink
@@ -87,7 +87,8 @@ constructionReportsWithOrigin publication output =
             homes = map ms_mod summaries
             optionProblems = concatMap checkCompilerOptions summaries
         unless (null optionProblems) (fail (unlines optionProblems))
-        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output summaries) publication
+        session <- getSession
+        origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output session summaries) publication
         parsedModules <- mapM parseModule summaries
         let parsedProblems = concatMap checkParsedSyntax parsedModules
         unless (null parsedProblems) (fail (unlines parsedProblems))

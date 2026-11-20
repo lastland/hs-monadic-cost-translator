@@ -40,15 +40,16 @@ checkAcceptedOptions = withSystemTempDirectory "accepted-options-" $ \root -> do
             pure summary { ms_hspp_buf = Just buffer }
         unless (length [() | summary <- pinned, ml_hs_file (ms_location summary) == Just source] == 1)
             (fail "private controls require exactly the real staged origin")
+        session <- getSession
         let change update summary
                 | ml_hs_file (ms_location summary) == Just source =
                     summary { ms_hspp_opts = update (ms_hspp_opts summary) }
                 | otherwise = summary
-            verify = verifyOrigin publication output
+            verify = verifyOrigin publication output session
         liftIO $ void (verify pinned)
         -- This is the one intentional inspection difference, not a blanket
         -- exemption for visibility flags or arbitrary compiler settings.
-        liftIO $ void (verify (map (change (\f -> gopt_set f Opt_IgnoreInterfacePragmas)) pinned))
+        liftIO $ void (verify (map (change (`gopt_set` Opt_IgnoreInterfacePragmas)) pinned))
         rejected <- forM optionChanges $ \(label, update) -> liftIO $ do
             result <- try (verify (map (change update) pinned))
             pure (label, case result of
@@ -68,7 +69,7 @@ optionChanges =
     , ("wantedsFuel", \f -> f { wantedsFuel = wantedsFuel f + 1 })
     , ("qcsFuel", \f -> f { qcsFuel = qcsFuel f + 1 })
     , ("language", \f -> f { language = Just Haskell98 })
-    , ("visibility", \f -> gopt_set f Opt_HideAllPackages)
+    , ("visibility", (`gopt_set` Opt_HideAllPackages))
     , ("kind checking", \f -> if xopt Extension.PolyKinds f
           then xopt_unset f Extension.PolyKinds else xopt_set f Extension.PolyKinds)
     ]
