@@ -18,3 +18,11 @@ outerOnly = strictF
 
 ignoreThroughRecursion :: (Q.Property, Bool) -> Bool
 ignoreThroughRecursion = grow True
+
+data Box = Box Q.Property
+
+pack :: Q.Property -> Box
+pack p = Box p
+
+prop_unpacked :: Q.Property -> Q.Property
+prop_unpacked p = case pack p of Box saved -> saved
