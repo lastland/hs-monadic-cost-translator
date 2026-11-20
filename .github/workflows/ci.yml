@@ -84,3 +84,16 @@ jobs:
         env:
           GHC: ${{ steps.haskell.outputs.ghc-exe }}
         run: sh scripts/validate.sh
+      - name: Check committed example translations
+        run: |
+          # Regenerate from the inputs alone, so removing a source also removes its copy.
+          rm -f examples/*M.hs
+          printf '%s\n' examples/*.hs | cabal exec -- ghc -XGHC2021 -isrc -package ghc \
+            src/Cost/Translate/Frontend.hs -e 'import System.FilePath' -e '
+              let emit source = do
+                    let output = dropExtension source ++ "M.hs"
+                    (candidate, _) <- generate source (takeBaseName output)
+                    either (fail . Cost.Translate.Diagnostic.renderDiagnostic) (writeFile output) candidate
+              in getContents >>= mapM_ emit . lines'
+          git add -Af -- ':(glob)examples/*M.hs'
+          git diff --cached --exit-code -- ':(glob)examples/*M.hs'

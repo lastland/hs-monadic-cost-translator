@@ -4,8 +4,8 @@ __pycache__/
 *.hi
 *.o
 
-# Translated examples and their diagnostic logs.
-/examples/*M.hs
+# Example editor files and translation diagnostics.
+/examples/flycheck_*.hs
 /examples/*M.hs.log
 
 # External reference runtime; intentionally not part of version control.

@@ -2,6 +2,9 @@
 
 This directory contains thirteen pure Haskell modules within the supported subset documented in the [root README](../README.md): eight introductory modules that walk through core translator features and five focused modules that exercise thunk reuse, scoped type annotations, constructor-equation grouping, and `do`-block structure.
 
+Each source has a checked-in translation alongside it. For example, compare
+[`Basic.hs`](Basic.hs) with [`BasicM.hs`](BasicM.hs) without building the translator.
+
 ### Introductory Modules
 
 | File | Demonstrates |
@@ -43,7 +46,7 @@ Generated modules require a GHC 9.10.3 environment exposing `MemoristANT` and `Q
 stack build
 ```
 
-### Translating All Examples
+### Regenerating All Examples
 
 From `examples/`, run:
 
@@ -51,10 +54,13 @@ From `examples/`, run:
 make
 ```
 
-Make builds the translator and runtime with Stack, then translates every
-`examples/*.hs` except `*M.hs`, the suffix reserved for generated modules.
-For example, it writes `BasicM.hs` and `BasicM.hs.log` beside `Basic.hs`.
-Git ignores the generated modules and their logs.
+Make builds the translator and runtime with Stack, then regenerates every `*M.hs`
+copy from its source. After changing a source or the translator, rerun this command
+and include any changed translations in the same commit. Git ignores the companion
+diagnostic logs (such as `BasicM.hs.log`).
+
+On every push and pull request, CI regenerates the text without `hs-pbt/` and
+shows a Git diff if the checked-in copies are out of date.
 
 ### Translating and Inspecting an Example
 
