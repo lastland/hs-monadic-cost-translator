@@ -218,6 +218,10 @@ patternProbes = concat
       | input <- [0, 1, -3] ] ++
       [ failure (label ++ "/failed-scrutinee") $ \_ -> M.lazy (bad "scrutinee") >>= translated ]
     | (label, source, translated) <- [("literal", Source.literal, literalM), ("case", Source.inspect, inspectM)]
+    ] ++
+    [ scalarSource ("pattern/" ++ label) (const (Source.zeroSign n)) $ \s ->
+        M.lazy (priced (repeats s) n) >>= zeroSignM
+    | (label, n) <- [("negative-zero", -0.0), ("positive-zero", 0.0), ("nonzero", 1)]
     ]
 
 probes :: [Probe]

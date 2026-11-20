@@ -35,6 +35,11 @@ inspect x = case x of
     0 -> x + 1
     _ -> x - 1
 
+-- Both signed zeros match 0; the arithmetic must use the actual input.
+zeroSign :: Double -> Int
+zeroSign x@0 = if 1 / x < 0 then -1 else 1
+zeroSign _ = 0
+
 boxNext :: Int -> Maybe Int
 boxNext x = if x > 0 then Just (work (x + 1)) else Nothing
 

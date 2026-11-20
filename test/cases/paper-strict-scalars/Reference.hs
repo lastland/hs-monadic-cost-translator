@@ -1,5 +1,6 @@
 module Generated where
 
+import Data.Maybe (fromMaybe)
 import qualified Memorist.Data.List as L
 import qualified Memorist.Memorist as M
 
@@ -41,8 +42,15 @@ bangNextM :: M.Th Int -> M.MemoristM Int
 bangNextM x = M.tick >> M.tick >> ((\n -> double n + 1) <$> M.force x)
 
 literalM, inspectM :: M.Th Int -> M.MemoristM Int
-literalM x = M.tick >> ((\n -> maybe 0 id (lookup n [(0,1), (1,3)])) <$> M.force x)
+literalM x = M.tick >> ((\n -> fromMaybe 0 (lookup n [(0,1), (1,3)])) <$> M.force x)
 inspectM x = M.tick >> ((\n -> if n == 0 then 1 else n - 1) <$> M.force x)
+
+zeroSignM :: M.Th Double -> M.MemoristM Int
+zeroSignM input = M.tick >> (sign <$> M.force input)
+  where
+    sign n | isNegativeZero n = -1
+           | n == 0 = 1
+           | otherwise = 0
 
 -- The field's single tick is the source call to work. With input 3 the
 -- projection is Just 8, costing 1 tick for the tag and 2 for the full value.
