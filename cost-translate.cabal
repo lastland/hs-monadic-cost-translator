@@ -176,8 +176,8 @@ test-suite cost-translate-test
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionAllocation
-                      ConstructionArithmetic
-                      ConstructionScalarComparison
+                     ConstructionArithmetic
+                     ConstructionScalarComparison
                      ConstructionActionFields
                      ConstructionActionFlow
                      ConstructionAst
@@ -202,7 +202,7 @@ test-suite cost-translate-test
                       ReferenceRunner
                       ProducerSharing
                       CapturedKeySharing
-                      ScalarComparisonChecks
+                     ScalarComparisonChecks
                      RuntimeAllocator
                      Paths_cost_translate
     autogen-modules:  Paths_cost_translate

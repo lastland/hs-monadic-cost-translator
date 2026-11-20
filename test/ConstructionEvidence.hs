@@ -259,8 +259,8 @@ checkUse rules origin utility = check
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                     | selectedPredicate ty evidence && demandMethod [] name evidence -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
-                     | callerArithmetic rt use -> Nothing
-                     | callerComparison rt (scalarFacts rules) use -> Nothing
+                    | callerArithmetic rt use -> Nothing
+                    | callerComparison rt (scalarFacts rules) use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
                     | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
                         selectedPredicate ty evidence && ordinary evidence -> Nothing
