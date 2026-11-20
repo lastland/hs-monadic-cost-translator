@@ -177,6 +177,7 @@ test-suite cost-translate-test
                      ConstructionImplicit
                      ConstructionDictionary
                      ConstructionDefaults
+                     ConstructionDemandMethods
                      ConstructionEvidence
                      ConstructionRoles
                      ConstructionQuickCheckTypes

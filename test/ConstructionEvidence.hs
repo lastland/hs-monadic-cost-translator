@@ -6,6 +6,7 @@ import ConstructionDictionary
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
+import ConstructionDemandMethods (runtimeDemandMethod, stockMethods)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -76,6 +77,7 @@ methodNames rt modules = do
         Just cls <- [tyConClass_maybe tc], method <- classMethods cls])
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
+    | StockFacts [(Name, Name, Type, [Use])]
 
 data RetainedEvidence = RetainedEvidence
     { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
@@ -143,7 +145,9 @@ collectEvidence rt locals homes program support checked sourceSites = do
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawSites = DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
+                    stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
+                        (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
+                    rawSites = StockFacts stockFacts : DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
@@ -179,17 +183,20 @@ checkEvidence rt homes demands sites = concatMap check sites
     checkSelected = checkUse MethodRules
         { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
-        , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites] }
+        , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
+        , stockFacts = concat [facts | StockFacts facts <- sites] }
     observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
     check (DefaultFacts _) = []
+    check (StockFacts _) = []
     check (MissingCertificate why) = [why]
     check (Site location field u) = map ((location ++ ": ") ++) (checkSelected [] field u)
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
-    , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool }
+    , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
+    , stockFacts :: [(Name, Name, Type, [Use])] }
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
@@ -214,6 +221,7 @@ checkUse rules = check
                 RepresentationMethod | representationCarrier && concreteRepr ty evidence -> Nothing
                     | otherwise -> Just "reprM requires a concrete method-specific construction closure and audited carrier"
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
+                    | selectedPredicate ty evidence && demandMethod [] name evidence -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
                     | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
@@ -224,6 +232,25 @@ checkUse rules = check
             _ -> Just "unsaturated selector has no selected instance evidence"
         root (Super _ _ parent) = root parent
         root evidence = evidence
+        demandMethod active method (Instance df predicate args ds)
+            | Just _ <- runtimeDemandMethod rt method df predicate args (mapMaybePredicate ds) =
+                length ds == 1 && all (\child -> case predicateOf child >>= getClassPredTys_maybe of
+                    Just (_, [operand]) -> scalarType operand && ordinary child
+                    _ -> False) ds
+            | null args && null ds,
+              [(formal, obligations)] <- [(p, obligations) | (owner, selected, p, obligations) <- stockFacts rules,
+                  owner == getName df, selected == method],
+              eqType formal predicate =
+                (getName df, method) `elem` active || all safe obligations
+          where
+            safe (Use selected cls ScalarMethod (ty : _) [child])
+                | Just (actual, [operand]) <- predicateOf child >>= getClassPredTys_maybe,
+                  getName actual == cls, eqType operand ty, not (isProtected rt operand) =
+                    demandMethod ((getName df, method) : active) selected child ||
+                        (scalarType operand && ordinary child)
+            safe _ = False
+        demandMethod _ _ _ = False
+        mapMaybePredicate ds = [p | d <- ds, Just p <- [predicateOf d]]
         selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty
             _ -> False

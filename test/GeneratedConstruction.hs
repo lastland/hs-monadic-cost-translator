@@ -1,7 +1,7 @@
 module GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionSpecimens) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless, void)
+import Control.Monad (forM, unless, void, when)
 import Cost.Translate (translateFile)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
@@ -119,6 +119,20 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
+    accepts "DemandScalarMethods.hs"
+    rejectsAt "DemandScalarUnsafe.hs"
+        [(7, forbidden tval), (9, forbidden tval),
+         (12, demandEq), (14, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption"),
+         (17, protectedEq), (19, selected "GHC.Internal.Show.show: protected thunk/annotation/accounting operand"),
+         (22, demandEq), (24, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption"),
+         (32, selected "GHC.Classes.==: unknown concrete scalar instance"),
+         (34, selected "GHC.Internal.Show.show: unknown concrete scalar instance"),
+         (37, selected "GHC.Internal.Show.show: protected thunk/annotation/accounting operand"),
+         (40, protectedEq)]
+    rejectsAt "DemandScalarShadow.hs"
+        [(15, unknown "DemandScalarShadow.same"), (17, unknown "DemandScalarShadow.render")]
+    rejectsAt "DemandScalarForged.hs" [(11, external "GHC.Internal.Unsafe.Coerce.unsafeCoerce"), (14, demandEq)]
+    checksGeneratedDemandMethods
     checksPhantomProducer
     rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
     accepts "BoxedActionControl.hs"
@@ -285,8 +299,9 @@ checkGeneratedConstructionSpecimens = do
     accepts "ArbitraryWithoutDemand.hs"
     rejectsDespiteImport "DatatypeGeneratorEscape.hs" 7 "DatatypeGeneratorControl.hs" 18 sized
     rejects "DatatypeGeneratorDead.hs" [(18, eval1)]
-    rejectsAt "DemandDerivingEscape.hs" [(8, demandEq), (11, demandEq)]
-    rejectsAt "DemandManualInstance.hs" [(15, demandEq)]
+    mixed "DemandDerivingEscape.hs" [TopBinding "ordinary"] "DemandDerivingEscape.hs" [(11, demandEq)]
+    mixed "DemandManualInstance.hs" [InstanceMethod "Eq" ["Observation"] "=="] "DemandManualInstance.hs"
+        [(12, forbidden "Memorist.Data.Interface.Demand.usage")]
     rejectsAt "DemandProtectedDeriving.hs" [(13, protectedEq)]
     mixed "SumGeneratorMissing.hs" [InstanceMethod "Arbitrary" ["Observation"] "arbitrary"]
         "SumGeneratorMissing.hs" [(9, defaultUsage)]
@@ -314,7 +329,7 @@ checkGeneratedConstructionSpecimens = do
     rejects "DatatypeGeneratorControl.hs"
         [(13, "Memorist.Data.Interface.Demand.fullDemand"), (14, "Memorist.Data.Interface.Demand.usage"),
          (14, "Memorist.Base.Thunk.union"), (14, "Memorist.Base.Thunk.empty")]
-    rejectsAt "DemandDerivingControl.hs" [(12, forbidden "Memorist.Data.Interface.Demand.usage"), (14, demandEq)]
+    rejectsAt "DemandDerivingControl.hs" [(12, forbidden "Memorist.Data.Interface.Demand.usage")]
     rejects "SumGeneratorControl.hs"
         [(15, "Memorist.Base.Thunk.empty"), (16, "Memorist.Data.Interface.Demand.usage"), (16, "Memorist.Base.Thunk.union")]
     rejects "ConstraintWrapperControl.hs"
@@ -488,6 +503,21 @@ checkGeneratedConstructionSpecimens = do
         translated <- translateFile input output
         either (fail . ((label ++ " must translate before artifact inspection: ") ++)) pure translated
         pure (directory, input, output)
+    checksGeneratedDemandMethods = do
+        (directory, _, output) <- completeArtifact "anf-demand methods" ("anf-demand" </> "Example.hs")
+        diagnostics <- constructionReports output
+        writeFile (directory </> "construction-reports.txt") (unlines diagnostics)
+        -- These are actual generated dictionaries, not a model of the emitter.
+        -- Observer/accounting and shrinker obligations deliberately remain.
+        unless (not (null diagnostics) && any (isInfixOf "Test.QuickCheck.Arbitrary.liftShrink") diagnostics &&
+                any (isInfixOf (forbidden "Memorist.Data.Interface.Demand.usage")) diagnostics) $
+            fail ("anf-demand must retain observer/accounting and shrinker rejections:\n" ++ unlines diagnostics)
+        let pureMethod report = any (`isInfixOf` report)
+                ["unapproved selected method GHC.Classes.==:", "unapproved selected method GHC.Classes.$dm/=:",
+                 "unapproved selected method GHC.Internal.Show.show:", "unapproved selected method GHC.Internal.Show.showsPrec:",
+                 "unapproved selected method GHC.Internal.Show.$dmshow:", "unapproved selected method GHC.Internal.Show.$dmshowList:"]
+        when (any pureMethod diagnostics) $
+            fail ("anf-demand pure demand Eq/Show must have selected method certificates:\n" ++ unlines (filter pureMethod diagnostics))
     checkIntegralContext fixture = do
         let label = takeBaseName fixture
         (_, _, output) <- completeArtifact label fixture
