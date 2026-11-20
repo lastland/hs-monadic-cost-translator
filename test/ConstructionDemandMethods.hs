@@ -11,12 +11,13 @@ import qualified Data.Map.Strict as Map
 import GHC hiding (exprType, typeKind)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon)
+import GHC.Builtin.Types (liftedTypeKind)
 import GHC.Core.DataCon (dataConInstOrigArgTys, dataConWorkId)
 import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe, mkClassPred)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (isPredTy, mkTyVarTy, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
+import GHC.Core.Type (isPredTy, mkTyVarTy, mkVisFunTyMany, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
 import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import GHC.Types.Name (nameOccName)
@@ -110,7 +111,7 @@ stockMethods rt checked env collect = StockMethods env stocks
         (cls, [operand]) <- maybe [] pure (getClassPredTys_maybe (exprType body))
         (tc, args) <- maybe [] pure (splitTyConApp_maybe operand)
         guard (isDataTyCon tc && not (isNewTyCon tc) && not (isFamInstTyCon tc) &&
-            isLiftedTypeKind (tyConResKind tc) && all (isLiftedTypeKind . varType) vars &&
+            isLiftedTypeKind (tyConResKind tc) && all (stockKind . varType) vars &&
             length args == length (tyConTyVars tc) && sameTypes args (map mkTyVarTy vars) &&
             all isVanillaDataCon (tyConDataCons tc) &&
             (getName cls, getName tc, length args) `elem` requests)
@@ -146,6 +147,9 @@ stockMethods rt checked env collect = StockMethods env stocks
                     eqType t target, sameEvidence d self -> Just selected
                 _ -> Nothing
         pure (StockMethod (getName selector) def implementation methodVars methodSlots obligations inherited)
+    -- Bound parameter kinds structurally, without widening root or field proofs.
+    stockKind kind = isLiftedTypeKind kind ||
+        eqType kind (mkVisFunTyMany liftedTypeKind liftedTypeKind)
     sameTypes xs ys = length xs == length ys && and (zipWith eqType xs ys)
     sameVar (C.Var actual) expected = actual == expected
     sameVar _ _ = False
