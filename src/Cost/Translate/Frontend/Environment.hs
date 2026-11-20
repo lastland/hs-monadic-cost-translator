@@ -44,6 +44,7 @@ data Env = Env
     , namePlan :: NamePlan
     , strictWhnfValues :: Set.Set Name
     , scopedTypeVariables :: Map.Map Name [Name]
+    , producerCalls :: Map.Map Name String
     }
 
 lookupEnv :: Name -> Env -> Maybe Binding
@@ -104,6 +105,7 @@ occupiedNames env =
                    , simpleIdentifier name
                    ]
                 ++ plannedTemporaryNames (namePlan env)
+                ++ Map.elems (producerCalls env)
             )
 
 fieldSlot :: Env -> String -> LPat GhcRn -> String

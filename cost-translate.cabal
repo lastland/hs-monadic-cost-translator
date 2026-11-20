@@ -109,6 +109,7 @@ library
         Cost.Translate.Sharing.Native
         Cost.Translate.Sharing.NativeSupport
         Cost.Translate.Sharing.Paths
+        Cost.Translate.Sharing.Producer
         Cost.Translate.Sharing.Projection
         Cost.Translate.Sharing.Reflected
         Cost.Translate.Sharing.ReflectionTypes

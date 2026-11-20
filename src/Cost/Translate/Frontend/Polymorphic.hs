@@ -1,6 +1,10 @@
 module Cost.Translate.Frontend.Polymorphic
     ( constructorPayload
     , allocatePayload
+    , Payload
+    , producerPayload
+    , emitPayload
+    , payloadType
     ) where
 
 import Control.Applicative ((<|>))
@@ -16,7 +20,7 @@ import Cost.Translate.Frontend.Expressions
 import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)
-import Cost.Translate.Frontend.Syntax (argumentKey)
+import Cost.Translate.Frontend.Syntax (argumentKey, collect, plainRhs)
 import Cost.Translate.Kinds (renderBinder)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Sharing (nativeSharing, sharingType)
@@ -57,6 +61,7 @@ data PayloadBody
     = ConstructorPayload String [(String, Field)]
     | ConditionalPayload (LHsExpr GhcRn) Payload Payload
     | ApplicationPayload String String Payload
+    | ProducerCall String String (LHsExpr GhcRn)
 data Field = Ordinary (LHsExpr GhcRn) | Generalized Payload
 
 constructorPayload ::
@@ -66,13 +71,18 @@ constructorPayload ::
     Match GhcRn (LHsExpr GhcRn) ->
     Maybe ([TyVar], Payload)
 constructorPayload env name ty match = do
+    expression <- plainRhs match
     let renamings = bodyTypeRenamings Map.empty env name (O.tuple []) ty
         (variables, body) = sharingType renamings ty
-        rhs = m_grhss match
-        plan route scoped = case (grhssLocalBinds rhs, grhssGRHSs rhs) of
-            (EmptyLocalBinds _, [L _ (GRHS _ [] expression)]) ->
-                (scoped,) <$> planPayload route env variables body expression
-            _ -> Nothing
+        plan route scoped =
+            (scoped,) <$> case Map.lookup name (producerCalls env) of
+                Just worker -> do
+                    (_, [argument]) <- pure (spine expression)
+                    let key = argumentKey expression
+                    [slot] <- pure (argumentNames env key 1)
+                    let call = ProducerCall worker slot argument
+                    pure (Payload route variables body call)
+                Nothing -> planPayload route env variables body expression
         original = do
             scoped <- originalScope env name ty variables
             plan OriginalPayload scoped
@@ -175,6 +185,23 @@ planPayload route env variables ty expression = do
                 dependent variable =
                     variable `elementOfUniqSet` tyCoVarsOfType ty'
 
+producerPayload ::
+    Env -> Name -> TyVar -> Type -> LHsExpr GhcRn -> Maybe Payload
+producerPayload env formal variable result expression = do
+    guard (null (collect expression :: [LHsType GhcRn]))
+    payload@(Payload _ _ _ (ConstructorPayload _ fields)) <-
+        planPayload CheckedPayload env [variable] result expression
+    guard (not (null [() | (_, Generalized _) <- fields]) && constructs payload)
+    pure payload
+    where
+        constructs (Payload _ _ _ (ConstructorPayload _ fields)) =
+            all (supported . snd) fields
+        constructs _ = False
+        supported (Generalized nested) = constructs nested
+        supported (Ordinary argument) = case spine argument of
+            (L _ (HsVar _ n), []) -> unLoc n == formal
+            _ -> False
+
 payloadFunction :: Env -> Name -> Maybe String
 payloadFunction env name = do
     guard (isExternalName name)
@@ -239,6 +266,9 @@ emitPayload ::
     Payload ->
     Either String O.Expr
 emitPayload emit env payload@(Payload _ _ _ body) = case body of
+    ProducerCall worker name expression -> do
+        (statements, thunk) <- field (name, Ordinary expression)
+        pure (O.doE statements (O.call worker [thunk]))
     ApplicationPayload target name argument -> do
         ty <- payloadType env argument
         action <- emitPayload emit env argument
@@ -285,13 +315,16 @@ allocatePayload ::
 allocatePayload emit env name allocation@(_, payload) continuation
     | let used = usedNames continuation
     , localName env name `Set.notMember` used = case payload of
+        Payload _ _ _ ProducerCall {} -> validate
         Payload OriginalPayload _ _ _
             | Just ty <- Map.lookup name (inferredBindings env)
             , Right Nothing <-
                 nativeSharing (planNativeSchemas Set.empty []) Map.empty ty ->
                 pure continuation
-        _ -> emitPayload emit env payload >> pure continuation
+        _ -> validate
     | otherwise = allocateUsedPayload emit env name allocation continuation
+    where
+        validate = emitPayload emit env payload >> pure continuation
 
 allocateUsedPayload ::
     (LHsExpr GhcRn -> Either String O.Expr) ->

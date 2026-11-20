@@ -11,6 +11,7 @@ module Cost.Translate.Frontend.Syntax
     , stringPattern
     , argumentKey
     , explicitScopes
+    , plainRhs
     ) where
 
 import Data.Data (Data, cast, gmapQ)
@@ -23,6 +24,11 @@ import GHC.Types.SourceText (SourceText (NoSourceText))
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)
+
+plainRhs :: Match GhcRn (LHsExpr GhcRn) -> Maybe (LHsExpr GhcRn)
+plainRhs match = case m_grhss match of
+    GRHSs _ [L _ (GRHS _ [] expression)] (EmptyLocalBinds _) -> Just expression
+    _ -> Nothing
 
 explicitScopes :: HsGroup GhcRn -> Map.Map Name [Name]
 explicitScopes group =

@@ -1,7 +1,7 @@
 module Cost.Translate.Frontend.Module (emitModule) where
 
 import Cost.Translate.Datatypes (emitDatatypeSections)
-import Cost.Translate.Frontend.Emit (emitBind)
+import Cost.Translate.Frontend.Emit (emitBind, emitExpr)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.Gates (checkRecursiveValues)
 import Cost.Translate.Frontend.Logs (moduleLogs)
@@ -13,6 +13,7 @@ import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Cost.Translate.Pretty (Section)
 import Cost.Translate.Sharing (AllocationScope (..), Specialization)
+import Cost.Translate.Sharing.Producer (emitProducer, planProducers)
 import Cost.Translate.Specialize (specializeHelpers)
 import Cost.Translate.Typed qualified as Typed
 import Data.Map.Strict qualified as Map
@@ -81,12 +82,12 @@ moduleResult ::
     Map.Map Name [Specialization] ->
     HsGroup GhcRn ->
     Either String (HsModule GhcPs, [Section], [Extension.Extension])
-moduleResult target source hash helpers env specialized group = do
-    mapM_ checkRecursiveValues (topLevelGroups group)
+moduleResult target source hash helpers initial specialized group = do
+    mapM_ checkRecursiveValues groups
     (datatypeSupport, kindSupport, datatypeDeclarations) <-
         emitDatatypeSections datatypes
     declarations <-
-        concat <$> mapM emitBinding (concatMap snd (topLevelGroups group))
+        concat <$> mapM emitBinding (concatMap snd groups)
     let sections =
             moduleSections
                 source
@@ -105,11 +106,21 @@ moduleResult target source hash helpers env specialized group = do
         imports = moduleImports source reserved sections
     pure (O.moduleD target imports [], sections, extensions)
     where
+        groups = topLevelGroups group
+        (workers, calls) = planProducers initial groups
+        env = initial {producerCalls = calls}
         datatypes = sourceDatatypes env
-        reserved = reservedModuleNames datatypes group
+        reserved =
+            reservedModuleNames datatypes group `Set.union` workerNames
+        workerNames = Set.fromList (Map.elems calls)
         layouts = constructorLayouts datatypes
         emitBinding binding = do
             (name, ty) <- bindingSignature env binding
             let plan = planNames datatypes reserved layouts specialized binding
-            code <- emitBind (env {namePlan = plan}) binding
-            pure [O.sig name ty, code]
+            case unLoc binding of
+                FunBind _ n _
+                    | Just worker <- Map.lookup (unLoc n) workers ->
+                        emitProducer emitExpr env name ty worker
+                _ -> do
+                    code <- emitBind (env {namePlan = plan}) binding
+                    pure [O.sig name ty, code]
