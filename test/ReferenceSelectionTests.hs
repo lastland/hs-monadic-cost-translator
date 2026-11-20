@@ -7,6 +7,7 @@ import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import ReferencePolicy (discoverReferenceCases)
 import ReferenceSelection (referenceCases, caseKey)
+import Paths_cost_translate (getDataFileName)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.Directory
     ( Permissions(..), createDirectoryIfMissing, findExecutable, getPermissions, setPermissions )
@@ -23,6 +24,7 @@ import System.Timeout (timeout)
 checkReferenceSelection :: IO ()
 checkReferenceSelection = do
     executable <- getExecutablePath
+    checkInjectedContinuation executable
     (referenceStatus, referenceOut, referenceErr) <- readProcessWithExitCode executable
         ["anf-scoped-renaming", "identity", "anf-scoped-renaming"] ""
     let shadowedKey = "anf-scoped-renaming:test/cases/anf-scoped-renaming/Shadowed.hs"
@@ -80,6 +82,55 @@ checkReferenceSelection = do
     checkInterrupted executable
     checkCrashedCompiler executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
+
+checkInjectedContinuation :: FilePath -> IO ()
+checkInjectedContinuation executable =
+    withComparisonFailure executable "test/cases/top-level-function-interface/Control.hs" $ \run -> do
+        (status, out, err) <- run
+            ["top-level-function-interface", "identity", "top-level-function-interface"]
+        unless (status /= ExitSuccess &&
+                filter (\line -> any (`isPrefixOf` line) ["PASS: ", "FAIL: "]) (lines out) ==
+                    ["PASS: identity:test/cases/identity/Example.hs"
+                    ,"FAIL: top-level-function-interface:test/cases/top-level-function-interface/Control.hs"
+                    ,"PASS: top-level-function-interface:test/cases/top-level-function-interface/WithValue.hs"] &&
+                "Reference summary: 2 passed, 1 failed" `isInfixOf` out &&
+                "injected comparison failure: setup error: ordinary payload" `isInfixOf` err) $
+            fail ("ordinary comparison payloads must not change fatal setup classification\n" ++
+                childResult status out err)
+
+withComparisonFailure :: FilePath -> FilePath ->
+    (([String] -> IO (ExitCode, String, String)) -> IO a) -> IO a
+withComparisonFailure executable source action =
+    withSystemTempDirectory "reference-selection-comparison-" $ \root -> do
+        realGhc <- findExecutable "ghc" >>= maybe (fail "comparison injection needs ghc") pure
+        fixture <- getDataFileName source
+        environment <- getEnvironment
+        let commands = root </> "commands"
+            wrapper = commands </> "ghc"
+            injected =
+                [("PATH", commands ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
+                ,("REFERENCE_REAL_GHC", realGhc), ("REFERENCE_FAILURE_SOURCE", fixture)]
+            run arguments = readCreateProcessWithExitCode
+                (proc executable arguments)
+                    {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
+        createDirectoryIfMissing True commands
+        writeFile wrapper (unlines
+            ["#!/bin/sh", "set -eu", "\"$REFERENCE_REAL_GHC\" \"$@\""
+            ,"output=", "previous=", "for argument do"
+            ,"  if [ \"$previous\" = -o ]; then output=$argument; fi"
+            ,"  previous=$argument", "done"
+            ,"case \"$output\" in */compare)"
+            ,"  /bin/mv \"$output\" \"$output.real\""
+            ,"  /bin/cat > \"$output\" <<'COMPARER'"
+            ,"#!/bin/sh"
+            ,"sandbox=${1%/*}"
+            ,"if /usr/bin/cmp -s \"$REFERENCE_FAILURE_SOURCE\" \"$sandbox/Example.hs\"; then"
+            ,"  echo 'injected comparison failure: setup error: ordinary payload' >&2"
+            ,"  exit 1", "fi", "exec \"$0.real\" \"$@\"", "COMPARER"
+            ,"  /bin/chmod +x \"$output\"", ";;", "esac"])
+        permissions <- getPermissions wrapper
+        setPermissions wrapper permissions {executable = True}
+        action run
 
 checkCrashedCompiler :: FilePath -> IO ()
 checkCrashedCompiler executable =
