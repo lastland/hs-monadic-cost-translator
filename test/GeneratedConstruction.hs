@@ -126,6 +126,7 @@ checkGeneratedConstructionSpecimens = do
     accepts "ConcreteFoldableClosure.hs"
     accepts "ConcreteFoldableHomeInstance.hs"
     accepts "ConcreteFoldableCollision.hs"
+    checksFoldableCollisionDead
     checksFoldableSelf
     rejectsAt "ConcreteFoldableDeadHelper.hs"
         [(9, selected "ConcreteFoldableDeadHelper.run: unknown executable method/default dependency")]
@@ -688,6 +689,12 @@ checkGeneratedConstructionSpecimens = do
         reports <- siteReports output diagnostics
         when (any ((== 15) . srcSpanStartLine . fst) reports) $
             fail ("a default's exact self must be conditional, unlike its unrelated given:\n" ++ diagnostics)
+    checksFoldableCollisionDead = do
+        output <- specimen "ConcreteFoldableCollisionDead.hs"
+        typechecks output
+        diagnostics <- rejection output
+        requireAt diagnostics "SharedFoldable.hs"
+            [(24, selected "ConcreteFoldableCollisionDead.stepD: unknown executable method/default dependency")]
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
     rejectsIn name = mixed name []

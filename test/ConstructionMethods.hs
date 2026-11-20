@@ -1,8 +1,8 @@
 -- | Finite home methods whose result is the audited computation carrier.
 -- A default's self is conditional only in its own retained class equation.
-module ConstructionMethods (Methods, homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod) where
+module ConstructionMethods (Methods, MethodSite(..), homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod) where
 
-import ConstructionAst (allBindings, collectAst)
+import ConstructionAst (allBindings, collectAst, checkedModule)
 import ConstructionDictionary
 import ConstructionHomeRepr (Field(..))
 import ConstructionRuntime (Runtime, isMemoristType)
@@ -10,6 +10,7 @@ import Control.Monad (guard)
 import Data.Foldable (toList)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified GHC.Data.Strict as Strict
 import GHC hiding (exprType)
 import qualified GHC.Core as C
 import GHC.Core.Class (classAllSelIds, classOpItems, classTyCon, classTyVars)
@@ -22,9 +23,10 @@ import GHC.Core.Utils (exprType)
 import GHC.Tc.Types (tcg_tcs)
 import GHC.Types.Basic (DefMethSpec(VanillaDM))
 import GHC.Types.Var (isId, isTyVar)
-import GHC.Types.SrcLoc (isRealSubspanOf)
+import GHC.Types.SrcLoc (BufSpan, getBufSpan)
 
-data Default = Default Name Name Field SrcSpan [Use]
+data MethodSite = MethodBinding Name | MethodDeclaration (Maybe (Module, BufSpan))
+data Default = Default Name Name Field (Module, BufSpan) [Use]
 data Methods = Methods Environment (Map.Map Name [Use]) [Default]
 
 homeMethods :: Runtime -> TypecheckedModule -> Environment -> [(Id, C.CoreExpr)]
@@ -32,10 +34,11 @@ homeMethods :: Runtime -> TypecheckedModule -> Environment -> [(Id, C.CoreExpr)]
 homeMethods rt checked env raw collect = Methods env bodies defaults
   where
     bodies = Map.fromList [(getName v, collect rhs) | (v, rhs) <- allBindings [C.Rec raw]]
-    equations = [(unLoc n, getLocA binding) |
+    equations = [(unLoc n, (checkedModule checked, physical)) |
         Just (group, _, _, _, _) <- [tm_renamed_source checked],
         ClassDecl{tcdMeths = methods} <- collectAst group :: [TyClDecl GhcRn],
-        binding@(L _ (FunBind _ n _)) <- toList methods]
+        binding@(L _ (FunBind _ n _)) <- toList methods,
+        Strict.Just physical <- [getBufSpan (getLocA binding)]]
     defaults = [Default dm (getName cls) (Field dm methodVars [] self) at (collect rhs) |
         tc <- tcg_tcs (fst (tm_internals_ checked)), Just cls <- [tyConClass_maybe tc],
         (selector, Just (dm, VanillaDM)) <- classOpItems cls, computation rt (idType selector),
@@ -64,33 +67,30 @@ computation rt ty
     | Just (carrier, _) <- splitAppTy_maybe ty = isMemoristType rt carrier
     | otherwise = False
 
-conditionalMethod :: Runtime -> [Methods] -> Either Name SrcSpan -> Use -> Bool
+conditionalMethod :: Runtime -> [Methods] -> MethodSite -> Use -> Bool
 conditionalMethod rt modules site (Use selected cls _ _ [Given binder predicate]) =
     any owns [d | Methods _ _ ds <- modules, d <- ds]
   where
     owns (Default dm owner field at _) =
         owner == cls && binder == getName (carrierBinder field) &&
         eqType predicate (idType (carrierBinder field)) &&
-        (case site of Left name -> name == dm; Right span' -> contains at span') &&
+        (case site of MethodBinding name -> name == dm; MethodDeclaration declaration -> declaration == Just at) &&
         case getClassPredTys_maybe predicate of
             Just (actual, _) -> any (\(selector, _) -> getName selector == selected &&
                 computation rt (idType selector)) (classOpItems actual)
             _ -> False
-    contains (RealSrcSpan outer _) (RealSrcSpan inner _) = isRealSubspanOf inner outer
-    contains _ _ = False
 conditionalMethod _ _ _ _ = False
 
 -- Add retained, possibly erased method occurrences to the owning default.
 -- Ownership still requires its exact self Id when that obligation is checked.
-retainedMethods :: [(Either Name SrcSpan, Use)] -> Methods -> Methods
+retainedMethods :: [(MethodSite, Use)] -> Methods -> Methods
 retainedMethods sites (Methods env bodies defaults) = Methods env bodies
     [Default dm cls field at (obligations ++ [u | (site, u) <- sites,
         belongs dm at site]) |
         Default dm cls field at obligations <- defaults]
   where
-    belongs dm _ (Left name) = dm == name
-    belongs _ (RealSrcSpan outer _) (Right (RealSrcSpan inner _)) = isRealSubspanOf inner outer
-    belongs _ _ _ = False
+    belongs dm _ (MethodBinding name) = dm == name
+    belongs _ at (MethodDeclaration declaration) = declaration == Just at
 
 -- Return one complete selected implementation obligation. A repeated edge is
 -- rejected by the caller: this finite path is not a higher-order evaluator.
