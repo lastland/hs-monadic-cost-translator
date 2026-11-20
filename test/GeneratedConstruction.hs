@@ -117,6 +117,7 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    accepts "ProxyWitness.hs"
     checksPhantomProducer
     rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
     accepts "BoxedActionControl.hs"
