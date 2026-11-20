@@ -179,6 +179,7 @@ checkGeneratedConstructionSpecimens = do
     quantifiedCollision <- specimen "QuantifiedCollision.hs"
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
+    accepts "StockHigher.hs"
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"
