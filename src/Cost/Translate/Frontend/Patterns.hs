@@ -70,8 +70,6 @@ matchGuard env site expr subject success end = do
         joined scope miss = success scope (\_ build -> build miss)
     row <- prepareRow env sources (site, [subject], joined)
     case rowStep row of
-        -- Binding aliases alone cannot miss. Let the next inspection decide
-        -- which facts dominate all paths to the following guard.
         Ready scope _ -> success (scope known) end
         Inspect {} ->
             underRows env known [row] (\facts -> end (refine facts sources env))

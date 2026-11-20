@@ -48,7 +48,6 @@ emitGuards ::
 emitGuards _ [] fallback = Right fallback
 emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
     let failures = scanr ((||) . canMiss) False guards
-    -- Still diagnose unsupported syntax in unreachable alternatives.
     unless (or failures) (void (emitGuards env rest fallback))
     emitGuardStatements env body (zip guards (drop 1 failures)) following
     where
