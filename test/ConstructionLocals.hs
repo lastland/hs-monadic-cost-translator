@@ -93,17 +93,28 @@ implicitBodies group = [rhs | IPBind _ _ rhs <- collectAst group]
 
 data LocalRole = Testing | Value | Ordinary deriving Eq
 
+data BindingRegion = BindingRegion
+    { regionRole :: LocalRole, regionBinders :: [Name], regionRefs :: [Reference] }
+
+data CheckedGroup = CheckedGroup
+    { groupChecked :: TypecheckedModule, groupSource :: HsGroup GhcRn, groupIPs :: Implicits }
+
 localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
-localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries parameters
+localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries ipsByModule
   where
     formals = implicitFormals qc modules
-    groups = [(m, group, implicitParameters formals m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
-    parameters = Map.fromList [(checkedModule m, ip) | (m, _, ip) <- groups]
-    region ip role ns (bs, refs) = (role, ns, refs) : concatMap (local ip) bs
-    locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (references ip) b) |
-        (m, group, ip) <- groups, b <- fst (parts (const []) group)] ++
-        concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (references ip) rhs) |
-            (_, group, ip) <- groups, rhs <- implicitBodies group, let vs = [v | Just (v, _) <- [bindingAt ip (getLocA rhs)]]]
+    groups = [CheckedGroup{groupChecked = m, groupSource = group, groupIPs = implicitParameters formals m} |
+        m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
+    ipsByModule = Map.fromList [(checkedModule (groupChecked g), groupIPs g) | g <- groups]
+    ips = map groupIPs groups
+    region ip role ns (bs, refs) = BindingRegion{regionRole = role, regionBinders = ns, regionRefs = refs} : concatMap (local ip) bs
+    bindingRegions = concatMap topRegions groups ++ concatMap implicitRegions groups
+    topRegions g = concat [region ip (if exempt b then Testing else Ordinary) [] (bodyParts (references ip) b) |
+        b <- fst (parts (const []) (groupSource g))]
+      where ip = groupIPs g; exempt = quickCheckBody qc (groupChecked g)
+    implicitRegions g = concat [region ip (if any scalarIP vs then Value else Ordinary) (map getName vs) (parts (references ip) rhs) |
+        rhs <- implicitBodies (groupSource g), let vs = [v | Just (v, _) <- [bindingAt ip (getLocA rhs)]]]
+      where ip = groupIPs g
     local ip b = concat [region ip role ns body | (ns, body) <- regions]
       where
         role | generator b = Testing | value b = Value | otherwise = Ordinary
@@ -118,28 +129,31 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
     value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
     targets active refs = [n | Direct n <- refs] ++ [actualIP arg | AtCall arg <- refs, Set.member (formalIP arg) active]
-    deps active = Map.fromList [(n, targets active refs) | (Value, ns, refs) <- locals, n <- ns]
+    valueRegions = filter ((== Value) . regionRole) bindingRegions
+    deps active = Map.fromList [(n, targets active (regionRefs r)) | r <- valueRegions, n <- regionBinders r]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
-    calls = Map.fromListWith (++) [(formalIP arg, [actualIP arg]) | (_, _, refs) <- locals, AtCall arg <- refs]
+    calls = Map.fromListWith (++) [(formalIP arg, [actualIP arg]) | r <- bindingRegions, AtCall arg <- regionRefs r]
     -- An unused/overridden formal cannot make its caller's IP live. Start
     -- with direct reads and propagate demand through saturated first-order calls.
     live = demand Set.empty
-    demand active = let seen = reachable (deps active) (Set.fromList [n | (Testing, _, refs) <- locals, n <- targets active refs])
+    testingRefs = concatMap regionRefs (filter ((== Testing) . regionRole) bindingRegions)
+    demand active = let seen = reachable (deps active) (Set.fromList (targets active testingRefs))
                         next = Set.intersection (Map.keysSet calls) seen
                     in if next == active then seen else demand next
-    consumed ns = not (null ns) && all (`Set.member` live) ns
-    ordinary = reachable (Map.unionWith (++) calls (deps live)) (Set.unions (passed : ordinaryRefs : [ordinaryIPs ip | (_, _, ip) <- groups]))
-    ordinaryRefs = Set.fromList [n | (role, ns, refs) <- locals, role == Ordinary || (role == Value && not (consumed ns)), n <- targets live refs]
-    values = Set.fromList [n | (Value, ns, _) <- locals, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
-    independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
-    dictionaries = Map.fromList [site | (_, _, ip) <- groups, site <- declarations ip]
+    consumed r = not (null ns) && all (`Set.member` live) ns where ns = regionBinders r
+    ordinary = reachable (Map.unionWith (++) calls (deps live)) (Set.unions (passed : ordinaryRefs : map ordinaryIPs ips))
+    ordinaryRefs = Set.fromList [n | r <- bindingRegions, regionRole r == Ordinary || (regionRole r == Value && not (consumed r)),
+        n <- targets live (regionRefs r)]
+    values = Set.fromList [n | r <- valueRegions, consumed r, all (`Set.notMember` ordinary) (regionBinders r), n <- regionBinders r]
+    independent = Set.fromList (concatMap regionBinders bindingRegions) `Set.difference` values
+    dictionaries = Map.fromList (concatMap declarations ips)
     -- An explicit scalar argument of an ordinary home helper crosses the
     -- same boundary as an implicit dictionary argument, including via aliases.
-    helper fn = not (isQuickCheckBinding qc fn) && (isInternalName fn || maybe False (`Map.member` parameters) (nameModule_maybe fn))
-    passed = Set.intersection (Set.unions [dictionaryIds ip | (_, _, ip) <- groups]) (reachable (deps live) (Set.fromList
-        [n | (_, group, ip) <- groups, not (Set.null (dictionaryIds ip)), e <- collectAst group,
+    helper fn = not (isQuickCheckBinding qc fn) && (isInternalName fn || maybe False (`Map.member` ipsByModule) (nameModule_maybe fn))
+    passed = Set.intersection (Set.unions (map dictionaryIds ips)) (reachable (deps live) (Set.fromList
+        [n | g <- groups, let ip = groupIPs g, not (Set.null (dictionaryIds ip)), e <- collectAst (groupSource g),
         let (f, args) = firstOrderCall e, Just fn <- [variable f], helper fn, arg <- args, n <- targets live (snd (parts (references ip) arg))]))
 
 data Result = DataValue | Executable | Unknown deriving Eq
