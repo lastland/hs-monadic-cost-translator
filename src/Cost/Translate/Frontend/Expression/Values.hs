@@ -1,8 +1,10 @@
 module Cost.Translate.Frontend.Expression.Values
     ( knownValue
+    , reference
     , pureScalar
     , returningScalar
     , withScalar
+    , withBoolOperand
     ) where
 
 import Control.Applicative ((<|>))
@@ -63,10 +65,23 @@ emitBoolCondition env prepare expression branch = case unLoc expression of
         guard (eqType ty boolTy)
         let site = actionKey "condition" (getLocA expression)
         name <- Map.lookup site (plannedActions (namePlan env))
-        pure $ do
-            value <- operand prepare env boolTy name expression
-            consume (Continuing branch) env name value
+        pure (withBoolOperand prepare env name name expression branch)
     _ -> Nothing
+
+withBoolOperand ::
+    Prepare ->
+    Env ->
+    String ->
+    String ->
+    Expression ->
+    Branch ->
+    Either String O.Expr
+withBoolOperand prepare env thunkName valueName expr branch = do
+    value <- operand prepare env boolTy thunkName expr
+    let scoped = case value of
+            Ready {} -> value
+            Action before act scope -> Action [] (O.doE before act) scope
+    consume (Continuing branch) env valueName scoped
 
 reference :: Env -> Expression -> Maybe (Name, Type)
 reference env expression = case unLoc expression of

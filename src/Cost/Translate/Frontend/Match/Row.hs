@@ -14,6 +14,7 @@ module Cost.Translate.Frontend.Match.Row
 import Cost.Translate.Frontend.Allocation (simpleIdentifier)
 import Cost.Translate.Frontend.Environment
 import Cost.Translate.Frontend.LocalValues (usedNames)
+import Cost.Translate.Frontend.Match.Facts
 import Cost.Translate.Frontend.Match.Fallback (freeTerms)
 import Cost.Translate.Frontend.Match.Pattern
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
@@ -34,9 +35,13 @@ import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 type Result = Either String O.Expr
 type Body = Env -> O.Expr -> Result
 
-data Row = Row String Step
+data Row = Row
+    { scalarPositions :: Set.Set [Int]
+    , nextEquation :: String
+    , rowStep :: Step
+    }
 
-data Step = Ready (O.Expr -> Result) | Inspect Subject Check
+data Step = Ready (Facts -> O.Expr -> Result) | Inspect Subject Check
 
 data Subject = Subject
     { position :: [Int]
@@ -59,9 +64,12 @@ type Slots = IntMap.IntMap String
 data Field = Field String [(String, String)]
 
 prepareRow ::
-    Env -> (SrcSpan, [(O.Expr, LPat GhcRn)], Body) -> Either String Row
-prepareRow env (location, patterns, body) =
-    mapM root indexed >>= advance (incomingNames env patterns) env
+    Env ->
+    Sources ->
+    (SrcSpan, [(O.Expr, LPat GhcRn)], Body) ->
+    Either String Row
+prepareRow env sources (location, patterns, body) =
+    mapM root indexed >>= advance (incomingNames env patterns) env sources
     where
         indexed = zip [0 ..] patterns
         next = actionName env "nextEquation" location
@@ -70,8 +78,11 @@ prepareRow env (location, patterns, body) =
         labels name = case lookupEnv name env of
             Just (Constructor _ _ names) -> Just names
             _ -> Nothing
-        advance _ scope [] = Right (Row next (Ready (body scope)))
-        advance used scope ((column, thunk, pat) : rest) = case test pat of
+        row bindings = Row (Set.fromList (map fst bindings)) next
+        advance _ scope bindings [] = Right (row bindings (Ready finish))
+            where
+                finish facts = body (refine facts bindings scope)
+        advance used scope bs ((column, thunk, pat) : rest) = case test pat of
             Skip -> done
             Equal value -> inspect (Right (Compare value done))
             Deconstruct head' fields ->
@@ -79,15 +90,22 @@ prepareRow env (location, patterns, body) =
                     Choose <$> prepareBranch used scope head' fields descend
             where
                 bound = extendEnv [(n, Thunk thunk) | n <- aliases pat] scope
-                done = advance used bound rest
+                bindings' = bindAliases scope column (aliases pat) ++ bs
+                done = advance used bound bindings' rest
                 inspect makeCheck = do
                     name <- planned (plannedMatches (namePlan scope)) pat
-                    Row next . Inspect (Subject column thunk name) <$> makeCheck
+                    let pending =
+                            concat
+                                [ bindAliases scope p (aliases q)
+                                | (p, _, q) <- rest
+                                ]
+                        subject = Subject column thunk name
+                    row (bindings' ++ pending) . Inspect subject <$> makeCheck
                 descend slots fields =
                     let child (i, slot, p) = (i : column, O.v slot, p)
                         siblings = Set.fromList (IntMap.elems slots)
                         pending = map child fields ++ rest
-                     in advance (used <> siblings) bound pending
+                     in advance (used <> siblings) bound bindings' pending
 
 incomingNames :: Env -> [(O.Expr, a)] -> Set.Set String
 incomingNames env patterns =
