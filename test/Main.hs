@@ -239,7 +239,9 @@ checkDiagnostics = do
     (status, out, err) <- readProcessWithExitCode "/usr/bin/env"
         ["-u", "GHC_PACKAGE_PATH", "-u", "GHC_ENVIRONMENT", "cost-translate", root </> "Example.hs", root </> "Generated.hs"] ""
     published <- doesFileExist (root </> "Generated.hs")
-    unless (status /= ExitSuccess && not published && "setup error" `isInfixOf` (out ++ err)) $
+    let unavailable = "setup error: target modules are unavailable in GHC's environment"
+    unless (status == ExitFailure 1 && not published &&
+            unavailable `isInfixOf` (out ++ err)) $
         fail ("missing runtime diagnostic: " ++ show (status,out,err))
     putStrLn "PASS: CLI missing runtime is a setup error"
 
