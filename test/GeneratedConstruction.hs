@@ -154,6 +154,7 @@ checkGeneratedConstructionSpecimens = do
          (10, supportUse "StandaloneDemandShrink.standalone"),
          (13, supportUse "StandaloneDemandShrink.shrinkField")]
     accepts "BoxSupport.hs"
+    accepts "FamilySupport.hs"
     rejectsAt "BoxSupportBypass.hs"
         [(7, forbidden tval), (10, forbidden "Memorist.Data.Interface.Data.abstract"),
          (13, forbidden "Memorist.Data.Interface.Demand.fullDemand"),
