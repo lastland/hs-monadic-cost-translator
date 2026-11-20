@@ -5,12 +5,12 @@ import Control.Monad (forM, unless, void)
 import Cost.Translate (translateFile)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
-import ConstructionAst (pretty)
+import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
 import ConstructionQuickCheckUses (quickCheckPackage, quickCheckResult, quickCheckUses)
 import ConstructionRoles (quickCheckRoles, supportCoreNames, homeDemandTypes)
-import ConstructionRuntime (resolveExport, runtime)
+import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (viewSupport)
 import GeneratedFunctions (parseHaskellModule)
@@ -18,11 +18,11 @@ import GHC
     ( ClsInstDecl(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD)
     , Ghc, GhcLink(NoLink), LoadHowMuch(LoadAllTargets), SuccessFlag(..), TyThing(AnId)
-    , backend, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
+    , backend, findModule, getLocA, getLogger, getModSummary, getName, idType, lookupName, mkModuleName
     , getSessionDynFlags, guessTarget, importPaths, mgModSummaries, ms_mod
     , coreModule, desugarModule, load, noBackend, parseDynamicFlags, parseModule, depanal
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
-    , unLoc, ghcLink
+    , tm_renamed_source, unLoc, ghcLink
     )
 import GHC.Builtin.Names (integralClassName)
 import GHC.Core.Predicate (getClassPredTys_maybe)
@@ -101,6 +101,7 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
+    checkIntegralContext "InferredOwner" ("inferred-owner-residual" </> "Example.hs")
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"
@@ -349,8 +350,15 @@ checkGeneratedConstructionSpecimens = do
             target <- guessTarget output Nothing Nothing
             setTargets [target]
             Succeeded <- load LoadAllTargets
-            home <- ms_mod <$> getModSummary (mkModuleName "Generated")
-            name <- resolveExport home "viewsM"
+            summary <- getModSummary (mkModuleName "Generated")
+            checked <- parseModule summary >>= typecheckModule
+            Just (group, _, _, _, _) <- pure (tm_renamed_source checked)
+            core <- findModule (mkModuleName "Memorist.Base.Core") (Just (mkFastString "MemoristANT"))
+            evaluators <- mapM (resolveValue core) ["eval", "eval1", "value"]
+            case filter (`elem` collectAst group) evaluators of
+                [] -> pure ()
+                found -> fail (output ++ ": native sharing must not reference the runtime evaluator: " ++ unwords (map pretty found))
+            name <- resolveExport (ms_mod summary) "viewsM"
             Just (AnId binder) <- lookupName name
             pure (idType binder)
         case tcSplitSigmaTy signature of
