@@ -57,7 +57,7 @@ checkReferenceSelection = do
     unless (knownStatus /= ExitSuccess &&
             filter ("FAIL: " `isPrefixOf`) (lines knownOut) == ["FAIL: " ++ renamedKey] &&
             "Reference summary: 0 passed, 1 failed" `isInfixOf` knownOut &&
-            "1 known failures remain" `isInfixOf` knownOut &&
+            "known failures remaining: 1" `isInfixOf` knownOut &&
             "Known failure remains:" `isInfixOf` knownErr) $
         fail ("known failures must execute unchanged assertions and retain nonzero status\n" ++
             childResult knownStatus knownOut knownErr)

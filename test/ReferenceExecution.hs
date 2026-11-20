@@ -34,10 +34,10 @@ runReferences environment cases = do
         knownFailed = length [() | (item, False) <- zip cases results, isJust (knownFailure item)]
         recovered = length [() | (item, True) <- zip cases results, isJust (knownFailure item)]
     putStrLn ("Reference summary: " ++ show passed ++ " passed, " ++ show failed ++ " failed")
-    putStrLn ("Reference policy summary: " ++ show (passed - recovered) ++
-        " success cases passed, " ++ show (failed - knownFailed) ++
-        " success case regressions; " ++ show knownFailed ++ " known failures remain, " ++
-        show recovered ++ " recovered (manual promotion required)")
+    putStrLn ("Reference policy summary: success cases passed: " ++ show (passed - recovered) ++
+        ", success case regressions: " ++ show (failed - knownFailed) ++
+        "; known failures remaining: " ++ show knownFailed ++
+        ", recovered: " ++ show recovered ++ " (manual promotion required)")
     pure (and results)
   where
     run item = do

@@ -61,11 +61,13 @@ checkManualSourceWarnings artifacts = do
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-outputdir", root </> "source-objects", source] ""
     writeFile (root </> "source-warnings.log") (out ++ err)
+    ReferenceRunner.checkProcessCrash compiled (out ++ err)
     unless (compiled == ExitSuccess) (fail (out ++ err))
     hlint <- findExecutable "hlint"
-    command <- maybe (fail "manual example lint requires hlint on PATH") pure hlint
+    command <- maybe (fail "reference setup error: manual example lint requires hlint on PATH") pure hlint
     (linted, lintOut, lintErr) <- readProcessWithExitCode command [source] ""
     writeFile (root </> "source-hlint.log") (lintOut ++ lintErr)
+    ReferenceRunner.checkProcessCrash linted (lintOut ++ lintErr)
     unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
 
 -- Follow the selected parameter's force to its result binder. A case on a
@@ -155,13 +157,15 @@ checkWarningsAndHLint root warningLog = do
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-package", "MemoristANT", "-package", "QuickCheck", "-i", "-i" ++ root, output] ""
     writeFile (root </> warningLog) (out ++ err)
+    ReferenceRunner.checkProcessCrash compiled (out ++ err)
     unless (compiled == ExitSuccess) (fail (out ++ err))
     hlint <- findExecutable "hlint"
     case hlint of
-        Nothing -> putStrLn "SKIP: generated code HLint check (hlint unavailable)"
+        Nothing -> fail "reference setup error: generated code HLint requires hlint"
         Just command -> do
             (linted, lintOut, lintErr) <- readProcessWithExitCode command [output] ""
             writeFile (root </> "hlint.log") (lintOut ++ lintErr)
+            ReferenceRunner.checkProcessCrash linted (lintOut ++ lintErr)
             unless (linted == ExitSuccess) (fail (lintOut ++ lintErr))
 
 checkGeneratedLayout :: FilePath -> String -> IO ()

@@ -7,6 +7,7 @@ module ReferenceRunner
     , checkSourceScopeLifecycle
     , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
     , retainReferenceFailure
+    , checkProcessCrash
     ) where
 
 import Control.Exception (IOException, catch, throwIO, try, bracket_)
