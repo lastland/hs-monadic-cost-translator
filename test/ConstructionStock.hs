@@ -119,7 +119,7 @@ stockUse rt homes programs origin tag use =
     initial own = concatMap evidenceTree (useEvidence use ++
         [Given (getName v) (idType v) | v <- own])
     vocabulary own = fixedTypes ++ concatMap subterms
-        (useTypes use ++ concatMap evidenceTypes (initial own))
+        (useTypeArguments use ++ concatMap nodeTypes (initial own))
     bounded own = finite []
       where
         inherited = initial own
@@ -145,11 +145,11 @@ stockUse rt homes programs origin tag use =
     sameNode (Transport p _) (Transport q _) = eqType p q
     sameNode _ _ = False
     useEvidence (Use _ _ _ _ es) = es
-    useTypes (Use _ _ _ ts es) = ts ++ concatMap evidenceTypes es
-    evidenceTypes ev = maybe [] pure (predicateOf ev) ++ case ev of
-        Instance _ _ ts children -> ts ++ concatMap evidenceTypes children
-        Super _ _ parent -> evidenceTypes parent
-        Transport _ parent -> evidenceTypes parent
+    useTypeArguments (Use _ _ _ ts _) = ts
+    useTypes obligation = useTypeArguments obligation ++
+        concatMap nodeTypes (concatMap evidenceTree (useEvidence obligation))
+    nodeTypes ev = maybe [] pure (predicateOf ev) ++ case ev of
+        Instance _ _ ts _ -> ts
         _ -> []
     evidenceTree ev = ev : case ev of
         Instance _ _ _ children -> concatMap evidenceTree children
