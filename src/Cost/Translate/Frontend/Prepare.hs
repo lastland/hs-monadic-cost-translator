@@ -48,11 +48,7 @@ generate file targetModule = runGhc (Just libdir) $ do
             (accepted, receipt) <- liftIO (acceptedSummary summary)
             (result, logs) <- generateChecked file targetModule flags accepted
             pure (fmap (,receipt) result, logs)
-        _ ->
-            pure
-                ( Left (UnsupportedSource (file ++ ": expected one module"))
-                , ""
-                )
+        _ -> pure (sourceFailure file ": expected one source module")
 
 generateChecked ::
     FilePath ->
@@ -127,7 +123,7 @@ renderChecked file target flags summary checked desugared evidence strict =
                 )
         Nothing -> sourceFailure file ": GHC did not retain renamed source"
 
-sourceFailure :: FilePath -> String -> (Either Diagnostic String, String)
+sourceFailure :: FilePath -> String -> (Either Diagnostic a, String)
 sourceFailure file message = (Left (UnsupportedSource (file ++ message)), "")
 
 checkedPrunedEmission ::
