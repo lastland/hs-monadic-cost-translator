@@ -94,6 +94,7 @@ checkSelection = do
     checkInterrupted executable
     checkCrashedCompiler executable
     checkPanickedCompiler executable
+    checkMissingRuntimeCompilerCrash executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
 
 checkInjectedContinuation :: FilePath -> IO ()
@@ -246,6 +247,38 @@ checkPanickedCompiler executable =
                 length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
             fail ("compiler exit-1 panics must stop the suite before later cases\n" ++ childResult status out err)
         putStrLn "PASS: reference-selection / candidate compiler exit-1 panic is fatal"
+
+checkMissingRuntimeCompilerCrash :: FilePath -> IO ()
+checkMissingRuntimeCompilerCrash executable =
+    mapM_ check
+        [("signal", "kill -TERM \"$$\"")
+        ,("panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+  where
+    check (label, crash) =
+        withSystemTempDirectory "reference-missing-runtime-crash-" $ \root -> do
+            realGhc <- findExecutable "ghc" >>= maybe (fail "diagnostic crash test needs ghc") pure
+            environment <- getEnvironment
+            let wrapper = root </> "ghc"
+                injected =
+                    [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
+                    ,("REFERENCE_REAL_GHC", realGhc)]
+            writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
+                ["case \"$*\" in *cost-translate-missing-runtime-*Generated.hs*)"
+                ,"  " ++ crash ++ " ;; esac"]
+                ["exec \"$0.real\" \"$@\""])
+            permissions <- getPermissions wrapper
+            setPermissions wrapper permissions {executable = True}
+            (status, out, err) <- readCreateProcessWithExitCode
+                (proc executable ["diagnostics"])
+                    {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
+            unless (status /= ExitSuccess &&
+                    "PASS: CLI syntax" `isInfixOf` out &&
+                    not ("PASS: CLI missing runtime is a setup error" `isInfixOf` out) &&
+                    "missing runtime diagnostic:" `isInfixOf` err &&
+                    "generated module compiler crashed" `isInfixOf` err) $
+                fail ("missing-runtime diagnostics must reject a compiler " ++ label ++ "\n" ++
+                    childResult status out err)
+            putStrLn ("PASS: reference-selection / missing-runtime compiler " ++ label ++ " is fatal")
 
 checkInterrupted :: FilePath -> IO ()
 checkInterrupted executable =
