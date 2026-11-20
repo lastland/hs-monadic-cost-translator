@@ -148,7 +148,7 @@ withComparisonOutcome recovered executable source action =
         writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
             ["if [ \"$REFERENCE_RECOVERY\" = 0 ] && [ -z \"$REFERENCE_FAILURE_SOURCE\" ]; then"
             ,"  case \"$*\" in *-fno-code*Generated.hs*)"
-            ,"    echo 'Example.hs:1:1: error: user payload \"ghc: panic!\"' >&2; exit 1 ;; esac"
+            ,"    echo 'Example.hs:1:1: error: user payload \"ghc: panic!\" and \"ghc-9.10.3: panic!\"' >&2; exit 1 ;; esac"
             ,"fi"]
             ["if [ \"$REFERENCE_RECOVERY\" = 1 ]; then exec \"$0.real\" \"$2\" \"$2\"; fi"
             ,"sandbox=${1%/*}"
@@ -201,7 +201,8 @@ checkCandidateCompilerCrashes :: FilePath -> IO ()
 checkCandidateCompilerCrashes executable =
     mapM_ check
         [("signal", "kill -TERM \"$$\"")
-        ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+        ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
+        ,("versioned exit-1 panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")]
   where
     check (label, crash) =
         withSystemTempDirectory "reference-selection-crash-" $ \root -> do
@@ -231,7 +232,8 @@ checkMissingRuntimeCompilerCrash :: FilePath -> IO ()
 checkMissingRuntimeCompilerCrash executable =
     mapM_ check
         [("signal", "kill -TERM \"$$\"")
-        ,("panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+        ,("panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
+        ,("versioned panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")]
   where
     check (label, crash) =
         withSystemTempDirectory "reference-missing-runtime-crash-" $ \root -> do
