@@ -123,6 +123,7 @@ checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "CallerArithmetic.hs"
     accepts "CallerArithmeticOperations.hs"
+    accepts "ConcreteFoldableClosure.hs"
     rejectsAt "CallerArithmeticUnsafe.hs"
         [(7, forbidden tval), (10, selected "GHC.Classes.==: unknown concrete scalar instance"),
          (13, selected "GHC.Classes.<: unknown concrete scalar instance"),
