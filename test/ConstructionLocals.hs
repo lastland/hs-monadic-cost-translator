@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
     nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings, typedVariable)
+import ConstructionAst (bindingName, children, collectAst, constructorPattern, nestedBindings, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
 import Control.Monad (zipWithM)
@@ -11,6 +11,7 @@ import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
+import GHC.Builtin.Types (unitDataCon)
 import qualified GHC.Core as C
 import GHC.Core.Coercion (coercionLKind, coercionRKind, topNormaliseNewType_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -35,7 +36,7 @@ data SourceBody = Declaration (HsBind GhcRn) | Component (LPat GhcRn) (LHsExpr G
 parts :: Data a => a -> ([HsBind GhcRn], [Name])
 parts node
     -- The enclosing expression forces this RHS without a variable occurrence.
-    -- A strict name can also have ordinary consumers; a wildcard has none.
+    -- A strict name can also have ordinary consumers; a binderless force cannot.
     | Just b <- cast node, forcedBinder b = case names b of
         [] -> bodyParts b
         ns -> ([b], ns)
@@ -50,7 +51,8 @@ forcedBinder :: HsBind GhcRn -> Bool
 forcedBinder PatBind{pat_lhs = pat} = strictPat pat
   where
     strictPat (L _ (ParPat _ p)) = strictPat p
-    strictPat (L _ (BangPat _ p)) = simpleBinder p
+    -- Matching boxed unit only forces the RHS; it has no fields or method evidence.
+    strictPat (L _ (BangPat _ p)) = simpleBinder p || maybe False null (constructorPattern (getName unitDataCon) p)
     strictPat _ = False
 forcedBinder FunBind{fun_matches = matches} = case unLoc (mg_alts matches) of
     [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True
@@ -59,6 +61,7 @@ forcedBinder _ = False
 
 simpleBinder :: LPat (GhcPass p) -> Bool
 simpleBinder (L _ (ParPat _ p)) = simpleBinder p
+simpleBinder (L _ (SigPat _ p _)) = simpleBinder p
 simpleBinder (L _ VarPat{}) = True
 simpleBinder (L _ WildPat{}) = True
 simpleBinder _ = False
@@ -98,26 +101,28 @@ localBindings rt qc modules = Locals qc values (Set.union (Map.keysSet dictionar
     ips = [parts rhs | group <- groups, rhs <- implicitBodies group]
     local b = concat [(b, ns, refs) : concatMap local nested | (ns, (nested, refs)) <- regions]
       where
-        regions | value b, Just fields <- components b =
-                    [(collectPatBinders CollNoDictBinders p, parts e) | (p, e) <- fields]
-                | otherwise = [(names b, bodyParts b)]
+        regions = case components b of
+            Just fields -> [(collectPatBinders CollNoDictBinders p, parts e) | (p, e) <- fields]
+            Nothing -> [(names b, bodyParts b)]
     locals = concatMap (concatMap local . fst) (roots ++ ips)
     typed = map tm_typechecked_source modules
     exports = [(getName poly, getName mono) | m <- typed, ABE poly mono _ _ <- collectAst m]
     aliases = Map.fromListWith (++) ([(p, [m]) | (p, m) <- exports] ++ [(m, [p]) | (p, m) <- exports])
     valueIds = dataBinders rt aliases typed
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
-    value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
-    value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
-    deps = Map.fromList [(n, refs) | (b, ns, refs) <- locals, value b, n <- ns]
+    -- A matched field has its own binders. Only an indivisible RHS must
+    -- qualify all its binders together.
+    value FunBind{fun_matches = matches} _ | matchGroupArity matches > 0 = False
+    value b ns = not (null ns) && all (`Set.member` valueIds) ns && not (generator b)
+    deps = Map.fromList [(n, refs) | (b, ns, refs) <- locals, value b ns, n <- ns]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
     live = reachable deps (Set.fromList (concatMap snd roots ++ concat [refs | (b, _, refs) <- locals, generator b]))
     consumed ns = not (null ns) && all (`Set.member` live) ns
     ordinary = reachable deps (Set.fromList (concatMap snd ips ++ [ref | (b, ns, refs) <- locals, not (generator b),
-        not (value b && consumed ns), ref <- refs]))
-    values = Set.fromList [n | (b, ns, _) <- locals, value b, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
+        not (value b ns && consumed ns), ref <- refs]))
+    values = Set.fromList [n | (b, ns, _) <- locals, value b ns, consumed ns, all (`Set.notMember` ordinary) ns, n <- ns]
     independent = Set.fromList [n | (_, ns, _) <- locals, n <- ns, Set.notMember n values]
     dictionaries = Map.fromList [(getName v, getLocA label) | m <- typed, IPBind v label _ <- collectAst m :: [IPBind GhcTc]]
 
