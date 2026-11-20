@@ -15,7 +15,7 @@ import Data.List (nub)
 import Data.Foldable (toList)
 import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, isJust)
 import Control.Monad (forM)
 import qualified Data.Set as Set
 import GHC
@@ -143,7 +143,7 @@ restrictedSupport (Support _ _ _ names) name = Set.member name names
 supportValues :: (Name -> Bool) -> [TypecheckedModule] -> Support -> Support
 supportValues independent modules (Support regions names declared restricted) =
     Support [entry | entry@(owner, at, role) <- regions,
-        role /= Nothing || (owner, at) `notElem` consumed] names declared restricted
+        isJust role || (owner, at) `notElem` consumed] names declared restricted
   where
     consumed = [(checkedHome m, getLocA b) | m <- modules,
         Just (group, _, _, _, _) <- [tm_renamed_source m], b <- collectAst group :: [LHsBind GhcRn],

@@ -192,7 +192,7 @@ checkGeneratedConstructionSpecimens = do
          (90, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num"),
          (96, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq"), (101, forbidden tval)]
     checksDiagnosticSites
-    rejectsCompleteBox
+    checksCompleteBox
     accepts "QuickCheckRoles.hs"
     checksQuickCheckMixed
     checksMixedMakeInstances
@@ -394,7 +394,7 @@ checkGeneratedConstructionSpecimens = do
         [(13, selected "NestedOrdinaryPattern.choose: unknown executable method/default dependency")]
     rejects "NestedCallableType.hs" [(14, tval), (19, tval)]
     checksNestedInstanceRoles
-    putStrLn "PASS: generated-construction / QuickCheck generators and properties, checked ordinary computations, observers and shrinkers / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
+    putStrLn "PASS: generated-construction / nominal observer support and standalone demand shrinkers, checked ordinary computations / concrete selected methods, complete home dependencies and checked structural views / pre-caller guard"
   where
     specimen name = getDataFileName ("test" </> "generated-construction" </> name)
     tval = "Memorist.Base.Thunk.tval"
@@ -598,12 +598,12 @@ checkGeneratedConstructionSpecimens = do
             withLoadedGenerated broken $ \summary ->
                 parseModule summary >>= typecheckModule >>= checkPhantomAllocation
         putStrLn "PASS: phantom producer / one suspended invocation, checked view, original constructor and fields"
-    rejectsCompleteBox = do
+    checksCompleteBox = do
         (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")
         definitions <- definitionSpans <$> parseHaskellModule output
         checkBox output definitions
         -- Split the abstract equation after its binder, preserving the columns
-        -- of its remaining tokens. The required observations move off that line.
+        -- of its remaining tokens. Support authority follows the actual body.
         shifted <- createTempDirectory directory "shifted-"
         copyFile input (shifted </> "Example.hs")
         let shiftedOutput = shifted </> "Generated.hs"
@@ -625,8 +625,9 @@ checkGeneratedConstructionSpecimens = do
               (TopBinding "shrinkField", [])]
         mapM_ (\key -> check (key, []))
             [TopBinding "arbitraryField", TopBinding "genField", TopBinding "genBoxDemand",
-             InstanceMethod "GeneratedDemand" ["BoxT"] "genDemandBudget", InstanceMethod "Arbitrary" ["BoxD"] "arbitrary",
-             InstanceMethod "DemandArb" ["BoxT"] "arbDemandFrom"]
+              InstanceMethod "GeneratedDemand" ["BoxT"] "genDemandBudget", InstanceMethod "Arbitrary" ["BoxD"] "arbitrary",
+              InstanceMethod "DemandArb" ["BoxT"] "arbDemandFrom", TopBinding "shrinkBoxDemand",
+              InstanceMethod "GeneratedDemand" ["BoxT"] "shrinkDemandCompatible"]
     accepts name = specimen name >>= \output -> typechecks output >> checkGeneratedConstruction output
     rejects name expected = rejectsAt name [(line, forbidden op) | (line, op) <- expected]
     rejectsAt name = rejectsIn name name
