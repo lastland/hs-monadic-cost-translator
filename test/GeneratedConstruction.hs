@@ -142,8 +142,9 @@ checkGeneratedConstructionSpecimens = do
     mixed "OperandBoxUse.hs" [TopBinding "prop_packed"] "OperandBoxUse.hs"
         [(8, qcValue "OperandBoxControl.Box")]
     mixed "OperandNamedBang.hs" (map TopBinding ["first", "atBool", "prop_local", "project", "prop_project", "prop_callback"]) "OperandNamedBang.hs"
-        [(22, qcValue "OperandNamedBang.first"), (25, qcValue "OperandNamedBang.first")]
-    mixed "OperandUpdateAlternatives.hs" [TopBinding "prop_other"] "OperandUpdateAlternatives.hs"
+        [(22, qcValue "OperandNamedBang.first"), (25, qcValue "OperandNamedBang.first"),
+         (34, "strict binding forces a QuickCheck value outside a generator or property")]
+    mixed "OperandUpdateAlternatives.hs" (map TopBinding ["prop_other", "changeOther"]) "OperandUpdateAlternatives.hs"
         [(17, qcValue "OperandUpdateAlternatives.changeMixed")]
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),

@@ -29,3 +29,9 @@ forceComponent (x, _) = let !y = x in True
 
 prop_callback :: (Bool -> Q.Property) -> Q.Property
 prop_callback f = Q.property (forceComponent (f, False))
+
+concrete :: Q.Gen a -> Bool
+concrete x = let !y = x in True
+
+prop_concrete :: Q.Gen Bool -> Q.Property
+prop_concrete draw = Q.property (concrete draw)
