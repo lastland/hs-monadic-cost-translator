@@ -1,6 +1,6 @@
 -- | Associate actual stock requests with unique actual instance DFuns.
 -- This is module metadata, not evidence or a permission for a method body.
-module ConstructionStockRequests (stockProvenance) where
+module ConstructionStockRequests (stockProvenance, stockHead) where
 
 import ConstructionAst (collectAst, pretty)
 import ConstructionRuntime (Runtime, standardNames)
@@ -104,6 +104,13 @@ genericHead :: Type -> Maybe (Class, TyCon, [TyVar], Type, [Type])
 genericHead ty = do
     let (variables, body) = splitForAllTyVars ty
         (_, predicate) = splitFunTys body
+    (cls, tc, headVariables, arguments) <- stockHead variables predicate
+    pure (cls, tc, headVariables, predicate, arguments)
+
+-- Pure shape policy only: callers supply their own actual bound variables and
+-- predicate. Passing this check grants neither provenance nor method evidence.
+stockHead :: [TyVar] -> Type -> Maybe (Class, TyCon, [TyVar], [Type])
+stockHead variables predicate = do
     (cls, [operand]) <- getClassPredTys_maybe predicate
     (tc, arguments) <- splitTyConApp_maybe operand
     headVariables <- mapM getTyVar_maybe arguments
@@ -112,7 +119,7 @@ genericHead ty = do
         length (nub headVariables) == length variables && all (`elem` variables) headVariables &&
         sameTypes (map (substTyWith (tyConTyVars tc) arguments . varType) (tyConTyVars tc))
             (map typeKind arguments))
-    pure (cls, tc, headVariables, predicate, arguments)
+    pure (cls, tc, headVariables, arguments)
 
 -- Map variables by datatype-head positions, never by DFun forall order.
 sameHead :: Type -> Type -> Bool

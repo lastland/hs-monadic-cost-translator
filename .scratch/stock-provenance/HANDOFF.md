@@ -90,3 +90,39 @@ retains the separate 171-case audit.
 
 The local Stack YAML, probes, build outputs and differential logs are
 untracked provisioning/receipts, not maintained project files.
+
+## Review follow-up: shared pure head-shape validation
+
+The verified low-severity duplication finding on `e577265` is addressed by
+`stockHead` in the existing metadata module `ConstructionStockRequests`.
+It owns the ordinary lifted vanilla datatype, complete distinct exhaustive
+variable head, and dependent-kind checks.
+
+`genericHead` calls it with the variables and predicate from its actual typed
+request/DFun. `stockMethods` independently calls it with the actual Core
+dictionary binders and `exprType body`. The separate dictionary `exprType`
+equality, predicate-slot checks, worker identity, ordered field checks, method
+binders/slots and owning-method obligations remain unchanged. The helper
+returns only shape metadata, not provenance or executable permission.
+
+No README, reference, runtime, helper permission, or source-policy change is
+part of this follow-up. The 30-control differential replay again passes,
+including the same sole TagParameterized acceptance change relative to the
+immutable base and exactly 32 StockGrowth reports.
+
+Follow-up validation:
+
+- `scripts/validate.sh`: PASS (including HLint, 141 files, and the configured
+  Cabal test selection).
+- Expanded focused Stack selection: PASS,
+  `/var/folders/3c/qfxwcbpj7q590cwh0_scnyl80000gn/T/stack-test.dXJop3`.
+  This reruns the full construction controls (all 51 negative sites, ViaSelf's
+  three caller reports, StockGrowth's 32 reports), source scope, stock context,
+  runtime demand bundle, and the four representative kind-related groups with
+  their unchanged independent references at O0/O2.
+- Unfiltered full Stack reference suite: RED at the known strict
+  `anf-scoped-renaming` boundary, with the same `24/17`, `32/18`, `56/35`
+  generated/reference cost differences documented above; no expectation was
+  weakened. Receipt:
+  `/var/folders/3c/qfxwcbpj7q590cwh0_scnyl80000gn/T/stack-test.KnnTeP`.
+  Later groups remain outside this fail-fast full-run result.

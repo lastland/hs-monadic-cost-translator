@@ -4,8 +4,8 @@ module ConstructionDemandMethods (runtimeDemandMethod, StockMethods(..), Stock(.
 
 import ConstructionDictionary (Environment, Evidence(..), Use(..), sameEvidence)
 import ConstructionRuntime
+import ConstructionStockRequests (stockHead)
 import Control.Monad (guard)
-import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC hiding (exprType, typeKind)
@@ -16,7 +16,7 @@ import GHC.Core.InstEnv (is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe, mkClassPred)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (scaledThing)
-import GHC.Core.Type (getTyVar_maybe, isPredTy, mkTyVarTy, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
+import GHC.Core.Type (isPredTy, mkTyVarTy, typeKind, isLiftedTypeKind, splitTyConApp_maybe, splitForAllTyVars, splitFunTys, substTyWith)
 import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, tyConResKind, tyConSingleDataCon)
 import GHC.Types.Id (isDFunId)
 import GHC.Types.Var (isId, isTyVar, varType)
@@ -106,17 +106,7 @@ stockMethods rt provenance checked env collect = StockMethods env stocks
         let (bs, body) = C.collectBinders dictionary
             (vars, slots) = span isTyVar bs
         guard (all (\v -> isId v && isPredTy (idType v)) slots)
-        (cls, [operand]) <- maybe [] pure (getClassPredTys_maybe (exprType body))
-        (tc, args) <- maybe [] pure (splitTyConApp_maybe operand)
-        headVars <- maybe [] pure (mapM getTyVar_maybe args)
-        guard (isDataTyCon tc && not (isNewTyCon tc) && not (isFamInstTyCon tc) &&
-            isLiftedTypeKind (tyConResKind tc) &&
-            length args == length (tyConTyVars tc) &&
-            length headVars == length vars && length (nub headVars) == length vars &&
-            all (`elem` vars) headVars &&
-            sameTypes (map (substTyWith (tyConTyVars tc) args . varType) (tyConTyVars tc))
-                (map typeKind args) &&
-            all isVanillaDataCon (tyConDataCons tc))
+        (cls, _, _, _) <- maybe [] pure (stockHead vars (exprType body))
         (C.Var worker, supplied) <- [C.collectArgs body]
         guard (worker == dataConWorkId (tyConSingleDataCon (classTyCon cls)))
         let fields = filter (not . C.isTyCoArg) supplied
