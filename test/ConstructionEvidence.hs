@@ -6,7 +6,7 @@ import ConstructionDictionary
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
 import ConstructionHomeRepr
-import ConstructionLocals (Locals, SourceSite(..), components, coreLocation, ordinaryCoreBindings, quickCheckBindings)
+import ConstructionLocals (Locals, SourceSite(..), components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
@@ -99,8 +99,7 @@ collectEvidence rt locals homes program support checked sourceSites = do
         typedPatterns = atSourceSpan bindingsByPattern
         typedFields = Map.fromListWith (++) [(key, [e]) | (_, L _ b) <- bindingsByPattern,
             Just pairs <- [components b], (p, e) <- pairs, Just key <- [componentKey (getLocA p) (getLocA e)]]
-        typedIPs = atSourceSpan [(getLocA rhs, (v, rhs)) | IPBind v _ rhs <-
-            collectAst (tm_typechecked_source checked) :: [IPBind GhcTc]]
+        typedIP = implicitBindingAt locals checked
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
@@ -118,8 +117,8 @@ collectEvidence rt locals homes program support checked sourceSites = do
             _ -> pure Nothing
         -- Match the physical RHS in this module; the typed IPBind owns both
         -- the dictionary Id and its wrapped expression even in an erased equation.
-        ips <- forM [at | ImplicitAt at <- sourceSites] $ \at -> case (getBufSpan at, typedIPs at) of
-            (Strict.Just _, [(v, rhs)]) -> Right . (v,) <$> dsLExpr rhs
+        ips <- forM [at | ImplicitAt at <- sourceSites] $ \at -> case typedIP at of
+            Just (v, rhs) -> Right . (v,) <$> dsLExpr rhs
             _ -> pure (Left (MissingCertificate (pretty at ++ ": no unique retained implicit parameter binding")))
         fams <- dsGetFamInstEnvs
         pure (dictionaries, (fams, raw, partitionEithers ips), expressions, groups, fieldBodies)
