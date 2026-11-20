@@ -28,6 +28,7 @@ data-files:
     test/generated-functions/*.sh
     test/generated-construction/*.hs
     test/runtime-allocator/*.hs
+    test/captured-key-controls/*.hs
 extra-source-files:
     .githooks/pre-commit
     .hlint.yaml
