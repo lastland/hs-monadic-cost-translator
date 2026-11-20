@@ -189,6 +189,8 @@ test-suite cost-translate-test
                      ConstructionAllocation
                      ConstructionArithmetic
                      ConstructionScalarComparison
+                     ConstructionLocalInstances
+                     ClosedLocalComparisonChecks
                      ConstructionActionFields
                      ConstructionActionFlow
                      ConstructionAst

@@ -2,6 +2,7 @@ module Main (main) where
 
 import Control.Monad (forM_, unless, when)
 import CapturedKeySharing (checkCapturedKeySharing)
+import ClosedLocalComparisonChecks (checkClosedLocalComparisons)
 import Cost.Translate (translateFile)
 import Data.List (intercalate, isInfixOf, isPrefixOf, nub)
 import FixturePolicy (checkFixturePolicy)
@@ -100,6 +101,8 @@ runGroup environment (Semantic label sources) = do
     context <- requireEnvironment environment
     artifacts <- runReferenceCase context (label, sources)
     when (label == "caller-scalar-comparisons") (checkScalarComparisonCallers context artifacts)
+    when (label == "mutually-recursive-captured-helpers")
+        (checkOptimizedReferenceCases "closed local comparisons" context artifacts)
     when (label == "recursive-tree-representation")
         (checkOptimizedReferenceCases "recursive Tree reprM" context artifacts)
     when (label == "runtime-demand-bundle")
@@ -121,6 +124,7 @@ runGroup environment GeneratedFunctions = do
     checkGeneratedFunctionSpecimens
     requireEnvironment environment >>= checkGeneratedFunctionLifecycle
 runGroup environment GeneratedConstruction = do
+    checkClosedLocalComparisons
     checkGeneratedConstructionSpecimens
     requireEnvironment environment >>= checkGeneratedConstructionLifecycle
 runGroup _ RuntimeAllocator = checkRuntimeAllocator

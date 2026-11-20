@@ -7,6 +7,7 @@ import ConstructionSuper (validSuper)
 import ConstructionConstraintAliases (constraintAliases)
 import ConstructionArithmetic (callerArithmetic)
 import ConstructionScalarComparison (callerComparison)
+import ConstructionLocalInstances (LocalInstances, localGroups, requestedLocals, localInstances, instantiateLocals)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
@@ -90,12 +91,13 @@ data Site = FieldBody Name | Site String MethodSite (Maybe Name) (Maybe [Role]) 
     | TagFacts Platform [TyCon]
     | MethodFacts Methods
     | DictionaryFacts Environment
+    | LocalFacts [LocalInstances]
 
 data RetainedEvidence = RetainedEvidence
     { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
     , retainedBindings :: [(Id, C.CoreExpr)], methodCandidates :: [[C.CoreExpr]]
     , patternBindings :: [Maybe [(Id, C.CoreExpr)]], componentBodies :: [Maybe C.CoreExpr]
-    , retainedActions :: [C.CoreExpr] }
+    , retainedActions :: [C.CoreExpr], retainedLocalCalls :: [C.CoreExpr] }
 
 collectEvidence :: Bool -> Runtime -> Support -> Locals -> HomeReprs -> [C.CoreBind] -> [Name] -> TypecheckedModule -> [SourceSite] -> Ghc [Site]
 collectEvidence original rt utilities locals homes program support checked sourceSites = do
@@ -136,6 +138,7 @@ collectEvidence original rt utilities locals homes program support checked sourc
             Just pairs <- [components b], (p, e) <- pairs, Just key <- [componentKey (getLocA p) (getLocA e)]]
         typedIP = implicitBindingAt locals checked
         requestedIPs = [(at, typedIP at) | ImplicitAt at <- sourceSites]
+        closedGroups = localGroups rt checked
         missingIPs = [MissingCertificate (pretty at ++ ": no unique retained implicit parameter binding") | (at, Nothing) <- requestedIPs]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
@@ -153,6 +156,7 @@ collectEvidence original rt utilities locals homes program support checked sourc
             Just [e] -> Just <$> dsLExpr e
             _ -> pure Nothing
         actionBodies <- mapM dsLExpr actions
+        localCalls <- mapM dsLExpr (requestedLocals closedGroups)
         -- Match the physical RHS in this module; the typed IPBind owns both
         -- the dictionary Id and its wrapped expression even in an erased equation.
         ips <- forM [pair | (_, Just pair) <- requestedIPs] $ \(v, rhs) -> (v,) <$> dsLExpr rhs
@@ -160,7 +164,7 @@ collectEvidence original rt utilities locals homes program support checked sourc
         pure RetainedEvidence
             { retainedDictionaries = dictionaries, retainedFamilies = fams, retainedBindings = raw ++ ips
             , methodCandidates = expressions, patternBindings = groups, componentBodies = fieldBodies
-            , retainedActions = actionBodies }
+            , retainedActions = actionBodies, retainedLocalCalls = localCalls }
     let retainedSites = case result of
             Just retained ->
                 let raw = retainedBindings retained
@@ -172,7 +176,8 @@ collectEvidence original rt utilities locals homes program support checked sourc
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
                     stock = stockMethods rt stockDFuns checked env (uses qc aliases selected env allGivens)
-                    rawSites = DictionaryFacts rawEnv : TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
+                    rawSites = LocalFacts (localInstances env allGivens closedGroups (retainedLocalCalls retained)) :
+                         DictionaryFacts rawEnv : TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
                          StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc aliases selected env allGivens)) :
                          DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites aliases env allGivens raw
                     patternSites = concat [case group of
@@ -230,8 +235,11 @@ checkEvidence rt homes demands scalars sites = concatMap check sites
     check (TagFacts _ _) = []
     check (MethodFacts _) = []
     check (DictionaryFacts _) = []
+    check (LocalFacts _) = []
     check (MissingCertificate why) = [why]
-    check (Site location origin field role u) = map ((location ++ ": ") ++) (checkSelected origin role [] field u)
+    check (Site location origin field role u) = map ((location ++ ": ") ++)
+        (concatMap (checkSelected origin role [] field)
+            (instantiateLocals (concat [facts | LocalFacts facts <- sites]) u))
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
