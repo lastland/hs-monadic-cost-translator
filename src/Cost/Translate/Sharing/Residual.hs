@@ -12,15 +12,17 @@ import Cost.Translate.Sharing.Specialization
     ( closedScalar
     , constrainedVariables
     , scalarClasses
+    , scalarWitnessClasses
+    , scopedGivenClasses
     , specializedSharing
     )
 import Data.Either (fromRight)
 import Data.List (nubBy)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Set qualified as Set
-import GHC (Name, TyCon, TyVar, Type, getName)
-import GHC.Builtin.Names (eqClassName, numClassName, ordClassName)
+import GHC (TyCon, TyVar, Type, getName)
+import GHC.Builtin.Names (numClassName)
 import GHC.Builtin.Types (intTy, integerTy, liftedTypeKind)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
@@ -164,25 +166,23 @@ predicateAvailable evidence infer p = case splitTyConApp_maybe p of
         | getName constructor `elem` scalarClasses
         , closedScalar actual ->
             given
-        | getName constructor `elem` scalarClasses
-        , Just variable <- getTyVar_maybe actual
+        | Just variable <- getTyVar_maybe actual
         , variable `elem` ownerVariables evidence
         , given ->
             supplied (getName constructor) actual
     _ -> False
     where
         given = any (eqType p) (checkedPredicates evidence)
-        supplied cls ty = case namedContext evidence of
-            Just context -> targetContext cls ty context
-            Nothing -> cls == numClassName || infer && targetContext cls ty []
-
-targetContext :: Name -> Type -> [Type] -> Bool
-targetContext cls actual predicates =
-    cls `notElem` comparisons || any suppliesScalar predicates
-    where
-        comparisons = [eqClassName, ordClassName]
-        suppliesScalar p = case splitTyConApp_maybe p of
-            Just (c, [ty]) -> getName c `elem` comparisons && eqType actual ty
+        context = namedContext evidence
+        supplied cls ty
+            | cls == numClassName = True
+            | cls `elem` scopedGivenClasses = infer || isJust context
+            | cls `elem` scalarWitnessClasses =
+                any (suppliesScalar ty) (fromMaybe [] context)
+            | otherwise = False
+        suppliesScalar ty predicate = case splitTyConApp_maybe predicate of
+            Just (c, [arg]) ->
+                getName c `elem` scalarWitnessClasses && eqType ty arg
             _ -> False
 
 sameKey :: [Type] -> [Type] -> Bool
