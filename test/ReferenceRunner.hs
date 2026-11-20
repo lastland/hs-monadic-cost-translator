@@ -200,9 +200,9 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
             (generated </> "Example.hs:") `isInfixOf` err) $
         fail ("origin uses must not restore original-body obligations\n" ++ err)
     when (label == "origin-term") $
-        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 10 &&
+        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 15 &&
                 not ("unapproved " `isInfixOf` err)) $
-            fail ("expected exactly ten term uses, not structural field labels or original-body reports\n" ++ err)
+            fail ("expected exactly fifteen term uses, not structural field labels or original-body reports\n" ++ err)
   where
     prefix = "Reference fixtures and logs: "
 
@@ -228,7 +228,7 @@ checkSourceScopeLifecycle environment = do
          "ordinary originating-source term reference Example.payload" :
          "ordinary originating-source term reference Example.zero" :
          [ "Generated.hs:" ++ show line ++ ":"
-         | line <- [10, 16, 19, 25, 28, 31, 37, 43, 46, 49 :: Int] ])
+         | line <- [10, 13, 16, 19, 25, 28, 31, 37, 43, 46, 49, 58, 61, 67, 73 :: Int] ])
     forM_ [("snapshot", "accepted origin snapshot mismatch"),
            ("options", "accepted origin snapshot mismatch"),
            ("path", "origin loaded from an unrecorded path")] $ \(mutation, diagnostic) ->
@@ -243,7 +243,10 @@ checkSourceScopeLifecycle environment = do
         ["Generated.hs:14:", "OriginHelper.hs:10:", "GHC.Internal.Base.map",
          "OriginHelper.hs:13:", "Memorist.Base.Thunk.tval",
          "OriginHelper.hs:16:", "OriginHelper.hs:19:",
-         "ordinary originating-source term reference Example.keep"]
+         "ordinary originating-source term reference Example.keep",
+         "ordinary originating-source term reference Example.partial",
+         "OriginHelper.hs:22:", "OriginHelper.hs:25:", "OriginHelper.hs:31:",
+         "OriginHelper.hs:37:", "OriginHelper.hs:43:"]
     checkChangedInclude environment
     putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
 
