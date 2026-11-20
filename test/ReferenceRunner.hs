@@ -219,18 +219,8 @@ checkSourceScopeLifecycle environment = do
                     "GHC.Internal.Base.map" `isInfixOf` ioeGetErrorString err)
                     (fail ("strict standalone rejected for the wrong reason: " ++ show err))
             Right () -> fail "standalone construction checking must remain strict"
-        forM_ ["-O0", "-O2"] $ \optimization -> do
-            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
-            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
-            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-            unless (status == ExitSuccess) (fail (out ++ err))
     manual <- runReferenceCase environment ("manual-thunk-arguments", ["examples/ThunkArguments.hs"])
-    forM_ manual $ \artifact ->
-        forM_ ["-O0", "-O2"] $ \optimization -> do
-            actual <- buildObserverAt optimization environment (generatedDirectory artifact)
-            expected <- buildObserverAt optimization environment (referenceDirectory artifact)
-            (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-            unless (status == ExitSuccess) (fail (out ++ err))
+    checkSourceOptimizations environment (artifacts ++ manual)
     checkPublicationGuardFor environment "source-map" "origin-term"
         ("generated-construction" </> "OriginTermPublication.hs")
         ("ordinary originating-source term reference Example.keep" :
@@ -256,6 +246,14 @@ checkSourceScopeLifecycle environment = do
          "ordinary originating-source term reference Example.keep"]
     checkChangedInclude environment
     putStrLn "PASS: source-scope / real translation, strict standalone, O0/O2 references and live/dead/callback/helper/method source-use rejection"
+
+checkSourceOptimizations :: ReferenceEnvironment -> [Artifacts] -> IO ()
+checkSourceOptimizations environment artifacts = forM_ artifacts $ \artifact ->
+    forM_ ["-O0", "-O2"] $ \optimization -> do
+        actual <- buildObserverAt optimization environment (generatedDirectory artifact)
+        expected <- buildObserverAt optimization environment (referenceDirectory artifact)
+        (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+        unless (status == ExitSuccess) (fail (out ++ err))
 
 checkPackageEnvironmentLifecycle :: ReferenceEnvironment -> IO ()
 checkPackageEnvironmentLifecycle environment = do
