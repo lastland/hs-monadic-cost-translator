@@ -180,6 +180,23 @@ checkGeneratedConstructionSpecimens = do
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
     accepts "StockHigher.hs"
+    accepts "StockHigherSum.hs"
+    accepts "StockHigherStandalone.hs"
+    rejectsAt "StockHigherEscapes.hs"
+        ([(line, selected "GHC.Classes.==: unknown concrete scalar instance") | line <- [8, 12, 16, 20, 22, 29, 39]] ++
+         [(line, selected "GHC.Internal.Show.show: unknown concrete scalar instance") | line <- [10, 14, 18, 31, 41]] ++
+         [(25, protectedEq), (27, selected "GHC.Internal.Show.show: protected thunk/annotation/accounting operand"),
+          (35, forbidden tval), (37, forbidden tval),
+          (61, unknown "StockHigherEscapes.firstOrder")] ++
+         [(line, demandEq) | line <- [46, 54]] ++
+         [(line, selected "GHC.Internal.Show.show: demand-data methods have no observation exemption") | line <- [48, 56]])
+    rejectsAt "StockHigherSpecialized.hs"
+        [(line, selected "GHC.Classes.==") | line <- [13, 15, 22, 24]]
+    rejectsAt "StockHigherVia.hs" [(14, selected "GHC.Classes.==")]
+    rejectsAt "StockHigherPoly.hs"
+        [(10, selected "GHC.Classes.=="), (12, selected "GHC.Internal.Show.show"),
+         (16, selected "GHC.Classes.=="), (18, selected "GHC.Internal.Show.show"),
+         (22, selected "GHC.Classes.=="), (24, selected "GHC.Internal.Show.show")]
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"
