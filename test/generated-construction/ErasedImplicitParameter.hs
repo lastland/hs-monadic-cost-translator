@@ -4,10 +4,10 @@ module ErasedImplicitParameter where
 
 import qualified Test.QuickCheck as Q
 
-generic :: forall a. Num a => a -> Q.Property
+generic :: forall a. Eq a => a -> Q.Property
 generic _ = Q.property True
-generic _ =
-    let ?n = (1 :: a)
+generic input =
+    let ?n = input == input
     in Q.property True
 
 control :: (Eq a, Num a) => a -> Q.Property

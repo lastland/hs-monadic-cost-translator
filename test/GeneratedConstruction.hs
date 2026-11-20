@@ -28,7 +28,7 @@ import GHC
     , runGhc, setSessionDynFlags, setTargets, typecheckModule
     , tm_renamed_source, unLoc, ghcLink
     )
-import GHC.Builtin.Names (integralClassName)
+import GHC.Builtin.Names (integralClassName, numClassName)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.Type (getTyVar_maybe)
 import GHC.Data.FastString (mkFastString)
@@ -119,8 +119,16 @@ withLoadedGenerated output inspect = runGhc (Just libdir) $ do
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
     accepts "CallerArithmetic.hs"
+    accepts "CallerArithmeticOperations.hs"
     rejectsAt "CallerArithmeticUnsafe.hs"
-        [(6, forbidden tval), (9, selected "GHC.Classes.==: unknown concrete scalar instance")]
+        [(7, forbidden tval), (10, selected "GHC.Classes.==: unknown concrete scalar instance"),
+         (13, selected "GHC.Classes.<: unknown concrete scalar instance"),
+         (16, selected "GHC.Internal.Show.show: unknown concrete scalar instance"),
+         (19, selected "GHC.Internal.Num.abs: unknown concrete scalar instance"),
+         (22, selected "GHC.Internal.Num.+: protected thunk/annotation/accounting operand")]
+    rejectsIn "CallerArithmeticImported.hs" "CallerArithmeticInstance.hs" [(8, forbidden tval)]
+    rejectsAt "CallerArithmeticShadow.hs" [(9, unknown "CallerArithmeticShadow.+")]
+    checksGeneratedCallerArithmetic
     accepts "ProxyWitness.hs"
     rejectsAt "ProxyWitnessEscape.hs" [(8, forbidden tval)]
     accepts "DemandScalarMethods.hs"
@@ -153,7 +161,9 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "BoxedAction.hs" [(13, forbidden tval)]
     accepts "BoxedActionControl.hs"
     rejectsAt "ActionContainer.hs" [(16, forbidden tval), (25, forbidden tval), (34, forbidden tval)]
-    rejectsAt "ActionFieldEvidence.hs" [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance")]
+    -- Caller arithmetic is supported; these retention controls instead use
+    -- unrestricted Eq, whose methods still need concrete scalar evidence.
+    rejectsAt "ActionFieldEvidence.hs" [(10, selected "GHC.Classes.==: unknown concrete scalar instance")]
     checksImplicitForcing
     checkIntegralContext ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
@@ -162,12 +172,12 @@ checkGeneratedConstructionSpecimens = do
     accepts "NestedPatternConsumption.hs"
     mixed "NestedPatternOrdinary.hs"
         [LocalBinding (TopBinding owner) "observed" | owner <- ["independentFunction", "unitWithHelper"]] "NestedPatternOrdinary.hs"
-        [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance"),
+        [(10, selected "GHC.Classes.==: unknown concrete scalar instance"),
          (15, forbidden tval), (21, forbidden tval), (28, forbidden tval),
          (34, forbidden tval), (39, forbidden tval), (44, forbidden tval),
          (49, forbidden tval), (54, forbidden tval), (60, forbidden tval), (61, protectedEq),
          (67, forbidden tval), (72, forbidden tval), (77, forbidden tval), (84, forbidden tval),
-         (90, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num"),
+         (90, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq"),
          (96, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq"), (101, forbidden tval)]
     checksDiagnosticSites
     rejectsCompleteBox
@@ -249,9 +259,9 @@ checkGeneratedConstructionSpecimens = do
     rejects "OrdinarySummaryBypass.hs"
         [(6, "Memorist.Base.Thunk.tval"), (9, "Memorist.Base.Core.value"), (12, "Memorist.Base.Thunk.tval")]
     rejectsAt "OrdinarySummaryBypass.hs" [(15, carrier "pure")]
-    rejectsAt "GenericDictionary.hs"
+    mixed "GenericDictionary.hs" [TopBinding "genericScalar"] "GenericDictionary.hs"
         [(7, selected "GHC.Internal.Base.>>="), (10, selected "Memorist.Data.Interface.Data.reprM"),
-         (13, selected "GHC.Internal.Num.+"), (19, selected "GenericDictionary.firstOrder")]
+         (19, selected "GenericDictionary.firstOrder")]
     rejects "ManualNaming.hs" [(6, "Memorist.Base.Thunk.nnext")]
     rejects "PayloadComputation.hs" [(6, "Memorist.Base.Thunk.tval")]
     rejects "AnnotationConstruction.hs" [(6, "Memorist.Base.Core.annotate")]
@@ -363,7 +373,7 @@ checkGeneratedConstructionSpecimens = do
         [(9, forbidden tval), (16, forbidden tval), (19, forbidden tval),
          (23, carrier "pure"), (24, carrier "pure"), (28, forbidden tval)]
     mixed "ErasedImplicitParameter.hs" [TopBinding "control"] "ErasedImplicitParameter.hs"
-        [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num")]
+        [(10, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq")]
     accepts "ImplicitValueControl.hs"
     rejectsAt "ImplicitValueOrdinary.hs" [(line, forbidden tval) | line <- [8, 15, 18, 27, 30, 33, 39, 45]]
     accepts "LexicalValueControl.hs"
@@ -534,6 +544,32 @@ checkGeneratedConstructionSpecimens = do
                  "unapproved selected method GHC.Internal.Show.$dmshow:", "unapproved selected method GHC.Internal.Show.$dmshowList:"]
         when (any pureMethod diagnostics) $
             fail ("anf-demand pure demand Eq/Show must have selected method certificates:\n" ++ unlines (filter pureMethod diagnostics))
+    checksGeneratedCallerArithmetic = do
+        temporary <- getTemporaryDirectory
+        directory <- createTempDirectory temporary "caller-arithmetic-artifact-"
+        input <- specimen "CallerArithmeticSource.hs"
+        copyFile input (directory </> "Example.hs")
+        let output = directory </> "Generated.hs"
+        result <- translateFile (directory </> "Example.hs") output
+        either fail pure result
+        verdict <- try @IOException (checkGeneratedConstruction output)
+        let diagnostics = either ioeGetErrorString (const "") verdict
+        unless (null diagnostics || (output ++ ":") `isPrefixOf` diagnostics) $
+            fail ("unexpected checker failure for twiceM: " ++ diagnostics)
+        writeFile (directory </> "construction-reports.txt") diagnostics
+        -- Inspect the entire published graph, without stripping support bodies.
+        -- Independent #8/#10 support reports may remain on this branch.
+        cleanDefinitions diagnostics output [TopBinding "twiceM"]
+        signature <- withLoadedGenerated output $ \summary -> do
+            void (parseModule summary >>= typecheckModule)
+            name <- resolveExport (ms_mod summary) "twiceM"
+            Just (AnId binder) <- lookupName name
+            pure (idType binder)
+        case tcSplitSigmaTy signature of
+            ([a], [predicate], _) | Just (cls, [argument]) <- getClassPredTys_maybe predicate,
+                getName cls == numClassName, getTyVar_maybe argument == Just a -> pure ()
+            _ -> fail ("twiceM must retain only Num a, found " ++ pretty signature)
+        putStrLn ("PASS: caller arithmetic / complete generated twiceM graph, unchanged Num a / " ++ directory)
     checkIntegralContext fixture = do
         let label = takeBaseName fixture
         (_, _, output) <- completeArtifact label fixture

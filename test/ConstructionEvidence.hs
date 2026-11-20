@@ -3,6 +3,7 @@
 module ConstructionEvidence (collectEvidence, checkEvidence, methodNames) where
 
 import ConstructionDictionary
+import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
@@ -231,6 +232,7 @@ checkUse rules = check
                 ScalarMethod | isProtected rt ty -> Just "protected thunk/annotation/accounting operand"
                     | selectedPredicate ty evidence && demandMethod [] name evidence -> Nothing
                     | demandOperand ty -> Just "demand-data methods have no observation exemption"
+                    | callerArithmetic rt use -> Nothing
                     | selectedPredicate ty evidence && fieldSlot (root evidence) -> Nothing
                     | (scalarType ty || maybe False scalarType (closedFamilyStep ty)) &&
                         selectedPredicate ty evidence && ordinary evidence -> Nothing
