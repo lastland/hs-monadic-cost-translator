@@ -107,13 +107,15 @@ checkGeneratedConstructionSpecimens = do
     checkIntegralContext "ClosedIntegral" ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext "AtIntegralOwner" ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
     accepts "NestedPatternConsumption.hs"
-    mixed "NestedPatternOrdinary.hs" [LocalBinding (TopBinding "independentFunction") "observed"] "NestedPatternOrdinary.hs"
+    mixed "NestedPatternOrdinary.hs"
+        [LocalBinding (TopBinding owner) "observed" | owner <- ["independentFunction", "unitWithHelper"]] "NestedPatternOrdinary.hs"
         [(10, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance"),
          (15, forbidden tval), (21, forbidden tval), (28, forbidden tval),
          (34, forbidden tval), (39, forbidden tval), (44, forbidden tval),
          (49, forbidden tval), (54, forbidden tval), (60, forbidden tval), (61, protectedEq),
          (67, forbidden tval), (72, forbidden tval), (77, forbidden tval), (84, forbidden tval),
-         (90, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num")]
+         (90, selected "GHC.Internal.Num.fromInteger: unknown concrete scalar instance [given Num"),
+         (96, selected "GHC.Classes.==: unknown concrete scalar instance [given Eq"), (101, forbidden tval)]
     checksDiagnosticSites
     rejectsCompleteBox
     accepts "QuickCheckRoles.hs"

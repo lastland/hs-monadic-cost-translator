@@ -41,3 +41,6 @@ withAction :: M.Th Bool -> Q.Property
 withAction t =
     let (seen, act) = (M.tval t, pure True :: M.MemoristM Bool)
     in Q.property seen
+
+forcedUnit :: M.Th () -> Q.Property
+forcedUnit t = let !() = M.tval t in Q.property True

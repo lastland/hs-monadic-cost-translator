@@ -3,7 +3,7 @@
 module ConstructionLocals (Locals, quickCheckBindings, SourceBody(..), SourceSite(..), localBindings, implicitBodies,
     nestedSource, ordinaryCoreBindings, components, coreLocation) where
 
-import ConstructionAst (bindingName, children, collectAst, nestedBindings, typedVariable)
+import ConstructionAst (bindingName, children, collectAst, constructorPattern, nestedBindings, typedVariable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (Role(Payload), Runtime, roleOf, runtimeName)
 import Control.Monad (zipWithM)
@@ -11,6 +11,7 @@ import Data.Data (Data, cast)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import GHC
+import GHC.Builtin.Types (unitDataCon)
 import qualified GHC.Core as C
 import GHC.Core.Coercion (coercionLKind, coercionRKind, topNormaliseNewType_maybe)
 import GHC.Core.TyCo.Compare (eqType)
@@ -35,7 +36,7 @@ data SourceBody = Declaration (HsBind GhcRn) | Component (LPat GhcRn) (LHsExpr G
 parts :: Data a => a -> ([HsBind GhcRn], [Name])
 parts node
     -- The enclosing expression forces this RHS without a variable occurrence.
-    -- A strict name can also have ordinary consumers; a wildcard has none.
+    -- A strict name can also have ordinary consumers; a binderless force cannot.
     | Just b <- cast node, forcedBinder b = case names b of
         [] -> bodyParts b
         ns -> ([b], ns)
@@ -50,7 +51,8 @@ forcedBinder :: HsBind GhcRn -> Bool
 forcedBinder PatBind{pat_lhs = pat} = strictPat pat
   where
     strictPat (L _ (ParPat _ p)) = strictPat p
-    strictPat (L _ (BangPat _ p)) = simpleBinder p
+    -- Matching boxed unit only forces the RHS; it has no fields or method evidence.
+    strictPat (L _ (BangPat _ p)) = simpleBinder p || maybe False null (constructorPattern (getName unitDataCon) p)
     strictPat _ = False
 forcedBinder FunBind{fun_matches = matches} = case unLoc (mg_alts matches) of
     [L _ Match{m_ctxt = FunRhs{mc_strictness = SrcStrict}, m_pats = []}] -> True

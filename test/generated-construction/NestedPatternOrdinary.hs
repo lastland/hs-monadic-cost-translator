@@ -89,3 +89,16 @@ annotatedNumber _ =
     let (seen :: Bool, _) =
             (True, 1 :: a)
     in Q.property seen
+
+unitWithHelper :: Eq a => M.Th () -> a -> Q.Property
+unitWithHelper t inherited =
+    let observed = M.tval t
+        !() = let check actual = actual == inherited in observed
+    in Q.property True
+
+sharedUnit :: M.Th () -> Q.Property
+sharedUnit t =
+    let observed = M.tval t
+        !() = observed
+        shrink () = [observed]
+    in Q.property True
