@@ -11,6 +11,7 @@ import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
+import Data.Either (partitionEithers)
 import Data.List (deleteFirstsBy, nubBy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -98,6 +99,8 @@ collectEvidence rt locals homes program support checked sourceSites = do
         typedPatterns = atSourceSpan bindingsByPattern
         typedFields = Map.fromListWith (++) [(key, [e]) | (_, L _ b) <- bindingsByPattern,
             Just pairs <- [components b], (p, e) <- pairs, Just key <- [componentKey (getLocA p) (getLocA e)]]
+        typedIPs = atSourceSpan [(getLocA rhs, (v, rhs)) | IPBind v _ rhs <-
+            collectAst (tm_typechecked_source checked) :: [IPBind GhcTc]]
     (_, result) <- liftIO $ initDs session global $ do
         dictionaries <- fmap concat (mapM (`dsTcEvBinds` pure) evidence)
         raw <- fromOL <$> dsTopLHsBinds (tm_typechecked_source checked)
@@ -113,17 +116,23 @@ collectEvidence rt locals homes program support checked sourceSites = do
         fieldBodies <- forM fields $ \(pat, rhs) -> case componentKey pat rhs >>= (`Map.lookup` typedFields) of
             Just [e] -> Just <$> dsLExpr e
             _ -> pure Nothing
+        -- Match the physical RHS in this module; the typed IPBind owns both
+        -- the dictionary Id and its wrapped expression even in an erased equation.
+        ips <- forM [at | ImplicitAt at <- sourceSites] $ \at -> case (getBufSpan at, typedIPs at) of
+            (Strict.Just _, [(v, rhs)]) -> Right . (v,) <$> dsLExpr rhs
+            _ -> pure (Left (MissingCertificate (pretty at ++ ": no unique retained implicit parameter binding")))
         fams <- dsGetFamInstEnvs
-        pure (dictionaries, (fams, raw), expressions, groups, fieldBodies)
+        pure (dictionaries, (fams, raw, partitionEithers ips), expressions, groups, fieldBodies)
     let retainedSites = case result of
-            Just (dictionaries, (fams, raw), expressions, groups, fieldBodies) ->
-                let rawBindings = allBindings (C.Rec raw : dictionaries)
+            Just (dictionaries, (fams, raw, (missing, ips)), expressions, groups, fieldBodies) ->
+                let retained = raw ++ ips
+                    rawBindings = allBindings (C.Rec retained : dictionaries)
                     rawEnv = Map.fromList [(getName v, rhs) | (v, rhs) <- rawBindings]
                     env = Map.union rawEnv environment
                     allGivens = Set.union givens (Set.fromList [getName v | (_, rhs) <- rawBindings, v <- coreGivens rhs])
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
-                    rawSites = DefaultFacts (homeDefaults checked program fams rawEnv raw) : bindingSites env allGivens raw
+                    rawSites = DefaultFacts (homeDefaults checked program fams rawEnv raw) : missing ++ bindingSites env allGivens retained
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
