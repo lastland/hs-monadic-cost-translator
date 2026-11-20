@@ -135,6 +135,7 @@ checkGeneratedConstructionSpecimens = do
     rejectsAt "QuantifiedFunction.hs" [(18, reprFailure), (21, reprFailure)]
     rejectsAt "QuantifiedForeign.hs"
         [(18, unknown "QuantifiedForeign.reprM"), (19, unknown "QuantifiedForeign.abstract")]
+    rejectsAt "QuantifiedCallbackBody.hs" [(15, forbidden tval)]
     quantifiedCollision <- specimen "QuantifiedCollision.hs"
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision

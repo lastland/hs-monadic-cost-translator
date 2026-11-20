@@ -28,7 +28,7 @@ import GHC.Core.Reduction (reductionReducedType)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.FVs (tyCoVarsOfType)
 import qualified GHC.Core.TyCo.Subst as T
-import GHC.Core.TyCon (isClosedSynFamilyTyConWithAxiom_maybe, newTyConCo_maybe, tyConSingleDataCon, isFamilyTyCon)
+import GHC.Core.TyCon (isClosedSynFamilyTyConWithAxiom_maybe, newTyConCo_maybe, tyConSingleDataCon)
 import GHC.Core.Type (getTyVar_maybe, isPredTy, splitTyConApp_maybe, substTyWith,
     splitForAllTyCoVar_maybe, splitFunTy_maybe, typeKind)
 import GHC.Core.Utils (exprType)
@@ -219,15 +219,22 @@ apply function argument = case predicateOf function >>= (`resultType` argument) 
 
 -- Provenance only: local proof binders do not grant method permission.
 proofScoped :: (Name -> Bool) -> Evidence -> Bool
-proofScoped owned = go owned
+proofScoped = go
   where
     go scope (Given n _) = scope n
     go scope (Instance _ _ _ ds) = all (go scope) ds
     go scope (Transport _ d) = go scope d
     go scope (Lifted co d) = maybe False (eqType (coercionLKind co)) (predicateOf d) && go scope d
     go scope (Super selector target parent) = validSuper selector target parent && go scope parent
-    go scope (TypeLambda _ _ body) = go scope body
-    go scope (EvidenceLambda _ v body) = go (\n -> n == getName v || scope n) body
+    go scope (TypeLambda p v body) = case splitForAllTyCoVar_maybe p of
+        Just (formal, result) -> isTyVar v && formal == v &&
+            maybe False (eqType result) (predicateOf body) && go scope body
+        _ -> False
+    go scope (EvidenceLambda p v body) = case splitFunTy_maybe p of
+        Just (_, _, formal, result) -> isId v && isPredTy (idType v) &&
+            eqType formal (idType v) && maybe False (eqType result) (predicateOf body) &&
+            go (\n -> n == getName v || scope n) body
+        _ -> False
     go scope (Application target f a) = validApplication target f a && go scope f &&
         case a of TypeArgument _ -> True; EvidenceArgument d -> go scope d
     go _ Equality{} = True

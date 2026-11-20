@@ -362,7 +362,7 @@ checkUse rules origin utility = check
         reprClass = runtimeName rt "Memorist.Data.Interface.Data" "Repr"
         ownedApplication ev = proofField == field && appliedRoot ev && proofScoped (methodContext homes proofField) ev
         proofField = case origin of
-            MethodBinding name -> contextSite homes (Left name)
+            MethodBinding binding -> contextSite homes (Left binding)
             MethodDeclaration declaration -> contextDeclaration homes declaration
         appliedRoot (Application _ f _) = appliedRoot f
         appliedRoot (Super _ _ parent) = appliedRoot parent
@@ -430,8 +430,8 @@ uses :: QuickCheck -> Environment -> Map.Map Name (Family, Name) -> Environment 
 uses qc = usesExcept qc (const False)
 
 usesExcept :: QuickCheck -> (Name -> Bool) -> Environment -> Map.Map Name (Family, Name) -> Environment -> Set.Set Name -> C.CoreExpr -> [Use]
-usesExcept qc boundary aliases selected environment initial expression =
-    walk (Map.union aliases environment) initial expression
+usesExcept qc boundary aliases selected environment =
+    walk (Map.union aliases environment)
   where
     walk env given expression = case expression of
         C.Lam binder body -> walk env (if isId binder && isPredTy (idType binder)
