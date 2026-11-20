@@ -6,7 +6,8 @@ import ConstructionDictionary
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
-import ConstructionDemandMethods (runtimeDemandMethod, stockMethods)
+import ConstructionDemandMethods (runtimeDemandMethod, stockMethods, safeHomeType)
+import ConstructionTag (tagMethod, validTag)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -39,6 +40,7 @@ import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (isDefaultMethodOcc)
 import GHC.Types.SrcLoc (getBufSpan)
 import GHC.Types.Var (isId)
+import GHC.Platform (Platform)
 
 families :: Runtime -> Map.Map Name Family
 families rt = Map.fromList
@@ -78,6 +80,7 @@ methodNames rt modules = do
 
 data Site = FieldBody Name | Site String (Maybe Name) Use | MissingCertificate String | DefaultFacts Defaults
     | StockFacts [(Name, Name, Type, [Use])]
+    | TagFacts Platform [TyCon]
 
 data RetainedEvidence = RetainedEvidence
     { retainedDictionaries :: [C.CoreBind], retainedFamilies :: FamInstEnvs
@@ -96,6 +99,7 @@ collectEvidence rt locals homes program support checked sourceSites = do
             (binder, rhs) <- ordinaryCoreBindings locals bs, getName binder `notElem` support]
         rootSites = bindingSites environment givens (C.flattenBinds program)
     session <- getSession
+    flags <- getSessionDynFlags
     let global = fst (tm_internals_ checked)
         evidence = EvBinds (tcg_ev_binds global) : (collectAst (tm_typechecked_source checked) :: [TcEvBinds])
         typed = atSourceSpan [(at, (name, e)) | e <- collectAst (tm_typechecked_source checked),
@@ -147,7 +151,8 @@ collectEvidence rt locals homes program support checked sourceSites = do
                     -- simple Core optimization can inline or erase its call.
                     stockFacts = [(getName df, method, idType df, uses qc selected env allGivens rhs) |
                         (df, methods) <- stockMethods rt checked rawEnv, (method, rhs) <- methods]
-                    rawSites = StockFacts stockFacts : DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
+                    rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
+                        StockFacts stockFacts : DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
                         Nothing -> [MissingCertificate (pretty at ++ ": no retained local pattern binding")]
                         Just bs ->
@@ -184,19 +189,21 @@ checkEvidence rt homes demands sites = concatMap check sites
         { auditedRuntime = rt, homeRepresentations = homes, demandTypes = demands
         , fieldBodies = Map.fromSet (\field -> nubBy sameUse (Map.findWithDefault [] field observed)) declared
         , isDataDefault = selectsDataDefault [facts | DefaultFacts facts <- sites]
-        , stockFacts = concat [facts | StockFacts facts <- sites] }
+        , stockFacts = concat [facts | StockFacts facts <- sites]
+        , tagFacts = [(platform, types) | TagFacts platform types <- sites] }
     observed = Map.fromListWith (++) [(field, [u]) | Site _ (Just field) u <- sites]
     declared = Set.fromList [field | FieldBody field <- sites]
     check (FieldBody _) = []
     check (DefaultFacts _) = []
     check (StockFacts _) = []
+    check (TagFacts _ _) = []
     check (MissingCertificate why) = [why]
     check (Site location field u) = map ((location ++ ": ") ++) (checkSelected [] field u)
 
 data MethodRules = MethodRules
     { auditedRuntime :: Runtime, homeRepresentations :: HomeReprs, demandTypes :: [TyCon]
     , fieldBodies :: Map.Map Name [Use], isDataDefault :: Use -> Bool
-    , stockFacts :: [(Name, Name, Type, [Use])] }
+    , stockFacts :: [(Name, Name, Type, [Use])], tagFacts :: [(Platform, [TyCon])] }
 
 -- A back-edge closes only this instantiated method obligation, not the
 -- enclosing list of field uses. Dictionary provenance was checked on entry.
@@ -213,6 +220,7 @@ checkUse rules = check
       where
         verdict | family == ForbiddenMethod = Just "runtime observation/accounting methods have no construction permission"
                 | isDataDefault rules use = Nothing
+                | tagUse use = Nothing
                 | family == UnknownMethod = Just "unknown executable method/default dependency"
                 | otherwise = case (types, dictionaries) of
             (ty : _, evidence : _) -> case family of
@@ -232,24 +240,38 @@ checkUse rules = check
             _ -> Just "unsaturated selector has no selected instance evidence"
         root (Super _ _ parent) = root parent
         root evidence = evidence
-        demandMethod active method (Instance df predicate args ds)
-            | Just _ <- runtimeDemandMethod rt method df predicate args (mapMaybePredicate ds) =
+        tagUse (Use selected cls _ ts [BuiltinTag predicate operand op]) =
+            tagMethod selected predicate && case getClassPredTys_maybe predicate of
+                Just (actual, args) -> cls == getName actual && length ts == length args &&
+                    and (zipWith eqType ts args) &&
+                    any (\(platform, homes') -> validTag platform homes' operand op) (tagFacts rules)
+                _ -> False
+        tagUse _ = False
+        demandMethod active method ev@(Instance df predicate args ds)
+            | Just (childMethod, childType) <- runtimeDemandMethod rt method df predicate args (mapMaybePredicate ds) =
                 length ds == 1 && all (\child -> case predicateOf child >>= getClassPredTys_maybe of
-                    Just (_, [operand]) -> scalarType operand && ordinary child
+                    Just (_, [operand]) -> eqType operand childType &&
+                        ((stockChild childMethod child && demandMethod active childMethod child) ||
+                            (scalarType operand && ordinary child))
                     _ -> False) ds
             | null args && null ds,
               [(formal, obligations)] <- [(p, obligations) | (owner, selected, p, obligations) <- stockFacts rules,
                   owner == getName df, selected == method],
               eqType formal predicate =
-                (getName df, method) `elem` active || all safe obligations
+                any (\(selected, previous) -> selected == method && sameEvidence ev previous) active || all safe obligations
           where
+            safe obligation | tagUse obligation = True
             safe (Use selected cls ScalarMethod (ty : _) [child])
                 | Just (actual, [operand]) <- predicateOf child >>= getClassPredTys_maybe,
                   getName actual == cls, eqType operand ty, not (isProtected rt operand) =
-                    demandMethod ((getName df, method) : active) selected child ||
+                    demandMethod ((method, ev) : active) selected child ||
                         (scalarType operand && ordinary child)
             safe _ = False
         demandMethod _ _ _ = False
+        stockChild method (Instance df predicate [] []) =
+            any (\(owner, selected, formal, _) -> owner == getName df && selected == method &&
+                eqType formal predicate) (stockFacts rules)
+        stockChild _ _ = False
         mapMaybePredicate ds = [p | d <- ds, Just p <- [predicateOf d]]
         selectedPredicate ty evidence = case predicateOf evidence >>= getClassPredTys_maybe of
             Just (cls, arguments) -> getName cls == expectedClass && not (null arguments) && eqType (last arguments) ty

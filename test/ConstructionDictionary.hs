@@ -5,6 +5,7 @@ module ConstructionDictionary (Evidence(..), Use(..), Environment, trace, render
 import ConstructionAst (pretty)
 import ConstructionHomeRepr (Field(..), HomeReprs, dictionaryBindings)
 import ConstructionRuntime (Family, describeName)
+import ConstructionTag (tagDictionary)
 import Control.Monad (guard)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -25,11 +26,13 @@ import GHC.Core.Utils (exprType)
 import GHC.Types.Id (isDFunId, realIdUnfolding)
 import GHC.Types.Var (isId, isTyVar)
 
-data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id Type Evidence | Unknown String
+data Evidence = Given Name Type | Instance Id Type [Type] [Evidence] | Super Id Type Evidence
+    | BuiltinTag Type Type Id | Unknown String
 data Use = Use Name Name Family [Type] [Evidence]
 type Environment = Map.Map Name C.CoreExpr
 
 trace :: Environment -> Set.Set Name -> Set.Set Name -> C.CoreExpr -> Evidence
+trace _ _ _ expression | Just (p, t, op) <- tagDictionary expression = BuiltinTag p t op
 trace env given seen expression = case expression of
     C.Tick _ body -> trace env given seen body
     C.Cast body co | Just (_, sel) <- superclassAxiom Unpack co,
@@ -54,11 +57,13 @@ renderEvidence (Instance name ty _ dependencies) = describeName (getName name) +
     concatMap ((" {" ++) . (++ "}") . renderEvidence) dependencies
 renderEvidence (Super _ ty parent) = "super " ++ pretty ty ++ " of " ++ renderEvidence parent
 renderEvidence (Unknown why) = "unresolved " ++ why
+renderEvidence (BuiltinTag p _ op) = "builtin " ++ describeName (getName op) ++ " :: " ++ pretty p
 
 predicateOf :: Evidence -> Maybe Type
 predicateOf (Super _ predicate _) = Just predicate
 predicateOf (Given _ predicate) = Just predicate
 predicateOf (Instance _ predicate _ _) = Just predicate
+predicateOf (BuiltinTag predicate _ _) = Just predicate
 predicateOf Unknown{} = Nothing
 
 substitute :: (Type -> Type) -> [(Name, Evidence)] -> Evidence -> Evidence
@@ -70,6 +75,7 @@ substitute ty env ev = case ev of
     Instance df p ts ds -> Instance df (ty p) (map ty ts) (map sub ds)
     Super sel p d -> Super sel (ty p) (sub d)
     Unknown{} -> ev
+    BuiltinTag p t op -> BuiltinTag (ty p) (ty t) op
   where sub = substitute ty env
 
 instantiateUse :: Field -> [Type] -> [Evidence] -> Evidence -> Maybe (Use -> Use)
@@ -191,6 +197,7 @@ projected homes ev@Super{} = normalize [] ev
     normalize path (Instance df ty ts ds) = Instance df ty ts <$> mapM (normalize path) ds
     normalize _ given@Given{} = Just given
     normalize _ Unknown{} = Nothing
+    normalize _ builtin@BuiltinTag{} = Just builtin
     progress sel df origin (prevSel, prevDf, prev) = sel /= prevSel || df /= prevDf || descendant origin prev
 projected _ ev = Just ev
 
@@ -206,6 +213,7 @@ sameEvidence (Instance a p as ds) (Instance b q bs es) = a == b && eqType p q &&
 sameEvidence (Given a p) (Given b q) = a == b && eqType p q
 sameEvidence (Super a p d) (Super b q e) = a == b && eqType p q && sameEvidence d e
 sameEvidence (Unknown x) (Unknown y) = x == y
+sameEvidence (BuiltinTag p t op) (BuiltinTag q u other) = eqType p q && eqType t u && op == other
 sameEvidence _ _ = False
 
 sameList :: (a -> a -> Bool) -> [a] -> [a] -> Bool
