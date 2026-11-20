@@ -3,7 +3,6 @@ module ReferenceExecution (runReferences) where
 
 import Control.Exception (IOException, catch, throwIO)
 import Control.Monad (forM, when)
-import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources)
 import ReferenceRunner
@@ -56,17 +55,9 @@ runReferences environment cases = do
             checkGeneratedArtifacts label artifact) artifacts
     reportFailure :: ReferenceCase -> IOException -> IO Bool
     reportFailure item exception
-        -- Filesystem/process failures and translator setup failures are fatal.
-        -- Catching IOException alone deliberately leaves asynchronous exceptions,
-        -- including UserInterrupt, untouched.
-        | not (isUserError exception) || any (`isInfixOf` show exception)
-            ["setup error:", "construction setup:", "cannot satisfy -package",
-             "can't find a package database", "ghc: panic!",
-             "hGetLine: end of file", "resource vanished (Broken pipe)",
-             "observer timed out or returned an invalid response"] ||
-            ("translation failed: source error:" `isInfixOf` show exception &&
-             any (`isInfixOf` show exception) ["unknown symbol", "undefined symbol", "Symbol not found", "dlopen"]) =
-            throwIO exception
+        -- FatalSetupFailure, asynchronous exceptions and filesystem/process IO
+        -- failures propagate. Only ordinary assertion failures continue.
+        | not (isUserError exception) = throwIO exception
         | otherwise = do
             temporary <- getTemporaryDirectory
             root <- createTempDirectory temporary "cost-reference-failure-"

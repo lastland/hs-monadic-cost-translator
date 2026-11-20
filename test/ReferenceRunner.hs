@@ -20,6 +20,7 @@ import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstruc
 import GeneratedFunctions (checkAcceptedFunctions)
 import GHC.Settings.Config (cProjectVersion)
 import Paths_cost_translate (getDataFileName)
+import ReferenceFailure (fatalSetupFailure, ExternalDiagnostic(..), externalFailure)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
     , getPermissions, getTemporaryDirectory, setPermissions
@@ -46,13 +47,13 @@ data Artifacts = Artifacts
 prepareReferenceEnvironment :: IO ReferenceEnvironment
 prepareReferenceEnvironment = do
     forM_ ["ghc", "hlint"] $ \command ->
-        findExecutable command >>= maybe (fail ("reference setup error: missing " ++ command)) (const (pure ()))
+        findExecutable command >>= maybe (fatalSetupFailure ("missing " ++ command)) (const (pure ()))
     (compilerStatus, compilerOut, compilerErr) <- readProcessWithExitCode "ghc" ["--numeric-version"] ""
     unless (compilerStatus == ExitSuccess && words compilerOut == [cProjectVersion]) $
-        fail ("reference setup error: expected GHC " ++ cProjectVersion ++ "\n" ++ compilerOut ++ compilerErr)
+        fatalSetupFailure ("expected GHC " ++ cProjectVersion ++ "\n" ++ compilerOut ++ compilerErr)
     (runtimeStatus, runtimeOut, runtimeErr) <- readProcessWithExitCode "ghc-pkg" ["latest", "MemoristANT"] ""
     unless (runtimeStatus == ExitSuccess) $
-        fail ("reference setup error: runtime unavailable\n" ++ runtimeOut ++ runtimeErr)
+        fatalSetupFailure ("runtime unavailable\n" ++ runtimeOut ++ runtimeErr)
     temporary <- getTemporaryDirectory
     root <- createTempDirectory temporary "cost-reference-suite-"
     let support = root </> "support"
@@ -77,7 +78,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
             copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
         source <- fixturePath fixture
         result <- stageAndTranslate source (generated </> "Generated.hs")
-        publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
+        publication <- either (externalFailure TranslationDiagnostic (label ++ ": translation failed:")) pure result
         checkAcceptedFunctions publication (generated </> "Generated.hs")
         checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
         copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
@@ -87,7 +88,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
         writeFile (root </> "comparison.log") (out ++ err)
         checkProcessCrash status (out ++ err)
         unless (status == ExitSuccess) $
-            fail (label ++ ": reference comparison failed\n" ++ out ++ err)
+            externalFailure ComparisonDiagnostic (label ++ ": reference comparison failed") (out ++ err)
         putStr out
         pure (Artifacts fixture generated reference)
 
@@ -134,7 +135,7 @@ checkOptimizedReferenceCases label environment artifacts = forM_ artifacts $ \ar
         (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
         writeFile (generatedDirectory artifact </> ("comparison" ++ optimization ++ ".log")) (out ++ err)
         checkProcessCrash status (out ++ err)
-        unless (status == ExitSuccess) (fail (optimization ++ ": " ++ out ++ err))
+        unless (status == ExitSuccess) (externalFailure ComparisonDiagnostic optimization (out ++ err))
         putStrLn ("PASS: " ++ label ++ " / " ++ optimization ++ " / boundary cases and 200 randomized value/cost comparisons")
 
 buildObserverWith :: [String] -> ReferenceEnvironment -> FilePath -> IO FilePath
@@ -157,11 +158,12 @@ compileAt options support sandbox entry packages executable = do
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
     writeFile (sandbox </> "compile.log") (out ++ err)
     checkProcessCrash status (out ++ err)
-    unless (status == ExitSuccess) (fail ("observer compilation failed in " ++ sandbox ++ "\n" ++ out ++ err))
+    unless (status == ExitSuccess) $
+        externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) (out ++ err)
 
 checkProcessCrash :: ExitCode -> String -> IO ()
 checkProcessCrash (ExitFailure code) output | code < 0 || code >= 128 =
-    fail ("reference setup error: process crashed (" ++ show code ++ ")\n" ++ output)
+    fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
 checkProcessCrash _ _ = pure ()
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real

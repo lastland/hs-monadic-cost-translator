@@ -7,6 +7,9 @@ module ConstructionRuntime
     ) where
 
 import Control.Monad (forM, unless)
+import Control.Monad.IO.Class (liftIO)
+import Control.Exception (throw)
+import qualified ReferenceFailure
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
 import GHC
@@ -59,11 +62,11 @@ runtime = do
     root <- findModule (mkModuleName "Memorist.Memorist") Nothing
     owners <- forM pins $ \(label, expected) -> do
         actual <- findModule (mkModuleName label) Nothing
-        unless (moduleUnit actual == moduleUnit root) (fail ("construction setup: runtime unit mismatch: " ++ label))
-        info <- getModuleInfo actual >>= maybe (fail ("construction setup: missing module: " ++ label)) pure
-        iface <- maybe (fail ("construction setup: missing interface: " ++ label)) pure (modInfoIface info)
+        unless (moduleUnit actual == moduleUnit root) (fatalSetupFailure ("construction setup: runtime unit mismatch: " ++ label))
+        info <- getModuleInfo actual >>= maybe (fatalSetupFailure ("construction setup: missing module: " ++ label)) pure
+        iface <- maybe (fatalSetupFailure ("construction setup: missing interface: " ++ label)) pure (modInfoIface info)
         unless (mi_module iface == actual && mi_src_hash iface == expected) $
-            fail ("construction setup: audited source fingerprint mismatch: " ++ label ++
+            fatalSetupFailure ("construction setup: audited source fingerprint mismatch: " ++ label ++
                 " expected=" ++ show expected ++ " interface=" ++ show (mi_src_hash iface))
         definitions <- forM (mi_insts iface) $ \instance' -> do
             let name = ifDFun instance'
@@ -72,11 +75,11 @@ runtime = do
                 Just (AnId identifier) | Just (cls, arguments) <- getClassPredTys_maybe
                         (snd (splitFunTys (snd (splitForAllTyVars (idType identifier))))) ->
                     pure (name, (getName cls, arguments))
-                _ -> fail ("construction setup: cannot inspect audited instance: " ++ describeName name)
+                _ -> fatalSetupFailure ("construction setup: cannot inspect audited instance: " ++ describeName name)
         pure (label, actual, definitions)
     let owner label = case [actual | (name, actual, _) <- owners, name == label] of
             [actual] -> pure actual
-            _ -> fail ("construction setup: unbound summary module: " ++ label)
+            _ -> fatalSetupFailure ("construction setup: unbound summary module: " ++ label)
     entries <- forM summaries $ \(label, occurrence, role) -> do
         actual <- owner label
         name <- resolveValue actual occurrence
@@ -113,7 +116,7 @@ proxyWitness = do
         Just (AConLike (RealDataCon actual))
             | dataConTyCon actual == ty, dataConRepArity actual == 0 ->
                 pure ("Data.Proxy.Proxy", constructor)
-        _ -> fail "construction setup: Proxy witness is not the nullary base constructor"
+        _ -> fatalSetupFailure "construction setup: Proxy witness is not the nullary base constructor"
 
 -- Select closed standard instance heads, not all definitions in a base unit.
 -- The compiler version is pinned; each use must still match the selected class,
@@ -131,7 +134,7 @@ standardInstances ordinary = do
         details <- getInfo False expected
         declared <- case details of
             Just (_, _, found, _, _) -> pure found
-            Nothing -> fail ("construction setup: missing standard class: " ++ describeName expected)
+            Nothing -> fatalSetupFailure ("construction setup: missing standard class: " ++ describeName expected)
         pure [(getName identifier, (getName cls, [ty])) | instance' <- declared, let identifier = is_dfun instance',
             ([], body) <- [splitForAllTyVars (idType identifier)], ([], predicate) <- [splitFunTys body],
             Just (cls, [ty]) <- [getClassPredTys_maybe predicate], getName cls == expected,
@@ -197,7 +200,7 @@ resolveExport owner occurrence = resolve owner occurrence False
 
 resolve :: Module -> String -> Bool -> Ghc Name
 resolve owner occurrence definedHere = do
-    info <- getModuleInfo owner >>= maybe (fail "construction setup: missing exports") pure
+    info <- getModuleInfo owner >>= maybe (fatalSetupFailure "construction setup: missing exports") pure
     candidates <- forM [name | name <- modInfoExports info, getOccString name == occurrence,
             not definedHere || nameModule_maybe name == Just owner] $ \name -> do
         thing <- lookupName name
@@ -207,15 +210,15 @@ resolve owner occurrence definedHere = do
             _ -> False]
     case concat candidates of
         [name] -> pure name
-        _ -> fail ("construction setup: expected one value: " ++ moduleNameString (moduleName owner) ++ "." ++ occurrence)
+        _ -> fatalSetupFailure ("construction setup: expected one value: " ++ moduleNameString (moduleName owner) ++ "." ++ occurrence)
 
 resolveType :: Module -> String -> Ghc TyCon
 resolveType owner occurrence = do
-    info <- getModuleInfo owner >>= maybe (fail "construction setup: missing type exports") pure
+    info <- getModuleInfo owner >>= maybe (fatalSetupFailure "construction setup: missing type exports") pure
     things <- mapM lookupName [name | name <- modInfoExports info, getOccString name == occurrence]
     case [constructor | Just (ATyCon constructor) <- things] of
         [constructor] -> pure constructor
-        _ -> fail ("construction setup: expected one type: " ++ occurrence)
+        _ -> fatalSetupFailure ("construction setup: expected one type: " ++ occurrence)
 
 roleOf :: Runtime -> Name -> Maybe Role
 roleOf rt name = Map.lookup name (roles rt)
@@ -227,8 +230,11 @@ runtimeOwns :: Runtime -> Name -> Bool
 runtimeOwns rt name = maybe False ((== runtimeUnit rt) . moduleUnit) (nameModule_maybe name)
 
 runtimeName :: Runtime -> String -> String -> Name
-runtimeName rt label occurrence = maybe (error "construction setup: absent type summary") getName
+runtimeName rt label occurrence = maybe (throw (ReferenceFailure.FatalSetupFailure "construction setup: absent type summary")) getName
     (Map.lookup (label, occurrence) (typeNames rt))
+
+fatalSetupFailure :: String -> Ghc a
+fatalSetupFailure = liftIO . ReferenceFailure.fatalSetupFailure
 
 isMemoristType :: Runtime -> Type -> Bool
 isMemoristType rt ty = case Map.lookup ("Memorist.Base.ANT", "MemoristM") (typeNames rt) of

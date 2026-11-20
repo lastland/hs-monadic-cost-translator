@@ -186,6 +186,7 @@ test-suite cost-translate-test
                      FixturePolicy
                      ReferenceSelection
                      ReferenceExecution
+                     ReferenceFailure
                      ReferenceSelectionTests
                      GeneratedChecks
                      GeneratedConstruction
