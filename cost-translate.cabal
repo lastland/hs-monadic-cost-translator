@@ -184,6 +184,9 @@ test-suite cost-translate-test
                      GeneratedSyntax
                      PaperScalarChecks
                      FixturePolicy
+                     ReferenceSelection
+                     ReferenceExecution
+                     ReferenceSelectionTests
                      GeneratedChecks
                      GeneratedConstruction
                      ConstructionAllocation

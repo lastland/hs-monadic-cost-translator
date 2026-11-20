@@ -6,8 +6,10 @@ module ReferenceRunner
     , checkGeneratedConstructionLifecycle
     , checkSourceScopeLifecycle
     , buildObserver, buildObserverAt, comparer, checkOptimizedReferenceCases
+    , retainReferenceFailure
     ) where
 
+import Control.Exception (IOException, catch, throwIO, try, bracket_)
 import Control.Monad (forM, forM_, unless, when, void)
 import AcceptedOptionsChecks (checkAcceptedOptions)
 import Cost.Publication (stageAndTranslate)
@@ -24,8 +26,7 @@ import System.Environment (getEnvironment, getExecutablePath, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeDirectory, takeFileName, isAbsolute)
 import System.IO.Temp (createTempDirectory)
-import System.IO.Error (ioeGetErrorString)
-import Control.Exception (IOException, try, bracket_)
+import System.IO.Error (ioeGetErrorString, ioeSetErrorString)
 import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 
 data ReferenceEnvironment = ReferenceEnvironment
@@ -42,6 +43,11 @@ data Artifacts = Artifacts
 
 prepareReferenceEnvironment :: IO ReferenceEnvironment
 prepareReferenceEnvironment = do
+    forM_ ["ghc", "hlint"] $ \command ->
+        findExecutable command >>= maybe (fail ("reference setup error: missing " ++ command)) (const (pure ()))
+    (runtimeStatus, runtimeOut, runtimeErr) <- readProcessWithExitCode "ghc-pkg" ["latest", "MemoristANT"] ""
+    unless (runtimeStatus == ExitSuccess) $
+        fail ("reference setup error: runtime unavailable\n" ++ runtimeOut ++ runtimeErr)
     temporary <- getTemporaryDirectory
     root <- createTempDirectory temporary "cost-reference-suite-"
     let support = root </> "support"
@@ -57,26 +63,37 @@ runReferenceCase :: ReferenceEnvironment -> (String, [FilePath]) -> IO [Artifact
 runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
     root <- createTempDirectory (environmentRoot environment) (label ++ "-")
     putStrLn ("Reference fixtures and logs: " ++ root)
-    let generated = root </> "generated"
-        reference = root </> "reference"
-    forM_ [generated, reference] $ \sandbox -> do
-        createDirectoryIfMissing True sandbox
-        when (sandbox == reference) (stageSource fixture sandbox)
-        copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
-    source <- fixturePath fixture
-    result <- stageAndTranslate source (generated </> "Generated.hs")
-    publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
-    checkAcceptedFunctions publication (generated </> "Generated.hs")
-    checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
-    copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
-    actual <- buildObserver environment generated
-    expected <- buildObserver environment reference
-    (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
-    writeFile (root </> "comparison.log") (out ++ err)
-    unless (status == ExitSuccess) $
-        fail (label ++ ": reference comparison failed\n" ++ out ++ err ++ "\nArtifacts: " ++ root)
-    putStr out
-    pure (Artifacts fixture generated reference)
+    retainReferenceFailure root $ do
+        let generated = root </> "generated"
+            reference = root </> "reference"
+        forM_ [generated, reference] $ \sandbox -> do
+            createDirectoryIfMissing True sandbox
+            when (sandbox == reference) (stageSource fixture sandbox)
+            copyCase (label </> "Case.hs") (sandbox </> "Case.hs")
+        source <- fixturePath fixture
+        result <- stageAndTranslate source (generated </> "Generated.hs")
+        publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
+        checkAcceptedFunctions publication (generated </> "Generated.hs")
+        checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
+        copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
+        actual <- buildObserver environment generated
+        expected <- buildObserver environment reference
+        (status, out, err) <- readProcessWithExitCode (comparer environment) [actual, expected] ""
+        writeFile (root </> "comparison.log") (out ++ err)
+        unless (status == ExitSuccess) $
+            fail (label ++ ": reference comparison failed\n" ++ out ++ err)
+        putStr out
+        pure (Artifacts fixture generated reference)
+
+retainReferenceFailure :: FilePath -> IO a -> IO a
+retainReferenceFailure root action = action `catch` retain
+  where
+    retain :: IOException -> IO a
+    retain exception = do
+        let message = ioeGetErrorString exception ++ "\nArtifacts: " ++ root ++
+                "\nFailure log: " ++ root </> "failure.log"
+        writeFile (root </> "failure.log") message
+        throwIO (ioeSetErrorString exception message)
 
 stageSource :: FilePath -> FilePath -> IO ()
 stageSource fixture sandbox = do

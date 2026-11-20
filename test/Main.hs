@@ -5,24 +5,26 @@ import CapturedKeySharing (checkCapturedKeySharing)
 import Cost.Translate (translateFile)
 import Data.List (intercalate, isInfixOf, isPrefixOf, nub)
 import FixturePolicy (checkFixturePolicy)
-import GeneratedChecks (checkGeneratedArtifacts, checkScopedRenamingSources)
 import GeneratedConstruction (checkGeneratedConstructionSpecimens)
 import GeneratedFunctions (checkGeneratedFunctionSpecimens)
 import Paths_cost_translate (getDataFileName)
 import ProducerSharing (checkProducerSharing)
-import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverReferenceCases, validateReferenceCases)
+import ReferencePolicy (checkReferencePolicyTests, diagnosticFixtures, discoverReferenceCases)
+import ReferenceExecution (runReferences)
+import ReferenceSelectionTests (checkReferenceSelection, checkReferenceListing)
+import ReferenceSelection
+    ( ReferenceMode(..), referenceCases, caseKey, selectReferences, listReference
+    )
 import ReferenceRunner
     ( ReferenceEnvironment, checkGeneratedConstructionLifecycle, checkGeneratedFunctionLifecycle, checkReferenceHarness
-    , prepareReferenceEnvironment, runReferenceCase, checkOptimizedReferenceCases
-    , checkSourceScopeLifecycle
+    , prepareReferenceEnvironment, checkSourceScopeLifecycle
     )
 import RuntimeAllocator (checkRuntimeAllocator)
-import ScalarComparisonChecks (checkScalarComparisonCallers)
 import System.Directory (copyFile, doesFileExist, getCurrentDirectory, getTemporaryDirectory, listDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, setEnv)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath ((</>))
-import System.IO (hPutStrLn, stderr)
+import System.IO (BufferMode(LineBuffering), hPutStrLn, hSetBuffering, stderr, stdout)
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
 import System.Process (CreateProcess(env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 
@@ -60,29 +62,56 @@ groupName SourceScope = "source-scope"
 
 main :: IO ()
 main = do
+    hSetBuffering stdout LineBuffering
     -- Cabal installations retain data files removed by later builds. Prefer
     -- the actual checkout when testing there, so stale installed fixtures do
     -- not masquerade as newly added tests. Installed/sdist runs use package data.
     checkout <- doesFileExist "cost-translate.cabal"
     when checkout (getCurrentDirectory >>= setEnv "cost_translate_datadir")
-    selected <- getArgs
+    arguments <- getArgs
     cases <- discoverReferenceCases
     let registry = map (uncurry Semantic) cases ++
             [Diagnostics, WholeModuleFailure, GeneratedModuleNameDiagnostic, TestSelection, FixturePolicy, ReferenceHarness, GeneratedFunctions, GeneratedConstruction, RuntimeAllocator, ProducerSharing, CapturedKeySharing, SourceScope]
-        names = map groupName registry
+        inventory = referenceCases cases
+        modes = [("--success", Success), ("--known-failures", KnownFailures), ("--all-references", AllReferences)]
+        options = "--list-reference-cases" : map fst modes
+        selected = filter (`notElem` options) arguments
+        selectedModes = [chosen | (option, chosen) <- modes, option `elem` arguments]
+        listing = "--list-reference-cases" `elem` arguments
+        mode = case selectedModes of
+            [chosen] -> chosen
+            _ | null arguments -> Success
+              | otherwise -> AllReferences
+        names = map groupName registry ++ map caseKey inventory
         unknown = nub (filter (`notElem` names) selected)
-    unless (null unknown) $ do
-        hPutStrLn stderr ("Unknown test selector(s): " ++ intercalate ", " (map show unknown))
-        hPutStrLn stderr "Usage: cost-translate-test [SELECTOR ...] (no selectors runs all groups)"
+    unless (null unknown && length selectedModes <= 1) $ do
+        unless (null unknown) $
+            hPutStrLn stderr ("Unknown test selector(s): " ++ intercalate ", " (map show unknown))
+        when (length selectedModes > 1) $
+            hPutStrLn stderr "Conflicting reference modes: choose only one."
+        hPutStrLn stderr "Usage: cost-translate-test [--success | --known-failures | --all-references] [--list-reference-cases] [SELECTOR ...]"
         hPutStrLn stderr ("Available test selectors: " ++ intercalate ", " names)
         exitFailure
-    -- Validate the entire inventory even when only one group was requested.
-    validateReferenceCases
-    let requested = filter (\group -> null selected || groupName group `elem` selected) registry
-    environment <- if any needsReferenceEnvironment requested
-        then Just <$> prepareReferenceEnvironment
-        else pure Nothing
-    mapM_ (runGroup environment) requested
+    -- Discovery validates the entire inventory and catalog even for one selector.
+    let infrastructure = [group | group <- registry, not (isSemantic group)]
+        collisions = [label | (label, _) <- cases,
+            label `elem` map groupName infrastructure || "--" `isPrefixOf` label]
+        references = selectReferences mode selected inventory
+        requested = filter (\group -> null arguments || groupName group `elem` selected) infrastructure
+    unless (null collisions) (fail ("reference labels collide with reserved selectors: " ++ show collisions))
+    if listing then mapM_ (putStrLn . listReference) references
+    else do
+        environment <- if not (null references) || any needsReferenceEnvironment requested
+            then Just <$> prepareReferenceEnvironment
+            else pure Nothing
+        succeeded <- if null references then pure True
+            else requireEnvironment environment >>= \context -> runReferences context references
+        mapM_ (runGroup environment) requested
+        unless succeeded exitFailure
+
+isSemantic :: Group -> Bool
+isSemantic Semantic{} = True
+isSemantic _ = False
 
 needsReferenceEnvironment :: Group -> Bool
 needsReferenceEnvironment Semantic{} = True
@@ -95,25 +124,15 @@ needsReferenceEnvironment SourceScope = True
 needsReferenceEnvironment _ = False
 
 runGroup :: Maybe ReferenceEnvironment -> Group -> IO ()
-runGroup environment (Semantic label sources) = do
-    when (label == "anf-scoped-renaming") checkScopedRenamingSources
-    context <- requireEnvironment environment
-    artifacts <- runReferenceCase context (label, sources)
-    when (label == "caller-scalar-comparisons") (checkScalarComparisonCallers context artifacts)
-    when (label == "recursive-tree-representation")
-        (checkOptimizedReferenceCases "recursive Tree reprM" context artifacts)
-    when (label == "runtime-demand-bundle")
-        (checkOptimizedReferenceCases "acyclic runtime demand bundle" context artifacts)
-    when (label == "higher-kinded-stock-context")
-        (checkOptimizedReferenceCases "higher-kinded stock context" context artifacts)
-    mapM_ (checkGeneratedArtifacts label) artifacts
-    putStrLn ("PASS: " ++ label ++ " / handwritten reference / boundary cases and 200 randomized comparisons")
+runGroup _ Semantic{} = fail "internal error: semantic group bypassed per-source runner"
 runGroup _ Diagnostics = checkDiagnostics
 runGroup _ WholeModuleFailure = checkWholeModuleFailure
 runGroup _ GeneratedModuleNameDiagnostic = checkGeneratedModuleNameDiagnostic
 runGroup _ TestSelection = checkTestSelection
 runGroup _ FixturePolicy = checkFixturePolicy >> checkReferencePolicyTests
-runGroup environment ReferenceHarness = requireEnvironment environment >>= checkReferenceHarness
+runGroup environment ReferenceHarness = do
+    requireEnvironment environment >>= checkReferenceHarness
+    checkReferenceSelection
 runGroup environment GeneratedFunctions = do
     checkGeneratedFunctionSpecimens
     requireEnvironment environment >>= checkGeneratedFunctionLifecycle
@@ -136,6 +155,8 @@ checkTestSelection = do
         wholeModulePass = "PASS: whole-module failure / no publication / retained arity log"
         moduleNamePass = "PASS: invalid generated module names retain their category and candidate"
     checkRejected executable [unknown] [unknown]
+    checkRejected executable ["--all-references", unknown] [unknown]
+    checkRejected executable ["--list-reference-cases", unknown] [unknown]
     checkRejected executable
         ["whole-module-failure", unknown, "generated-module-name-diagnostic", anotherUnknown]
         [unknown, anotherUnknown]
@@ -146,21 +167,7 @@ checkTestSelection = do
     checkAccepted executable
         ["generated-module-name-diagnostic", "whole-module-failure", "generated-module-name-diagnostic", "whole-module-failure"]
         [wholeModulePass, moduleNamePass]
-    (referenceStatus, referenceOut, referenceErr) <- readProcessWithExitCode executable
-        ["anf-scoped-renaming", "identity", "anf-scoped-renaming"] ""
-    let referenceKeys =
-            ["anf-scoped-renaming:test/cases/anf-scoped-renaming/Shadowed.hs"
-            ,"anf-scoped-renaming:test/cases/anf-scoped-renaming/Renamed.hs"
-            ,"identity:test/cases/identity/Example.hs"]
-        reports = filter (\line -> any (`isInfixOf` line) referenceKeys &&
-            any (`isPrefixOf` line) ["PASS: ", "FAIL: "]) (lines referenceOut)
-    unless (referenceStatus /= ExitSuccess &&
-            map (\key -> length (filter (key `isInfixOf`) reports)) referenceKeys == [1,1,1] &&
-            ("PASS: " ++ last referenceKeys) `elem` reports &&
-            "Reference summary: 1 passed, 2 failed" `isInfixOf` referenceOut &&
-            "Artifacts:" `isInfixOf` (referenceOut ++ referenceErr)) $
-        fail ("reference selection must isolate every source, continue after failure and retain strict status\n" ++
-            childResult ["anf-scoped-renaming", "identity"] referenceStatus referenceOut referenceErr)
+    checkReferenceListing
     putStrLn "PASS: test-selection / unknown and mixed selectors rejected / requested groups run once in registry order / no unrelated groups"
   where
     checkRejected executable selectors unknowns =
