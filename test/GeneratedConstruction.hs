@@ -5,6 +5,7 @@ import Control.Monad (forM, unless, void)
 import Cost.Translate (translateFile)
 import Data.Foldable (toList)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
+import ConstructionAllocation (checkPhantomAllocation)
 import ConstructionAst (collectAst, pretty)
 import ConstructionEvidence (collectEvidence, checkEvidence, methodNames)
 import ConstructionHomeRepr (homeReprs)
@@ -53,7 +54,12 @@ import System.Process (readProcessWithExitCode)
 -- The renamed tree retains references in unused local/top-level helpers.
 checkGeneratedConstruction :: FilePath -> IO ()
 checkGeneratedConstruction output = do
-    problems <- runGhc (Just libdir) $ do
+    problems <- constructionReports output
+    unless (null problems) (fail (unlines problems))
+
+constructionReports :: FilePath -> IO [String]
+constructionReports output =
+    runGhc (Just libdir) $ do
         configureArtifact output
         rt <- runtime
         target <- guessTarget output Nothing Nothing
@@ -88,7 +94,6 @@ checkGeneratedConstruction output = do
             pure (syntaxProblems, evidence)
         pure (concatMap fst reports ++ ordinaryOperandTransfers qcResult qc checkedModules ++
             checkEvidence rt representations (homeDemandTypes rt checkedModules) (concatMap snd reports))
-    unless (null problems) (fail (unlines problems))
 
 configureArtifact :: FilePath -> Ghc ()
 configureArtifact output = do
@@ -103,6 +108,7 @@ configureArtifact output = do
 
 checkGeneratedConstructionSpecimens :: IO ()
 checkGeneratedConstructionSpecimens = do
+    checksPhantomProducer
     checksImplicitForcing
     checkIntegralContext ("constrained-local-disjoint-scoped" </> "ClosedIntegral.hs")
     checkIntegralContext ("constrained-local-superclass-scoped" </> "AtIntegralOwner.hs")
@@ -461,6 +467,18 @@ checkGeneratedConstructionSpecimens = do
                 getName cls == integralClassName, getTyVar_maybe argument == Just a ->
                     putStrLn ("PASS: " ++ label ++ " / exported viewsM requires only Integral a")
             _ -> fail (output ++ ": exported viewsM must require only Integral a; found " ++ pretty signature)
+    checksPhantomProducer = do
+        (_, _, output) <- completeArtifact "phantom producer" ("polymorphic-phantom-producer" </> "Example.hs")
+        diagnostics <- constructionReports output
+        runGhc (Just libdir) $ do
+            configureArtifact output
+            target <- guessTarget output Nothing Nothing
+            setTargets [target]
+            Succeeded <- load LoadAllTargets
+            summary <- getModSummary (mkModuleName "Generated")
+            parseModule summary >>= typecheckModule >>= checkPhantomAllocation
+        cleanDefinitions (unlines diagnostics) output (map TopBinding ["viewsM", "inferredM", "makeM", "workM", "mapThunk"])
+        putStrLn "PASS: phantom producer / one suspended invocation, checked view, original constructor and fields"
     rejectsCompleteBox = do
         (directory, input, output) <- completeArtifact "Box" ("datatype-only-conversion" </> "Example.hs")
         definitions <- definitionSpans <$> parseHaskellModule output

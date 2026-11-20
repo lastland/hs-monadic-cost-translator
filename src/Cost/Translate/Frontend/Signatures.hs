@@ -3,6 +3,7 @@ module Cost.Translate.Frontend.Signatures
     , translatedSignatureAs
     , translatedSignatureAsUsing
     , monadicType
+    , thunkType
     ) where
 
 import Control.Monad (unless)

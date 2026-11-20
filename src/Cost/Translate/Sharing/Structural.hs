@@ -2,6 +2,8 @@ module Cost.Translate.Sharing.Structural
     ( Slot
     , View
     , planView
+    , phantomBranches
+    , constructorView
     , viewMapper
     , viewThunk
     , viewDependencies
@@ -9,11 +11,14 @@ module Cost.Translate.Sharing.Structural
 
 import Control.Monad (guard)
 import Cost.Translate.Kinds (visibleArguments)
+import Cost.Translate.Names (generatedName)
 import Cost.Translate.Output qualified as O
 import Data.Map.Strict qualified as Map
-import GHC (Name, TyVar, Type, getName)
+import GHC (Name, TyCon, TyVar, Type, getName, isVanillaDataCon, tyConDataCons)
 import GHC.Builtin.Types (listTyCon, maybeTyCon, tupleTyCon)
-import GHC.Core.TyCo.FVs (tyCoVarsOfType)
+import GHC.Core.DataCon (dataConInstOrigArgTys)
+import GHC.Core.TyCo.FVs (tyCoVarsOfType, tyCoVarsOfTypes)
+import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Core.Type (getTyVar_maybe, splitTyConApp_maybe)
 import GHC.Types.Basic (Boxity (..))
 import GHC.Types.Var.Set (elemVarSet)
@@ -61,6 +66,27 @@ planView mappings variables value
             view <- recurse argument
             pure (key, name, view)
 
+phantomBranches :: [TyCon] -> [TyVar] -> Type -> Maybe [(O.Pat, O.Expr)]
+phantomBranches datatypes variables result = do
+    (tc, arguments) <- splitTyConApp_maybe result
+    guard (tc `elem` datatypes && not (null (tyConDataCons tc)))
+    mapM (branch arguments) (tyConDataCons tc)
+    where
+        branch arguments con = do
+            guard (isVanillaDataCon con)
+            let target = generatedName "T" (getName con)
+                fields = map scaledThing (dataConInstOrigArgTys con arguments)
+            guard (not (any (`elemVarSet` tyCoVarsOfTypes fields) variables))
+            pure (constructorView target (Preserve <$ fields))
+
+constructorView :: String -> [View] -> (O.Pat, O.Expr)
+constructorView target views =
+    ( O.conP target (map O.p fields)
+    , O.call target (zipWith viewThunk views (map O.v fields))
+    )
+    where
+        fields = ["payload" ++ show n | n <- [0 .. length views - 1]]
+
 viewMapper :: View -> O.Expr
 viewMapper Preserve = O.v "id"
 viewMapper (Convert convert) = convert
@@ -96,11 +122,13 @@ maybeMapper view =
             (O.v "maybeValue")
             [ (O.conP "M.NothingT" [], O.v "M.NothingT")
             ,
-                ( O.conP "M.JustT" [O.p "payload"]
-                , O.call "M.JustT" [viewThunk view (O.v "payload")]
+                ( O.conP "M.JustT" [O.p field]
+                , O.call "M.JustT" [viewThunk view (O.v field)]
                 )
             ]
         )
+    where
+        field = "payload"
 
 pairMapper :: View -> View -> O.Expr
 pairMapper left right =

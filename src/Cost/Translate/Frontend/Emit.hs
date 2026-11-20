@@ -272,9 +272,10 @@ emitOrdinaryLocalValue ::
     Either String O.Expr
 emitOrdinaryLocalValue signatures scope binding name match done = do
     action <- emitMatchBody scope match (failureExpr "source guard failure")
-    let n = localName scope (unLoc name)
-        bindingType = Map.lookup (unLoc name) (inferredBindings scope)
-    case Map.lookup (unLoc name) (plannedSpecializations (namePlan scope)) of
+    let source = unLoc name
+        n = localName scope source
+        bindingType = Map.lookup source (inferredBindings scope)
+    case Map.lookup source (plannedSpecializations (namePlan scope)) of
         Just instantiations -> do
             let thunks =
                     [ (ty, O.v target)
@@ -282,12 +283,7 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
                     , ty <- useTypes specialization
                     ]
             continuation <-
-                done
-                    ( insertEnv
-                        (unLoc name)
-                        (SpecializedThunks thunks)
-                        scope
-                    )
+                done (insertEnv source (SpecializedThunks thunks) scope)
             allocateSpecialized
                 signatures
                 scope
@@ -303,19 +299,25 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
             let reference
                     | isJust paths = O.call n [O.tuple []]
                     | otherwise = O.v n
-            remaining <- done (insertEnv (unLoc name) (Thunk reference) scope)
+            remaining <- done (insertEnv source (Thunk reference) scope)
             let continuation =
-                    if strictLocalValue scope binding (unLoc name) bindingType
+                    if strictLocalValue scope binding source bindingType
                         then forceWhnf reference remaining
                         else remaining
-            allocateShared
-                signatures
-                scope
-                name
-                action
-                bindingType
-                paths
-                continuation
+                producer =
+                    bindingType
+                        >>= phantomAllocation signatures scope source action
+                allocate = case producer of
+                    Just bind -> pure . bind
+                    Nothing ->
+                        allocateShared
+                            signatures
+                            scope
+                            name
+                            action
+                            bindingType
+                            paths
+            allocate continuation
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitExpr env located = case unLoc located of
