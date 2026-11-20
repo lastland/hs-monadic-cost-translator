@@ -109,9 +109,10 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
                     HsRecSel _ field -> Just (foExt field)
                     _ -> Nothing
                 site = ([], [MethodAt here name | Just name <- [reference], name `elem` methods])
+                operand = case form of
+                    RecordCon{rcon_con = name} -> valueUse (getLocA name) (unLoc name)
+                    _ -> maybe ([], []) (valueUse here) reference
                 body = case form of
-                    _ | Just name <- reference, permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name ->
-                        ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
                     XExpr expansion@(ExpandedThingRn (OrigExpr original) _) -> case expression of
                         L annotation _ -> ([unsupported expression | not (sectionExpansion expansion)], []) `plus`
                             walk here (L annotation original :: LHsExpr GhcRn)
@@ -126,7 +127,7 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
                             | field <- fields]
                     RecordUpd{} -> ([pretty here ++ ": unsupported executable record update"], [])
                     _ -> descend here expression
-             in if isViewCall here then expansionProblems expression else shape `plus` site `plus` body
+             in if isViewCall here then expansionProblems expression else shape `plus` site `plus` operand `plus` body
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LPat GhcRn)) = recordField location field
         | Just field <- cast value :: Maybe (HsRecField GhcRn (LHsExpr GhcRn)) = recordField location field
         | Just pattern' <- cast value :: Maybe (LPat GhcRn) =
@@ -149,6 +150,10 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
     nested location (Component pat rhs) = walk location pat `plus` walk location rhs `plus`
         ([], [ComponentAt (getLocA pat) (getLocA rhs)])
     plus (a, b) (c, d) = (a ++ c, b ++ d)
+    valueUse here name
+        | permitted name, not (isQuickCheckBinding qc name), valueAt qcUses here name =
+            ([pretty here ++ ": QuickCheck value used outside a generator or property: " ++ describeName name], [])
+        | otherwise = ([], [])
     -- Matching or assigning a labelled field is not applying its selector.
     -- The constructor, field ownership, and nested pattern/expression still count.
     recordField :: Data rhs => SrcSpan -> HsRecField GhcRn rhs -> ([String], [SourceSite])

@@ -3,7 +3,7 @@
 module ConstructionQuickCheckUses
     (quickCheckPackage, quickCheckResult, QuickCheckUses, quickCheckUses, valueAt, strictPatternAt) where
 
-import ConstructionAst (collectAst, typedVariable)
+import ConstructionAst (collectAst, strictConstructorOperands, typedVariable)
 import ConstructionRuntime (resolveType)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
@@ -49,11 +49,14 @@ quickCheckUses result = inModule
         -- bare specialization there is no source operand to report.
         applied = Set.fromList [key | HsApp _ f _ <- collectAst source :: [HsExpr GhcTc],
             Just key <- [variableSite f]]
+        operand ty = null (fst (splitPiTys ty)) && result ty
+        site expression | Just (loc, name, fields) <- strictConstructorOperands expression, any operand fields =
+            (,name) <$> inputSpan loc
         site expression = do
             key@(_, name) <- variableSite expression
             let ty = lhsExprType expression
                 bareSeq = name == getName seqId && Set.notMember key applied && case fst (splitFunTys (snd (splitForAllTyVars ty))) of
-                    arg:_ -> let operand = scaledThing arg in null (fst (splitPiTys operand)) && result operand
+                    arg:_ -> operand (scaledThing arg)
                     [] -> False
             if result ty || bareSeq then Just key else Nothing
     variableSite expression = do

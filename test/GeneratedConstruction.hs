@@ -118,6 +118,9 @@ checkGeneratedConstructionSpecimens = do
     checksQuickCheckMixed
     checksMixedMakeInstances
     checksOperandPropertyCall
+    accepts "OperandBoxControl.hs"
+    mixed "OperandBoxUse.hs" [TopBinding "prop_packed"] "OperandBoxUse.hs"
+        [(7, qcValue "OperandBoxControl.Box")]
     mixed "OperandInstantiations.hs" [TopBinding "prop_pair"] "OperandInstantiations.hs"
         [(10, qcValue "OperandEquations.forcePair"), (13, qcValue "OperandEquations.strictF"),
          (16, qcValue "OperandEquations.erased"), (23, qcValue "OperandEquations.relay"),
