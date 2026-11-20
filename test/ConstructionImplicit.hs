@@ -1,6 +1,6 @@
 -- | Link explicit implicit parameters to their actual dictionary selections
 -- in one checked module. Rebinding the same label introduces a different Id.
-module ConstructionImplicit (Implicits(..), Reference(..), implicitFormals, implicitParameters, scalarIP) where
+module ConstructionImplicit (Implicits(..), Reference(..), formalIP, actualIP, implicitFormals, implicitParameters, scalarIP) where
 
 import ConstructionAst (atSourceSpan, children, collectAst, firstOrderCall, reachable, variable)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
@@ -29,14 +29,15 @@ data Implicits = Implicits
     , dictionaryIds :: Set.Set Name, ordinaryIPs :: Set.Set Name }
 
 -- A call reads its actual IP only when this particular formal is read.
-data Reference = Direct Name | AtCall Name Name
+data Reference = Direct Name | AtCall IPArgument
+data IPArgument = IPArgument { formalIP :: Name, actualIP :: Name }
 
-type Formals = Map.Map Name (Int, [Id])
+data Formals = Formals { valueArity :: Int, formalDictionaries :: [Id] }
 
-implicitFormals :: QuickCheck -> [TypecheckedModule] -> Formals
+implicitFormals :: QuickCheck -> [TypecheckedModule] -> Map.Map Name Formals
 implicitFormals qc = Map.unions . map signatures
   where
-    signatures m = Map.fromList [(getName v, (length args, ds)) | (v, vs) <- methods ++ exports,
+    signatures m = Map.fromList [(getName v, Formals{valueArity = length args, formalDictionaries = ds}) | (v, vs) <- methods ++ exports,
         isQuickCheckBinding qc v, let (_, theta, rho) = tcSplitSigmaTy (idType v); (args, _) = splitFunTys rho,
         not (any (isPiTy . scaledThing) args), let ds = [d | d <- vs, scalarIP d, any (eqType (idType d)) theta], not (null ds)]
       where
@@ -73,7 +74,7 @@ applications node
     direct WpHole = True
     direct _ = False
 
-implicitParameters :: Formals -> TypecheckedModule -> Implicits
+implicitParameters :: Map.Map Name Formals -> TypecheckedModule -> Implicits
 implicitParameters formals checked
     | Set.null roots = Implicits [] (const Nothing) (const []) Set.empty Set.empty
     | otherwise = Implicits locations (unique typed) mentions roots (Set.union passed uncertain)
@@ -107,12 +108,13 @@ implicitParameters formals checked
     calls = applications source
     counts = Map.fromListWith (+) [(key, 1 :: Int) | (Just key, _) <- calls]
     saturated = Set.fromList [(p, name) | group <- groups, e <- collectAst group, let (h, xs) = firstOrderCall e,
-        Just name <- [variable h], Just (arity, _) <- [Map.lookup name formals], length xs == arity,
+        Just name <- [variable h], Just callee <- [Map.lookup name formals], length xs == valueArity callee,
         Strict.Just p <- [getBufSpan (getLocA h)]]
     transfer (Just key@(_, fn)) (EvExpr (C.Var actual))
-        | Set.member key saturated, Map.lookup key counts == Just 1, Just (_, ds) <- Map.lookup fn formals,
-          [formal] <- filter (eqType (idType actual) . idType) ds, [origin] <- Set.toList (origins aliases (getName actual)),
-          origins deps (getName actual) == Set.singleton origin = Just (key, AtCall (getName formal) origin)
+        | Set.member key saturated, Map.lookup key counts == Just 1, Just callee <- Map.lookup fn formals,
+          [formal] <- filter (eqType (idType actual) . idType) (formalDictionaries callee),
+          [origin] <- Set.toList (origins aliases (getName actual)), origins deps (getName actual) == Set.singleton origin =
+            Just (key, AtCall IPArgument{formalIP = getName formal, actualIP = origin})
     transfer _ _ = Nothing
     uses = [(transfer key term, term) | (key, terms) <- calls, term <- terms]
     transfers = Map.fromListWith (++) [(key, [ref]) | (Just (key, ref), _) <- uses]

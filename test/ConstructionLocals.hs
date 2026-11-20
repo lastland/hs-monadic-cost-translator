@@ -96,8 +96,8 @@ data LocalRole = Testing | Value | Ordinary deriving Eq
 localBindings :: Runtime -> QuickCheck -> [TypecheckedModule] -> Locals
 localBindings rt qc modules = Locals qc values (reachable aliases independent) dictionaries parameters
   where
-    schemes = implicitFormals qc modules
-    groups = [(m, group, implicitParameters schemes m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
+    formals = implicitFormals qc modules
+    groups = [(m, group, implicitParameters formals m) | m <- modules, Just (group, _, _, _, _) <- [tm_renamed_source m]]
     parameters = Map.fromList [(checkedModule m, ip) | (m, _, ip) <- groups]
     region ip role ns (bs, refs) = (role, ns, refs) : concatMap (local ip) bs
     locals = concat [region ip (if quickCheckBody qc m b then Testing else Ordinary) [] (bodyParts (references ip) b) |
@@ -117,12 +117,12 @@ localBindings rt qc modules = Locals qc values (reachable aliases independent) d
     generator b = maybe False (isQuickCheckBinding qc) (bindingName b)
     value FunBind{fun_matches = matches} | matchGroupArity matches > 0 = False
     value b = not (null ns) && all (`Set.member` valueIds) ns && not (generator b) where ns = names b
-    targets active refs = [n | Direct n <- refs] ++ [n | AtCall formal n <- refs, Set.member formal active]
+    targets active refs = [n | Direct n <- refs] ++ [actualIP arg | AtCall arg <- refs, Set.member (formalIP arg) active]
     deps active = Map.fromList [(n, targets active refs) | (Value, ns, refs) <- locals, n <- ns]
     -- Propagate only through values. Calling or passing a named function never
     -- gives its body the caller's role. Ordinary code still checks its entire
     -- RHS; these sets only choose where to resume *inside* an exempt RHS.
-    calls = Map.fromListWith (++) [(formal, [actual]) | (_, _, refs) <- locals, AtCall formal actual <- refs]
+    calls = Map.fromListWith (++) [(formalIP arg, [actualIP arg]) | (_, _, refs) <- locals, AtCall arg <- refs]
     -- An unused/overridden formal cannot make its caller's IP live. Start
     -- with direct reads and propagate demand through saturated first-order calls.
     live = demand Set.empty
