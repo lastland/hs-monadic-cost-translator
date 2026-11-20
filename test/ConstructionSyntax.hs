@@ -177,29 +177,19 @@ checkSyntax rt locals uses homes methods support checked = case tm_renamed_sourc
             Just ReprMethod -> True
             _ -> False
 
--- GHC 9.10 expands updates to let/case before retaining the typechecked tree.
--- Its selected constructor identifies the right parent, not merely a candidate
+-- A selected constructor identifies the right parent, not merely a candidate
 -- with the same field spelling. Parent labels are ordered like update fields.
 ambiguousUpdateReferences :: Data a => a -> [(SrcSpan, Name)]
 ambiguousUpdateReferences checked =
     [ (getLocA label, greName field)
     | ExpandedThingTc (OrigExpr RecordUpd { rupd_flds = RegularRecUpdFields parents fields }) expanded <- collectAst checked
+    , let selected = map (conLikeName . fst) (updateAlternatives expanded)
     , parent <- toList parents
     , length fields == length (rnRecUpdLabels parent)
-    , any ((`elem` updateConstructors expanded) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
+    , any ((`elem` selected) . conLikeName_Name) (nonDetEltsUniqSet (rnRecUpdCons parent))
     , (binding, field) <- zip fields (toList (rnRecUpdLabels parent))
     , Ambiguous _ label <- [unLoc (hfbLHS (unLoc binding))]
     ]
-
-updateConstructors :: HsExpr GhcTc -> [Name]
-updateConstructors (HsLet _ _ body) = updateConstructors (unLoc body)
-updateConstructors (XExpr (WrapExpr (HsWrap _ expression))) = updateConstructors expression
-updateConstructors (HsCase RecUpd _ matches) =
-    [ conLikeName (unLoc constructor)
-    | match <- unLoc (mg_alts matches)
-    , ConPat _ constructor _ <- map unLoc (m_pats (unLoc match))
-    ]
-updateConstructors _ = []
 
 -- These are the pinned compiler's finite section templates, not general
 -- permission to discard an expansion. The operator is the same resolved Name;

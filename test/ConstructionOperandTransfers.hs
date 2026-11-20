@@ -3,7 +3,7 @@
 -- calling an ordinary home function does not turn that function into a property.
 module ConstructionOperandTransfers (ordinaryOperandTransfers) where
 
-import ConstructionAst (children, collectAst, pretty, strictConstructorOperands, strictNullaryRhs, typedVariable)
+import ConstructionAst (children, collectAst, pretty, strictConstructorOperands, strictNullaryRhs, typedVariable, updateAlternatives)
 import ConstructionQuickCheckUses (quickCheckOperand)
 import ConstructionRoles (QuickCheck, isQuickCheckBinding)
 import ConstructionRuntime (describeName)
@@ -148,14 +148,8 @@ bodyUses qc = walk
 -- slot. GHC's update cases choose the constructors; the written field labels
 -- choose only the assignments. A type-changing update uses the result type.
 updatedStrictFields :: [Name] -> HsExpr GhcTc -> [Type]
-updatedStrictFields labels = go
-  where
-    go (HsLet _ _ body) = go (unLoc body)
-    go (XExpr (WrapExpr (HsWrap _ e))) = go e
-    go (HsCase RecUpd _ matches) =
-        [substTy sub (scaledThing arg) | L _ match <- unLoc (mg_alts matches),
-            L _ ConPat{pat_con = L _ (RealDataCon con)} <- m_pats match,
-            Just sub <- [tcMatchTy (dataConOrigResTy con) (mg_res_ty (mg_ext matches))],
-            (field, bang, arg) <- zip3 (dataConFieldLabels con) (dataConImplBangs con) (dataConOrigArgTys con),
-            flSelector field `elem` labels, isBanged bang]
-    go _ = []
+updatedStrictFields labels expanded =
+    [substTy sub (scaledThing arg) | (RealDataCon con, resultTy) <- updateAlternatives expanded,
+        Just sub <- [tcMatchTy (dataConOrigResTy con) resultTy],
+        (field, bang, arg) <- zip3 (dataConFieldLabels con) (dataConImplBangs con) (dataConOrigArgTys con),
+        flSelector field `elem` labels, isBanged bang]

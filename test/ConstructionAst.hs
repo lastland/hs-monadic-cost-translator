@@ -1,7 +1,8 @@
 -- | Traverse finite compiler syntax, never IdInfo, unfoldings, or wrappers.
 module ConstructionAst
     ( collectAst, children, atSourceSpan, allBindings, nestedBindings, pretty, spine, variable, typedVariable
-    , strictConstructorOperands, call, bindingName, strictNullaryRhs, plainPattern, constructorPattern, oneRhs, equations
+    , strictConstructorOperands, updateAlternatives, call, bindingName, strictNullaryRhs
+    , plainPattern, constructorPattern, oneRhs, equations
     ) where
 
 import Data.Data (Data, cast, gmapQ)
@@ -103,6 +104,16 @@ strictConstructorOperands expression = case typedHead expression of
         Strict.Just _ -> let (_, _, body) = tcSplitSigmaTy ty in Just (loc, getName con,
             [scaledThing arg | (bang, arg) <- zip (dataConImplBangs con) (fst (splitFunTys body)), isBanged bang])
         Strict.Nothing -> Nothing
+
+-- GHC 9.10 expands a record update to let/case. Only the generated case
+-- alternatives select constructors; a type-changing update uses its result type.
+updateAlternatives :: HsExpr GhcTc -> [(ConLike, Type)]
+updateAlternatives (HsLet _ _ body) = updateAlternatives (unLoc body)
+updateAlternatives (XExpr (WrapExpr (HsWrap _ expression))) = updateAlternatives expression
+updateAlternatives (HsCase RecUpd _ matches) =
+    [(con, mg_res_ty (mg_ext matches)) | L _ match <- unLoc (mg_alts matches),
+        L _ ConPat{pat_con = L _ con} <- m_pats match]
+updateAlternatives _ = []
 
 call :: [Name] -> LHsExpr GhcRn -> Maybe [LHsExpr GhcRn]
 call names expression = case spine expression of
