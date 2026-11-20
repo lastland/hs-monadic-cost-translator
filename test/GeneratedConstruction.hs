@@ -182,6 +182,7 @@ checkGeneratedConstructionSpecimens = do
          (10, supportUse "StandaloneDemandShrink.standalone"),
          (13, supportUse "StandaloneDemandShrink.shrinkField")]
     accepts "BoxSupport.hs"
+    accepts "UtilityApp.hs"
     accepts "FamilySupport.hs"
     rejectsAt "FamilyEscape.hs"
         [(9, reprFailure), (12, forbidden "Memorist.Data.Interface.Data.abstract"),
