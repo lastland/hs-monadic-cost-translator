@@ -1169,11 +1169,12 @@ sourceSpecimens =
     ,(CaseFile, "public-constructor/Case.hs", [])
     ,(CaseFile, "constructor-only/ReachableCase.hs", [])
     ,(CaseFile, "constructor-provenance/ExplicitCase.hs", [])
+    ,(CaseFile, "constructor-provenance/RecordCase.hs", [])
     ] ++
     [(CaseFile, "constructor-provenance" </> name ++ "Case.hs", ["costed callback has no reachable Generated"])
         | name <- ["Runtime", "Type", "Pattern", "Unreachable", "Local", "Shadow", "Private",
                    "Abstract", "Ambiguous", "Qualified", "Unqualified", "HiddenImport", "TypeImport",
-                   "SameNameImport", "Unrelated", "AbstractRuntime"]] ++
+                   "SameNameImport", "Unrelated", "AbstractRuntime", "PrivateRecord", "RecordImport"]] ++
     [(ReferenceFile, "valid/Reference.hs", [])
     ,(CaseFile, "custom-main/Case.hs", ["must declare module Case", "name main"])
     ,(CaseFile, "trial-knobs/Case.hs", ["name maxSuccess", "name quickCheckWith"])
