@@ -144,28 +144,32 @@ withComparisonOutcome recovered executable source action =
                 (proc executable arguments)
                     {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
         createDirectoryIfMissing True commands
-        writeFile wrapper (unlines
-            ["#!/bin/sh", "set -eu"
-            ,"if [ \"$REFERENCE_RECOVERY\" = 0 ] && [ -z \"$REFERENCE_FAILURE_SOURCE\" ]; then"
+        writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
+            ["if [ \"$REFERENCE_RECOVERY\" = 0 ] && [ -z \"$REFERENCE_FAILURE_SOURCE\" ]; then"
             ,"  case \"$*\" in *-fno-code*Generated.hs*)"
             ,"    echo 'injected candidate rejection' >&2; exit 1 ;; esac"
-            ,"fi", "\"$REFERENCE_REAL_GHC\" \"$@\""
-            ,"output=", "previous=", "for argument do"
-            ,"  if [ \"$previous\" = -o ]; then output=$argument; fi"
-            ,"  previous=$argument", "done"
-            ,"case \"$output\" in */compare)"
-            ,"  /bin/mv \"$output\" \"$output.real\""
-            ,"  /bin/cat > \"$output\" <<'COMPARER'"
-            ,"#!/bin/sh"
-            ,"if [ \"$REFERENCE_RECOVERY\" = 1 ]; then exec \"$0.real\" \"$2\" \"$2\"; fi"
+            ,"fi"]
+            ["if [ \"$REFERENCE_RECOVERY\" = 1 ]; then exec \"$0.real\" \"$2\" \"$2\"; fi"
             ,"sandbox=${1%/*}"
             ,"if /usr/bin/cmp -s \"$REFERENCE_FAILURE_SOURCE\" \"$sandbox/Example.hs\"; then"
             ,"  echo 'injected comparison failure: setup error: ordinary payload' >&2"
-            ,"  exit 1", "fi", "exec \"$0.real\" \"$@\"", "COMPARER"
-            ,"  /bin/chmod +x \"$output\"", ";;", "esac"])
+            ,"  exit 1", "fi", "exec \"$0.real\" \"$@\""])
         permissions <- getPermissions wrapper
         setPermissions wrapper permissions {executable = True}
         action run
+
+compilerWrapper :: String -> [String] -> [String] -> String
+compilerWrapper compileCommand beforeCompilation comparerBody = unlines $
+    ["#!/bin/sh", "set -eu"] ++ beforeCompilation ++
+    [compileCommand
+    ,"output=", "previous=", "for argument do"
+    ,"  if [ \"$previous\" = -o ]; then output=$argument; fi"
+    ,"  previous=$argument", "done"
+    ,"case \"$output\" in */compare)"
+    ,"  /bin/mv \"$output\" \"$output.real\""
+    ,"  /bin/cat > \"$output\" <<'COMPARER'"
+    ,"#!/bin/sh"] ++ comparerBody ++
+    ["COMPARER", "  /bin/chmod +x \"$output\"", ";;", "esac"]
 
 checkNegativeComparerCrash :: FilePath -> IO ()
 checkNegativeComparerCrash executable =
@@ -176,17 +180,10 @@ checkNegativeComparerCrash executable =
             injected =
                 [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
                 ,("REFERENCE_REAL_GHC", realGhc)]
-        writeFile wrapper (unlines
-            ["#!/bin/sh", "set -eu", "'" ++ concatMap (\c -> if c == '\'' then "'\\''" else [c]) realGhc ++ "' \"$@\""
-            ,"output=", "previous=", "for argument do"
-            ,"  if [ \"$previous\" = -o ]; then output=$argument; fi"
-            ,"  previous=$argument", "done"
-            ,"case \"$output\" in */compare)"
-            ,"  /bin/mv \"$output\" \"$output.real\""
-            ,"  /bin/cat > \"$output\" <<'COMPARER'"
-            ,"#!/bin/sh", "case \"$1\" in *WrongValue.hs-*) kill -TERM \"$$\" ;; esac"
-            ,"exec \"$0.real\" \"$@\"", "COMPARER"
-            ,"  /bin/chmod +x \"$output\"", ";;", "esac"])
+        writeFile wrapper (compilerWrapper
+            ("'" ++ concatMap (\c -> if c == '\'' then "'\\''" else [c]) realGhc ++ "' \"$@\"") []
+            ["case \"$1\" in *WrongValue.hs-*) kill -TERM \"$$\" ;; esac"
+            ,"exec \"$0.real\" \"$@\""])
         permissions <- getPermissions wrapper
         setPermissions wrapper permissions {executable = True}
         (status, out, err) <- readCreateProcessWithExitCode
