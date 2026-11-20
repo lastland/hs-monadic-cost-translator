@@ -211,6 +211,11 @@ checkGeneratedConstructionSpecimens = do
     accepts "DemandConcreteRecursive.hs"
     accepts "DemandConcreteSum.hs"
     accepts "DemandConcreteLargeSum.hs"
+    checksParameterizedTags
+    checksSelectedTags
+    checksTagLaziness
+    rejectsAt "TagIneligible.hs"
+        [(line, unknown "GHC.Magic.dataToTag#") | line <- [11, 14, 17]]
     rejectsAt "DemandRecursiveProtected.hs"
         [(10, selected "GHC.Classes.==: unknown concrete scalar instance"),
          (13, selected "GHC.Internal.Show.show: unknown concrete scalar instance")]
@@ -475,6 +480,44 @@ checkGeneratedConstructionSpecimens = do
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
+    checksParameterizedTags = do
+        accepts "TagClosed.hs"
+        output <- specimen "TagParameterized.hs"
+        -- Inspect through the public pre-caller guard. The separate closed
+        -- stock-method proof still rejects generic Eq/default obligations.
+        result <- try @IOException (checkGeneratedConstruction output)
+        case result of
+            Left problem -> do
+                let diagnostics = ioeGetErrorString problem
+                    reports = filter (isInfixOf "unapproved ") (lines diagnostics)
+                when ("GHC.Magic.dataToTag#" `isInfixOf` diagnostics) $
+                    fail ("outer tags need exact parameterized builtin evidence:\n" ++ diagnostics)
+                unless (length reports == 2 && all (isInfixOf "GHC.Classes.") reports) $
+                    fail ("only the two independent Eq/default obligations should remain:\n" ++ diagnostics)
+            Right () -> fail "parameterized stock Eq permission is not part of the outer-tag certificate"
+    checksSelectedTags = do
+        output <- specimen "TagSelected.hs"
+        typechecks output
+        diagnostics <- rejection output
+        reports <- siteReports output diagnostics
+        -- Actual concrete/generic/higher-kinded/alias selections and both
+        -- family sizes have builtin evidence, not ordinary source permission.
+        let expected = [(line, external "GHC.Magic.dataToTag#") | line <- [12, 15, 18, 23, 31, 34]]
+        requireAt diagnostics output expected
+        unless (length reports == length expected && all
+                (isInfixOf (external "GHC.Magic.dataToTag#") . snd) reports) $
+            fail ("selected home tags must leave only the raw source-operation reports:\n" ++ diagnostics)
+    checksTagLaziness = withSystemTempDirectory "tag-laziness-" $ \objects -> do
+        source <- specimen "TagLaziness.hs"
+        let executable = objects </> "tag-laziness"
+        (built, out, err) <- readProcessWithExitCode "ghc"
+            ["-v0", "-fforce-recomp", "-i", "-outputdir", objects,
+             "-package", "MemoristANT", "-package", "ghc-prim", "-main-is", "TagLaziness",
+             source, "-o", executable] ""
+        unless (built == ExitSuccess) (fail ("tag operational control must compile:\n" ++ out ++ err))
+        (status, actual, errors) <- readProcessWithExitCode executable [] ""
+        unless (status == ExitSuccess && actual == "(0,1)\n" && null errors) $
+            fail ("outer tags must not evaluate either thunk field:\n" ++ actual ++ errors)
     protectedEq = selected "GHC.Classes.==: protected thunk/annotation/accounting operand"
     demandEq = selected "GHC.Classes.==: demand-data methods have no observation exemption"
     demandProducer = [InstanceMethod "Demand" ["Producer"] method | method <- ["fullDemand", "usage"]]

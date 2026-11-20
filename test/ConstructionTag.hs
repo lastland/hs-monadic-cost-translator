@@ -1,5 +1,5 @@
 -- | Exact compiler-built DataToTag dictionaries, separate from instance DFuns.
-module ConstructionTag (tagDictionary, tagMethod, validTag) where
+module ConstructionTag (tagDictionary, tagMethod, validTag, tagHomeType) where
 
 import Control.Monad (guard)
 import GHC hiding (exprType)
@@ -16,8 +16,8 @@ import GHC.Core.DataCon (dataConWorkId)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
 import GHC.Core.TyCo.Rep (Coercion(..), MCoercion(..))
-import GHC.Core.TyCon (newTyConCo_maybe, tyConSingleDataCon, tyConFamilySize)
-import GHC.Core.Type (mkVisFunTyMany, splitTyConApp_maybe)
+import GHC.Core.TyCon (isDataTyCon, isFamInstTyCon, newTyConCo_maybe, tyConSingleDataCon, tyConFamilySize, tyConResKind)
+import GHC.Core.Type (isLiftedTypeKind, mkVisFunTyMany, splitTyConApp_maybe)
 import GHC.Core.Utils (exprType)
 import GHC.Platform (Platform)
 import GHC.StgToCmm.Closure (isSmallFamily)
@@ -34,8 +34,8 @@ tagDictionary expression = do
     (cls, [levity, operand]) <- getClassPredTys_maybe predicate
     guard (getName cls == dataToTagClassName && eqType levity liftedDataConTy &&
         length (classAllSelIds cls) == 1)
-    (tc, []) <- splitTyConApp_maybe operand
-    guard (null (tyConTyVars tc))
+    (tc, arguments) <- splitTyConApp_maybe operand
+    guard (length arguments == tyConArity tc)
     payload <- case expression of
         C.Cast body co@(SymCo (AxiomInstCo actual 0 args)) -> do
             ax <- newTyConCo_maybe (classTyCon cls)
@@ -63,6 +63,13 @@ tagDictionary expression = do
 
 validTag :: Platform -> [TyCon] -> Type -> Id -> Bool
 validTag platform homes operand op = case splitTyConApp_maybe operand of
-    Just (tc, []) -> tc `elem` homes &&
+    Just (tc, arguments) -> tc `elem` homes && length arguments == tyConArity tc &&
         op == primOpId (if isSmallFamily platform (tyConFamilySize tc) then DataToTagSmallOp else DataToTagLargeOp)
     _ -> False
+
+-- Outer tags inspect no fields. This eligibility is deliberately independent
+-- of the closed stock-method proof: it grants no field-operation permission.
+tagHomeType :: TyCon -> Bool
+tagHomeType tc = isDataTyCon tc && not (isNewTyCon tc) &&
+    not (isFamInstTyCon tc) && isLiftedTypeKind (tyConResKind tc) &&
+    not (null (tyConDataCons tc)) && all isVanillaDataCon (tyConDataCons tc)

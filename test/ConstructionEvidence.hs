@@ -7,9 +7,9 @@ import ConstructionArithmetic (callerArithmetic)
 import ConstructionActionFields (typedActions)
 import ConstructionAst
 import ConstructionDefaults (Defaults, homeDefaults, selectsDataDefault)
-import ConstructionDemandMethods (StockMethods, stockMethods, safeHomeType)
+import ConstructionDemandMethods (StockMethods, stockMethods)
 import ConstructionStock (stockUse)
-import ConstructionTag (tagMethod, validTag)
+import ConstructionTag (tagMethod, validTag, tagHomeType)
 import ConstructionHomeRepr
 import ConstructionLocals (Locals, SourceSite(..), checkedActions, components, coreLocation, implicitBindingAt, ordinaryCoreBindings, quickCheckBindings, independentBinding)
 import ConstructionMethods (Methods, MethodSite(..), homeMethods, retainedMethods, defaultClass, conditionalMethod, selectedMethod)
@@ -165,7 +165,7 @@ collectEvidence rt utilities locals homes program support checked sourceSites = 
                     -- Even an implicit instance default must be checked before
                     -- simple Core optimization can inline or erase its call.
                     stock = stockMethods rt checked env (uses qc selected env allGivens)
-                    rawSites = TagFacts (targetPlatform flags) (filter (safeHomeType rt) (tcg_tcs global)) :
+                    rawSites = TagFacts (targetPlatform flags) (filter tagHomeType (tcg_tcs global)) :
                         StockFacts stock : MethodFacts (homeMethods rt checked env raw (uses qc selected env allGivens)) :
                         DefaultFacts (homeDefaults checked program (retainedFamilies retained) rawEnv raw) : bindingSites env allGivens raw
                     patternSites = concat [case group of
