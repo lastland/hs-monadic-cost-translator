@@ -183,6 +183,13 @@ checkPublicationGuardUsing environment selector label specimen wrapperName extra
             all (`isInfixOf` err) ((generated </> "Generated.hs") : expected)) $
         fail ("global " ++ label ++ " guard did not reject a corrupted ordinary fixture before caller compilation\n" ++
               out ++ err ++ "\nArtifacts: " ++ root)
+    when (label `elem` ["origin-term", "origin-helper"] &&
+            (generated </> "Example.hs:") `isInfixOf` err) $
+        fail ("origin uses must not restore original-body obligations\n" ++ err)
+    when (label == "origin-term") $
+        unless (length (filter ("ordinary originating-source term reference " `isInfixOf`) (lines err)) == 10 &&
+                not ("unapproved " `isInfixOf` err)) $
+            fail ("expected exactly ten term uses, not structural field labels or original-body reports\n" ++ err)
   where
     prefix = "Reference fixtures and logs: "
 
