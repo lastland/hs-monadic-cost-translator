@@ -11,7 +11,7 @@ import ConstructionRuntime (Runtime, Family(..), scalarType, standardNames)
 import GHC
 import GHC.Builtin.Names (eqClassName, ordClassName)
 import GHC.Builtin.Types (liftedTypeKind)
-import GHC.Core.Class (classTyVars, classAllSelIds, classATItems, classTvsFds)
+import GHC.Core.Class (classTyVars, classAllSelIds, classATItems)
 import GHC.Core.InstEnv (is_cls, is_tys, is_dfun)
 import GHC.Core.Predicate (getClassPredTys_maybe)
 import GHC.Core.TyCo.Compare (eqType)
