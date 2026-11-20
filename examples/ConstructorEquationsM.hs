@@ -201,8 +201,8 @@ guardedVariableM flag xs
           pick :: M.Th (L.ListT Int) -> M.MemoristM Int
           pick whole
             = do (M.tick :: M.MemoristM ())
-                 condition <- (M.force flag :: M.MemoristM Bool)
-                 if condition then
+                 condition0 <- M.force (flag :: M.Th Bool)
+                 if condition0 then
                      ignoreList (whole :: M.Th (L.ListT Int))
                  else
                      do matched' <- M.force whole
@@ -219,8 +219,8 @@ guardedWildcardM flag xs
           pick :: M.Th (L.ListT Int) -> M.MemoristM Int
           pick arg0
             = do (M.tick :: M.MemoristM ())
-                 condition <- (M.force flag :: M.MemoristM Bool)
-                 if condition then
+                 condition0 <- M.force (flag :: M.Th Bool)
+                 if condition0 then
                      pure (7 :: Int)
                  else
                      do matched' <- M.force arg0
@@ -243,8 +243,8 @@ variableM arg0 arg1
        matched' <- M.force arg1
        case matched' of
          L.NilT -> pure (0 :: Int)
-         _ -> do condition <- (M.force arg0 :: M.MemoristM Bool)
-                 if condition then
+         _ -> do condition0 <- M.force (arg0 :: M.Th Bool)
+                 if condition0 then
                      headValueM (arg1 :: M.Th (L.ListT Int))
                  else
                      do matched'' <- M.force arg1
@@ -255,8 +255,8 @@ variableM arg0 arg1
 wildcardM :: M.Th Bool -> M.Th (L.ListT Int) -> M.MemoristM Int
 wildcardM flag arg0
   = do (M.tick :: M.MemoristM ())
-       condition <- (M.force flag :: M.MemoristM Bool)
-       if condition then
+       condition0 <- M.force (flag :: M.Th Bool)
+       if condition0 then
            pure (7 :: Int)
        else
            do matched' <- M.force arg0
@@ -267,18 +267,14 @@ wildcardM flag arg0
 negativeM :: M.Th Int -> M.MemoristM Bool
 negativeM x
   = do (M.tick :: M.MemoristM ())
-       arg1 <- M.lazy (pure (0 :: Int))
        xValue <- M.force (x :: M.Th Int)
-       rhs <- M.force arg1
-       pure (xValue < rhs)
+       pure (xValue < (0 :: Int))
 
 positiveM :: M.Th Int -> M.MemoristM Bool
 positiveM x
   = do (M.tick :: M.MemoristM ())
-       arg1 <- M.lazy (pure (0 :: Int))
        xValue <- M.force (x :: M.Th Int)
-       rhs <- M.force arg1
-       pure (xValue > rhs)
+       pure (xValue > (0 :: Int))
 
 chooseM :: M.Th (L.ListT Int) -> M.MemoristM Int
 chooseM arg0
@@ -315,10 +311,8 @@ repeatedM arg0
                  else
                      do condition <- negativeM (y :: M.Th Int)
                         if condition then
-                            do arg2 <- M.lazy (pure (0 :: Int))
-                               lhs <- M.force arg2
-                               yValue <- M.force (y :: M.Th Int)
-                               pure (lhs - yValue)
+                            do yValue <- M.force (y :: M.Th Int)
+                               pure ((0 :: Int) - yValue)
                         else
                             pure (0 :: Int)
 

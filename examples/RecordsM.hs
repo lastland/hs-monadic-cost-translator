@@ -601,7 +601,7 @@ recordedM x
                          pure (BoxT x arg1))
        let b' = b'anchor
        arg2 <- M.lazy (readBoxM (b' :: M.Th BoxT))
-       arg3 <- M.lazy (payloadM (b' :: M.Th BoxT))
        lhs <- M.force arg2
+       arg3 <- M.lazy (payloadM (b' :: M.Th BoxT))
        rhs <- M.force arg3
        pure (lhs + rhs)

@@ -183,9 +183,23 @@ shadowProbes =
     aliases outer inner (M.JustT field) =
         Just (M.tname field == M.tname outer, M.tname field == M.tname inner)
 
+evidenceProbes :: [Probe]
+evidenceProbes =
+    [ scalarSource "evidence/shadowed-plus-skips-right" (Source.shadowPlus . number) $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= shadowPlusM
+    , failure "evidence/shadowed-plus-needs-left" $ \_ ->
+        M.lazy (bad "left operand") >>= shadowPlusM
+    , shallowBox "evidence/given-num-outer" $ \_ ->
+        M.lazy (bad "boxed summand") >>= givenAddM
+    , fullBox "evidence/given-num-full" $ \s ->
+        M.lazy (priced (repeats s) (number s)) >>= givenAddM
+    , failure "evidence/given-num-needs-summand" $ \_ ->
+        M.lazy (bad "boxed summand") >>= givenAddM >>= fieldValue
+    ]
+
 probes :: [Probe]
 probes =
     [ scalarSource "work/ticked-input" (Source.work . number) $ \s ->
         M.lazy (priced (repeats s) (number s)) >>= workM
     ] ++ takeProbes ++ concatMap boxProbes [("boxNext", boxNextM), ("boxPrefix", boxPrefixM)] ++
-    guardProbes ++ suspensionProbes ++ shadowProbes
+    guardProbes ++ suspensionProbes ++ shadowProbes ++ evidenceProbes

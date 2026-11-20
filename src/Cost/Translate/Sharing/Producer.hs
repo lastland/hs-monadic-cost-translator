@@ -4,7 +4,7 @@ import Control.Monad (guard)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Allocation (freshPrimed)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions (tick)
+import Cost.Translate.Frontend.Expression.Thunks (tick)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Polymorphic
 import Cost.Translate.Frontend.Signatures (monadicType)

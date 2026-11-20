@@ -30,9 +30,8 @@ zip' []       (_ : _)  = []
 zip' (_ : _)  []       = []
 zip' (a : as) (b : bs) = (a, b) : zip' as bs
 
--- A hand translation for the paper can elide the mechanics of < and -
--- after forcing n. The generated takeM shows the thunk allocation and
--- forcing for both literal operands, 0 and 1.
+-- The guard demands n before inspecting xs. The recursive call can therefore
+-- use that count in the decrement and still stay suspended in the tail.
 take :: Int -> [a] -> [a]
 take n xs =
     if 0 < n then

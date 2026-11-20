@@ -1,15 +1,18 @@
 module Cost.Translate.Primitive
-    ( Destination (..)
+    ( Primitive (..)
+    , Destination (..)
+    , primitive
     , primitiveAdapter
     , saturatedPrimitive
+    , locatedPrimitive
     , primitiveBody
     ) where
 
 import Cost.Translate.Callable (spine)
-import Cost.Translate.Frontend.Syntax (builtin)
 import Cost.Translate.Output qualified as O
 import GHC
-import GHC.Types.Name (getOccString)
+import GHC.Builtin.Names qualified as Builtin
+import GHC.Types.Name (getOccString, nameModule_maybe)
 
 data Primitive = StrictOperator String | Conjunction | Disjunction
 data Destination = Returning | Branching O.Expr O.Expr
@@ -22,16 +25,21 @@ primitive name
     | otherwise = Nothing
     where
         occurrence = getOccString name
-        from origins symbol = any (\m -> builtin name m symbol) origins
-        classes = ["GHC.Classes", "GHC.Internal.Classes"]
+        from origins symbol =
+            occurrence == symbol && maybe False (`elem` origins) origin
+        origin = nameModule_maybe name
+        classes =
+            [ Builtin.gHC_CLASSES
+            , Builtin.mkGhcInternalModule_ (mkModuleName "GHC.Internal.Classes")
+            ]
         named = ["div", "mod", "quot", "rem"]
         operator
             | occurrence `elem` named = "Prelude." ++ occurrence
             | otherwise = occurrence
         modules
-            | occurrence `elem` ["+", "-", "*"] = ["GHC.Internal.Num"]
+            | occurrence `elem` ["+", "-", "*"] = [Builtin.gHC_INTERNAL_NUM]
             | occurrence `elem` ["==", "/=", "<", ">", "<=", ">="] = classes
-            | occurrence `elem` ("/" : named) = ["GHC.Internal.Real"]
+            | occurrence `elem` ("/" : named) = [Builtin.gHC_INTERNAL_REAL]
             | otherwise = []
 
 primitiveAdapter :: Name -> Maybe O.Expr
@@ -48,10 +56,17 @@ saturatedPrimitive ::
     LHsExpr GhcRn ->
     Maybe (Name, Primitive, LHsExpr GhcRn, LHsExpr GhcRn)
 saturatedPrimitive located = do
+    (operator, operation, left, right) <- locatedPrimitive located
+    pure (unLoc operator, operation, left, right)
+
+locatedPrimitive ::
+    LHsExpr GhcRn ->
+    Maybe (Located Name, Primitive, LHsExpr GhcRn, LHsExpr GhcRn)
+locatedPrimitive located = do
     (operator, left, right) <- binaryCall located
     HsVar _ name <- pure (unLoc operator)
     operation <- primitive (unLoc name)
-    pure (unLoc name, operation, left, right)
+    pure (L (getLocA operator) (unLoc name), operation, left, right)
 
 binaryCall ::
     LHsExpr GhcRn -> Maybe (LHsExpr GhcRn, LHsExpr GhcRn, LHsExpr GhcRn)

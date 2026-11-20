@@ -22,8 +22,10 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe, mapMaybe, maybeToList)
 import GHC
 import GHC.Data.FastString (FastString, unpackFS)
+import GHC.Data.Strict qualified as Strict
 import GHC.Types.Name (getOccString, nameModule_maybe)
 import GHC.Types.SourceText (SourceText (NoSourceText))
+import GHC.Types.SrcLoc (BufPos (..), BufSpan (..))
 
 collect :: (Data a, Data b) => b -> [a]
 collect x = maybeToList (cast x) ++ concat (gmapQ collect x)
@@ -81,15 +83,18 @@ fieldName :: FieldOcc GhcRn -> Name
 fieldName = foExt
 
 actionKey :: String -> SrcSpan -> String
-actionKey prefix (RealSrcSpan location _) =
-    prefix
-        ++ concatMap
-            (("_" ++) . show)
+actionKey prefix (RealSrcSpan location buffer) =
+    prefix ++ concatMap (("_" ++) . show) (logical ++ physical)
+    where
+        logical =
             [ srcSpanStartLine location
             , srcSpanStartCol location
             , srcSpanEndLine location
             , srcSpanEndCol location
             ]
+        physical = case buffer of
+            Strict.Just (BufSpan (BufPos start) (BufPos end)) -> [start, end]
+            Strict.Nothing -> []
 actionKey prefix _ = prefix ++ "_generated"
 
 patternRoot :: LPat GhcRn -> Int -> String

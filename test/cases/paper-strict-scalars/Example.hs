@@ -1,3 +1,7 @@
+{-# LANGUAGE FlexibleContexts #-}
+-- shadowForward and shadowPlus test shadowing; givenAdd tests a closed
+-- constraint at an expression whose caller supplies the standard dictionary.
+{-# OPTIONS_GHC -Wno-name-shadowing -Wno-simplifiable-class-constraints #-}
 module Example where
 
 import Prelude hiding (take)
@@ -42,7 +46,17 @@ shadowForward x input
         Just x -> if x < 0 then relay x else Nothing
     | otherwise = relay x
   where
-    relay z = Just z
+    -- Keep a source-function entry when forwarding the concrete scalar thunk.
+    relay z = Just (z :: Int)
+
+shadowPlus :: Int -> Int
+shadowPlus x = x + error "right operand of local (+)"
+  where
+    (+) :: Int -> Int -> Int
+    left + _ = left
+
+givenAdd :: Int -> Maybe Int
+givenAdd x = Just ((x + 1) :: Num Int => Int)
 
 -- Both comparisons occupy the same logical span. Their values coexist in
 -- the success branch and must still refer to different inputs.

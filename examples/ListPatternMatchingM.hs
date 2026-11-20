@@ -194,21 +194,14 @@ takeM ::
   M.Th Int -> M.Th (L.ListT a) -> M.MemoristM (L.ListT a)
 takeM n xs
   = do (M.tick :: M.MemoristM ())
-       arg0 <- M.lazy (pure (0 :: Int))
-       lhs <- M.force arg0
        nValue <- M.force (n :: M.Th Int)
-       if lhs < nValue then
+       if (0 :: Int) < nValue then
            do matched' <- M.force xs
               case matched' of
                 L.NilT -> pure L.NilT
                 L.ConsT y ys
-                  -> do arg3 <- M.lazy
-                                  (do arg4 <- M.lazy
-                                                (do arg7 <- M.lazy (pure (1 :: Int))
-                                                    nValue' <- M.force (n :: M.Th Int)
-                                                    rhs <- M.force arg7
-                                                    pure (nValue' - rhs))
-                                      takeM arg4 ys)
+                  -> do arg4 <- M.lazy (pure (nValue - (1 :: Int)))
+                        arg3 <- M.lazy (takeM arg4 ys)
                         pure (L.ConsT y arg3)
        else
            pure L.NilT

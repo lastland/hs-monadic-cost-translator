@@ -9,6 +9,7 @@ module Cost.Translate.Frontend.ModulePlan
 import Cost.Translate.Callable (expressions)
 import Cost.Translate.Datatypes (constructors, renderType, selectors)
 import Cost.Translate.Frontend.Environment
+import Cost.Translate.Frontend.Expression.Evidence (ExpressionEvidence (..))
 import Cost.Translate.Frontend.Gates (bindingError, locatedAt)
 import Cost.Translate.Frontend.NamePlan (planNames)
 import Cost.Translate.Frontend.Signatures (monadicType, translatedSignatureAs)
@@ -34,21 +35,15 @@ moduleEnvironment ::
     [TyCon] ->
     Map.Map Typed.SourceKey String ->
     Map.Map Name Type ->
-    Map.Map Typed.SourceKey Type ->
+    ExpressionEvidence ->
     Map.Map Name AllocationScope ->
     HsGroup GhcRn ->
     (Env, Map.Map Name [Specialization])
-moduleEnvironment strict datatypes literals types hints checkedScopes group =
+moduleEnvironment strict datatypes literals types evidence scopes group =
     let binds = concatMap snd (topLevelGroups group)
         topNames = Set.fromList [unLoc n | L _ (FunBind _ n _) <- binds]
         specialized =
-            specializedLocals
-                datatypes
-                types
-                hints
-                checkedScopes
-                topNames
-                group
+            specializedLocals datatypes types hints scopes topNames group
         reflected = reflectedLocals types topNames specialized group
         expressionTypes =
             Map.fromList
@@ -68,6 +63,8 @@ moduleEnvironment strict datatypes literals types hints checkedScopes group =
                 literals
                 types
                 expressionTypes
+                (certifiedScalars evidence)
+                Map.empty
                 datatypes
                 reflected
                 ( Set.fromList
@@ -84,6 +81,7 @@ moduleEnvironment strict datatypes literals types hints checkedScopes group =
                 Map.empty
      in (env, specialized)
     where
+        hints = occurrenceTypes evidence
         globals = reservedModuleNames datatypes group
         layouts = constructorLayouts datatypes
 

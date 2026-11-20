@@ -38,6 +38,8 @@ data Env = Env
     , inferredLiterals :: Map.Map SourceKey String
     , inferredBindings :: Map.Map Name Type
     , inferredExpressions :: Map.Map SourceKey (Type, O.Ty)
+    , scalarEvidence :: Map.Map SourceKey Type
+    , knownScalarValues :: Map.Map Name [(Type, O.Expr)]
     , sourceDatatypes :: [TyCon]
     , reflectiveBindings :: Set.Set Name
     , singleConstructors :: Set.Set String
@@ -52,11 +54,19 @@ lookupEnv name = Map.lookup name . envBindings
 
 insertEnv :: Name -> Binding -> Env -> Env
 insertEnv name binding env =
-    env {envBindings = Map.insert name binding (envBindings env)}
+    env
+        { envBindings = Map.insert name binding (envBindings env)
+        , knownScalarValues = Map.delete name (knownScalarValues env)
+        }
 
 extendEnv :: [(Name, Binding)] -> Env -> Env
 extendEnv additions env =
-    env {envBindings = Map.union (Map.fromList additions) (envBindings env)}
+    env
+        { envBindings = Map.union bindings (envBindings env)
+        , knownScalarValues = Map.difference (knownScalarValues env) bindings
+        }
+    where
+        bindings = Map.fromList additions
 
 localName :: Env -> Name -> String
 localName env name = Map.findWithDefault "local" name locals

@@ -121,6 +121,16 @@ The translator instruments renamed source syntax (via the GHC API) rather than o
 
 Unticked operations still pay the ticks of any thunks they force. Costs count source-level function entries, not elapsed wall-clock time or GHC-optimized execution.
 
+For a saturated built-in primitive at a known concrete scalar type, the
+translator uses literal operands directly. If a strict use has already forced
+a source binding on the current path, a later scalar operation can use that
+value at the same type. A lazy consumer still receives the original thunk.
+For example, the guard in `take` forces the count; the selected cons branch
+can suspend the decrement using that count, while the recursive call stays
+inside the tail thunk. These choices preserve the demanded value and its
+ticks, but private thunk names, allocations, and usage annotations may differ
+from a translation that suspends every operand.
+
 ### Laziness and Local Sharing
 
 Translated bindings express evaluation and sharing through the runtime's core monadic and thunk primitives—`lazy`, `force`, `forcing`, `bind`, `ret`, and `tick` (rendered using standard Haskell `do` notation and `pure`)—together with metadata-preserving structural representation views:

@@ -13,7 +13,7 @@ import Control.Monad (guard, zipWithM)
 import Cost.Translate.Callable (spine)
 import Cost.Translate.Datatypes (renderType)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions (reuseThunk, suspendArgument)
+import Cost.Translate.Frontend.Expression.Thunks (reuseThunk, suspendArgument)
 import Cost.Translate.Frontend.LocalValues (bodyTypeRenamings, usedNames)
 import Cost.Translate.Frontend.NamePlan (NamePlan (..))
 import Cost.Translate.Frontend.Resolve (resolvedConstructor)

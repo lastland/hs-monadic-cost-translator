@@ -3,6 +3,7 @@ module Cost.Translate.Frontend.Module (emitModule) where
 import Cost.Translate.Datatypes (emitDatatypeSections)
 import Cost.Translate.Frontend.Emit (emitBind, emitCondition, emitExpr)
 import Cost.Translate.Frontend.Environment
+import Cost.Translate.Frontend.Expression.Evidence (ExpressionEvidence (..))
 import Cost.Translate.Frontend.Gates (checkRecursiveValues)
 import Cost.Translate.Frontend.Logs (moduleLogs)
 import Cost.Translate.Frontend.ModulePlan
@@ -29,11 +30,11 @@ emitModule ::
     [TyCon] ->
     Map.Map Name Type ->
     Map.Map Typed.SourceKey String ->
-    Map.Map Typed.SourceKey Type ->
+    ExpressionEvidence ->
     Map.Map Name Typed.FunctionType ->
     HsGroup GhcRn ->
     (Either String (HsModule GhcPs, [Section], [Extension.Extension]), String)
-emitModule strict target source hash dts original literals hints checked group =
+emitModule strict target source hash dts raw literals evidence checked group =
     ( moduleResult
         target
         source
@@ -45,8 +46,9 @@ emitModule strict target source hash dts original literals hints checked group =
     , moduleLogs constructorEnv group
     )
     where
+        hints = occurrenceTypes evidence
         (helperTypes, adjustType) = specializeHelpers group checked hints
-        types = helperTypes `Map.union` Map.map adjustType original
+        types = helperTypes `Map.union` Map.map adjustType raw
         adjustedHints = Map.map adjustType hints
         checkedScopes = Map.mapWithKey scope checked
         scope name info
@@ -62,7 +64,7 @@ emitModule strict target source hash dts original literals hints checked group =
                 dts
                 literals
                 types
-                adjustedHints
+                evidence {occurrenceTypes = adjustedHints}
                 checkedScopes
                 group
         binds = concatMap snd (topLevelGroups group)

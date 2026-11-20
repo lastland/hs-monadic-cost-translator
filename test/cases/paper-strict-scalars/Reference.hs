@@ -90,3 +90,10 @@ mappedGuardsM x y = do
     if a <= 0 then pure 0 else do
         b <- M.force y
         pure (if b > 0 then a - b else 0)
+
+-- The outer function and its local operator each charge one entry tick.
+shadowPlusM :: M.Th Int -> M.MemoristM Int
+shadowPlusM x = M.tick >> M.tick >> M.force x
+
+givenAddM :: M.Th Int -> M.MemoristM (M.MaybeT Int)
+givenAddM x = M.tick >> (M.JustT <$> M.lazy ((+ 1) <$> M.force x))

@@ -193,8 +193,8 @@ annotatedM ::
   forall (a :: Type). M.Th Bool -> M.Th a -> M.Th a -> M.MemoristM a
 annotatedM c x y
   = do (M.tick :: M.MemoristM ())
-       ((do condition <- (M.force c :: M.MemoristM Bool)
-            if condition then
+       ((do condition0 <- M.force (c :: M.Th Bool)
+            if condition0 then
                 (M.force x :: M.MemoristM a)
             else
                 do savedanchor <- M.lazy (M.force y)
@@ -210,15 +210,14 @@ workM :: M.Th Int -> M.MemoristM Int
 workM x
   = do (M.tick :: M.MemoristM ())
        xValue <- M.force (x :: M.Th Int)
-       xValue' <- M.force (x :: M.Th Int)
-       pure (xValue + xValue')
+       pure (xValue + xValue)
 
 chooseM ::
   forall (a :: Type). M.Th Bool -> M.Th a -> M.Th a -> M.MemoristM a
 chooseM c x y
   = do (M.tick :: M.MemoristM ())
-       condition <- (M.force c :: M.MemoristM Bool)
-       if condition then M.force x else M.force y
+       condition0 <- M.force (c :: M.Th Bool)
+       if condition0 then M.force x else M.force y
 
 computedM :: M.Th Bool -> M.Th Int -> M.Th Int -> M.MemoristM Int
 computedM c x y

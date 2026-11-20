@@ -3,7 +3,10 @@ module Cost.Translate.Frontend.Emit (emitBind, emitExpr, emitCondition) where
 import Control.Monad (unless, zipWithM)
 import Cost.Translate.Callable (emitCallable, isComposition, spine)
 import Cost.Translate.Frontend.Environment
-import Cost.Translate.Frontend.Expressions
+import Cost.Translate.Frontend.Expression.Arguments
+import Cost.Translate.Frontend.Expression.Conditions
+import Cost.Translate.Frontend.Expression.Thunks
+import Cost.Translate.Frontend.Expression.Values (knownValue, returningScalar)
 import Cost.Translate.Frontend.Gates
 import Cost.Translate.Frontend.LocalValues
 import Cost.Translate.Frontend.Match.Fallback (withFallback)
@@ -53,10 +56,19 @@ emitGuards ::
     Env -> [LGRHS GhcRn (LHsExpr GhcRn)] -> O.Expr -> Either String O.Expr
 emitGuards _ [] fallback = Right fallback
 emitGuards env [L _ (GRHS _ [] body)] _ = emitExpr env body
-emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback = do
-    next <- emitGuards env rest fallback
-    let name = actionName env "nextGuard" (getLocA located)
-    withFallback name next (emitGuardStatements env body guards)
+emitGuards env (located@(L _ (GRHS _ guards body)) : rest) fallback =
+    case guards of
+        L _ (BodyStmt _ expr _ _) : gs ->
+            underCondition emitThunk emitExpr env expr $ \scope choose ->
+                following scope $ \miss -> do
+                    yes <- emitGuardStatements scope body gs miss
+                    choose yes miss
+        _ -> following env (emitGuardStatements env body guards)
+    where
+        following scope build = do
+            next <- emitGuards scope rest fallback
+            withFallback label next build
+        label = actionName env "nextGuard" (getLocA located)
 
 emitMatchBody ::
     Env -> Match GhcRn (LHsExpr GhcRn) -> O.Expr -> Either String O.Expr
@@ -73,9 +85,10 @@ emitGuardStatements ::
     O.Expr ->
     Either String O.Expr
 emitGuardStatements scope body [] _ = emitExpr scope body
-emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next = do
-    remaining <- emitGuardStatements scope body gs next
-    emitCondition scope expr remaining next
+emitGuardStatements scope body (L _ (BodyStmt _ expr _ _) : gs) next =
+    underCondition emitThunk emitExpr scope expr $ \scope' choose -> do
+        remaining <- emitGuardStatements scope' body gs next
+        choose remaining next
 emitGuardStatements scope body (s@(L _ (BindStmt _ pat expr)) : gs) next =
     let n = actionName scope "guardThunk" (getLocA s)
      in withMatchThunk scope n expr $ \reference ->
@@ -261,11 +274,15 @@ emitOrdinaryLocalValue signatures scope binding name match done = do
             allocate continuation
 
 emitExpr :: Env -> LHsExpr GhcRn -> Either String O.Expr
+emitExpr env located
+    | Just act <- returningScalar emitThunk env located = act
 emitExpr env located = case unLoc located of
     HsOverLit _ literal -> Right (emitLiteral env located literal)
     HsLit _ (HsChar _ c) -> Right (O.ret (O.char c))
     NegApp _ expression _ -> negatedAction <$> emitExpr env expression
-    HsVar _ name -> emitVariable env located (unLoc name)
+    HsVar _ name
+        | Just (_, value) <- knownValue env located -> Right (O.ret value)
+        | otherwise -> emitVariable env located (unLoc name)
     HsPar _ expr -> emitExpr env expr
     ExprWithTySig _ expr signature ->
         annotateExpression
@@ -274,13 +291,14 @@ emitExpr env located = case unLoc located of
             (not (hasFreshAnnotationVariables signature))
             located
             <$> emitExpr env expr
-    HsIf _ condition yes no -> do
-        yesAction <- emitExpr env yes
-        noAction <- emitExpr env no
-        emitCondition env condition yesAction noAction
+    HsIf _ condition yes no ->
+        underCondition emitThunk emitExpr env condition $ \scope choose -> do
+            yesAction <- emitExpr scope yes
+            noAction <- emitExpr scope no
+            choose yesAction noAction
     HsLet _ locals body -> withLocals env locals (`emitExpr` body)
     ExplicitTuple _ [Present _ a, Present _ b] Boxed ->
-        emitApplied env located (returnConstructor "M.PairT") [a, b]
+        emitConstructor env located "M.PairT" [a, b]
     RecordCon _ name fields -> emitRecord env located (unLoc name) fields
     HsRecSel _ field -> case resolve env (fieldName field) of
         Just (Function fn _) -> Right (O.ret (O.v fn))
@@ -296,19 +314,8 @@ emitExpr env located = case unLoc located of
 
 emitCondition ::
     Env -> LHsExpr GhcRn -> O.Expr -> O.Expr -> Either String O.Expr
-emitCondition env located yes no = case unLoc located of
-    HsPar _ nested -> emitCondition env nested yes no
-    HsVar _ name
-        | Just value <- booleanConstant (unLoc name) ->
-            Right (if value then yes else no)
-    _
-        | Just action <- emitSaturated env (emitThunk env) located branches ->
-            action
-    _ -> do
-        condition <- emitExpr env located
-        pure (conditionalAction condition yes no)
-    where
-        branches = Branching yes no
+emitCondition env located yes no =
+    underCondition emitThunk emitExpr env located (\_ choose -> choose yes no)
 
 emitApplication :: Env -> LHsExpr GhcRn -> Either String O.Expr
 emitApplication env located = case unLoc fun of
@@ -321,25 +328,18 @@ emitApplication env located = case unLoc fun of
     HsRecSel _ field
         | Just (fn, _) <- functionResolver env (fieldName field)
         , length args == 1 ->
-            emitApplied env located (O.app fn) args
+            applyArguments env suspend located (O.app fn) args
     HsVar _ name -> case resolve env (unLoc name) of
         Just (Constructor con count _)
             | length args == count ->
-                emitApplied env located (returnConstructor con) args
+                emitConstructor env located con args
         _
             | Just (fn, count) <- functionResolver env (unLoc name)
-            , length args <= count -> do
-                thunks <- emitArguments env located args
-                pure
-                    ( lazyArguments
-                        thunks
-                        ( \names ->
-                            let invocation = O.app fn names
-                             in if length args == count
-                                    then invocation
-                                    else O.ret invocation
-                        )
-                    )
+            , length args <= count ->
+                let invoke names =
+                        (if length args == count then id else O.ret)
+                            (O.app fn names)
+                 in applyArguments env suspend located invoke args
         _ -> unsupportedCall "call" located (unLoc name)
     _ -> callable
     where
@@ -364,13 +364,13 @@ emitOperator env located left operator right = case unLoc operator of
             emitCallable (partialName env) resolver (emitThunk env) located
     HsVar _ name
         | builtin (unLoc name) "GHC.Types" ":" ->
-            emitApplied env located (returnConstructor "L.ConsT") [left, right]
+            emitConstructor env located "L.ConsT" [left, right]
     HsVar _ name
         | Just (Constructor con 2 _) <- resolve env (unLoc name) ->
-            emitApplied env located (returnConstructor con) [left, right]
+            emitConstructor env located con [left, right]
     HsVar _ name
         | Just (fn, 2) <- functionResolver env (unLoc name) ->
-            emitApplied env located (O.app fn) [left, right]
+            applyArguments env (emitThunk env) located (O.app fn) [left, right]
     HsVar _ name -> unsupportedCall "operator" located (unLoc name)
     _ -> unsupportedExpression located
     where
@@ -385,7 +385,7 @@ emitRecord env located name fields = case lookupEnv name env of
             sequence
                 [ maybe
                     (Right (suspendArgument n missing))
-                    (emitThunk env n)
+                    (emitField env n)
                     ( lookup
                         label
                         [ (fieldName (unLoc (hfbLHS field)), hfbRHS field)
@@ -409,7 +409,7 @@ emitList _ _ _ [] = Right (O.ret (O.v "L.NilT"))
 emitList env located depth (x : xs) = do
     let key = argumentKey located ++ "_list" ++ show depth
         names = argumentNames env key 2
-    h <- zipWithM (emitThunk env) names [x]
+    h <- zipWithM (emitField env) names [x]
     t <- emitList env located (depth + 1) xs
     pure
         ( lazyArguments
@@ -434,23 +434,10 @@ withMatchThunk env name located finish = do
         then O.letE [O.val name [] reference] <$> finish (O.v name)
         else O.doE statements <$> finish reference
 
-emitArguments ::
-    Env ->
-    LHsExpr GhcRn ->
-    [LHsExpr GhcRn] ->
-    Either String [([O.Stmt], O.Expr)]
-emitArguments env located args =
-    zipWithM
-        (emitThunk env)
-        (argumentNames env (argumentKey located) (length args))
-        args
+emitField :: Env -> String -> LHsExpr GhcRn -> Either String ([O.Stmt], O.Expr)
+emitField env = fieldThunk env (emitThunk env)
 
-emitApplied ::
-    Env ->
-    LHsExpr GhcRn ->
-    ([O.Expr] -> O.Expr) ->
-    [LHsExpr GhcRn] ->
-    Either String O.Expr
-emitApplied env located finish args = do
-    thunks <- emitArguments env located args
-    pure (lazyArguments thunks finish)
+emitConstructor ::
+    Env -> LHsExpr GhcRn -> String -> [LHsExpr GhcRn] -> Either String O.Expr
+emitConstructor env site con =
+    applyArguments env (emitField env) site (returnConstructor con)
