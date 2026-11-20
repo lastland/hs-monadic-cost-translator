@@ -2,36 +2,45 @@ module Cost.AcceptedSource
     ( AcceptedSource
     , acceptedSummary
     , verifyAccepted
+    , acceptedSyntax
     ) where
 
 import Control.Monad (unless)
+import Control.Monad.IO.Class (liftIO)
 import Cost.AcceptedOptions
 import GHC
 import GHC.Data.StringBuffer
 import System.Directory (canonicalizePath)
 
-data AcceptedSource = AcceptedSource Module String AcceptedOptions
+data AcceptedSource
+    = AcceptedSource Module String AcceptedOptions (HsModule GhcPs)
 
-acceptedSummary :: HscEnv -> ModSummary -> IO (ModSummary, AcceptedSource)
+acceptedSyntax :: AcceptedSource -> HsModule GhcPs
+acceptedSyntax (AcceptedSource _ _ _ syntax) = syntax
+
+acceptedSummary :: HscEnv -> ModSummary -> Ghc (ParsedModule, AcceptedSource)
 acceptedSummary session summary = do
     buffer <-
-        maybe
-            (hGetStringBuffer (ms_hspp_file summary))
-            pure
-            (ms_hspp_buf summary)
-    options <- acceptedOptions session summary
+        liftIO $
+            maybe
+                (hGetStringBuffer (ms_hspp_file summary))
+                pure
+                (ms_hspp_buf summary)
+    options <- liftIO (acceptedOptions session summary)
+    parsed <- parseModule summary {ms_hspp_buf = Just buffer}
     let accepted =
             AcceptedSource
                 (ms_mod summary)
                 (lexemeToString buffer (len buffer))
                 options
-    pure (summary {ms_hspp_buf = Just buffer}, accepted)
+                (unLoc (pm_parsed_source parsed))
+    pure (parsed, accepted)
 
 verifyAccepted ::
     HscEnv -> [FilePath] -> AcceptedSource -> [ModSummary] -> IO [Module]
-verifyAccepted session paths (AcceptedSource owner snapshot opts) summaries = do
-    matches <- mapM verify summaries
-    pure [ms_mod summary | (summary, True) <- zip summaries matches]
+verifyAccepted session paths (AcceptedSource owner snapshot opts _) modules = do
+    matches <- mapM verify modules
+    pure [ms_mod summary | (summary, True) <- zip modules matches]
     where
         verify summary = case ml_hs_file (ms_location summary) of
             Nothing -> pure False

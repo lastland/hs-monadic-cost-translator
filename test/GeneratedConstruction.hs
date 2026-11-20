@@ -85,10 +85,10 @@ constructionReportsWithOrigin publication output =
         graph <- depanal [] False >>= pinConstructionGraph
         let summaries = mgModSummaries graph
             homes = map ms_mod summaries
-            optionProblems = concatMap checkCompilerOptions summaries
-        unless (null optionProblems) (fail (unlines optionProblems))
         session <- getSession
         origins <- liftIO $ maybe (pure []) (\record -> verifyOrigin record output session summaries) publication
+        let optionProblems = concatMap checkCompilerOptions summaries
+        unless (null optionProblems) (fail (unlines optionProblems))
         parsedModules <- mapM parseModule summaries
         let parsedProblems = concatMap checkParsedSyntax parsedModules
         unless (null parsedProblems) (fail (unlines parsedProblems))

@@ -46,7 +46,7 @@ generate file targetModule = runGhc (Just libdir) $ do
     case mgModSummaries graph of
         [summary] -> do
             session <- getSession
-            (accepted, receipt) <- liftIO (acceptedSummary session summary)
+            (accepted, receipt) <- acceptedSummary session summary
             (result, logs) <- generateChecked file targetModule flags accepted
             pure (fmap (,receipt) result, logs)
         _ -> pure (sourceFailure file ": expected one source module")
@@ -55,10 +55,11 @@ generateChecked ::
     FilePath ->
     String ->
     DynFlags ->
-    ModSummary ->
+    ParsedModule ->
     Ghc (Either Diagnostic String, String)
-generateChecked file target flags summary = do
-    checked <- parseModule summary >>= typecheckModule
+generateChecked file target flags parsed = do
+    let summary = pm_mod_summary parsed
+    checked <- typecheckModule parsed
     desugared <- desugarModule checked
     session <- getSession
     evidence <- case tm_renamed_source checked of

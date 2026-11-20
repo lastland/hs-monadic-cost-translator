@@ -14,7 +14,7 @@ import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
-import GeneratedFunctions (checkTopLevelFunctions)
+import GeneratedFunctions (checkAcceptedFunctions)
 import Paths_cost_translate (getDataFileName)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
@@ -66,7 +66,7 @@ runReferenceCase environment (label, sources) = forM sources $ \fixture -> do
     source <- fixturePath fixture
     result <- stageAndTranslate source (generated </> "Generated.hs")
     publication <- either (fail . ((label ++ ": translation failed: ") ++)) pure result
-    checkTopLevelFunctions (generated </> "Example.hs") (generated </> "Generated.hs")
+    checkAcceptedFunctions publication (generated </> "Generated.hs")
     checkGeneratedConstructionWithOrigin publication (generated </> "Generated.hs")
     copyCase (label </> "Reference.hs") (reference </> "Generated.hs")
     actual <- buildObserver environment generated
@@ -253,6 +253,7 @@ checkSourceScopeLifecycle environment = do
          "OriginHelper.hs:22:", "OriginHelper.hs:25:", "OriginHelper.hs:31:",
          "OriginHelper.hs:37:", "OriginHelper.hs:43:"]
     checkChangedInclude environment
+    checkAcceptedCPP environment
     checkPublicationGuardFor environment "source-map" "origin-section"
         ("generated-construction" </> "OriginSectionPublication.hs")
         ["Generated.hs:13:", "Generated.hs:16:", "colliding-origin-section.hs:100:",
@@ -308,7 +309,7 @@ checkChangedInclude environment = do
         try (runReferenceCase environment ("source-map", [fixture]))
     case result of
         Left (err :: IOException) ->
-            unless ("Example.hs: cannot parse Haskell" `isInfixOf` ioeGetErrorString err)
+            unless ("accepted origin snapshot mismatch: frontend buffer" `isInfixOf` ioeGetErrorString err)
                 (fail ("changed include rejected for the wrong reason: " ++ show err))
         Right _ -> fail "changed CPP inputs must not inherit original-source authority"
     candidate <- readFile marker
@@ -326,6 +327,38 @@ checkChangedInclude environment = do
             unless ("preprocessed source" `isInfixOf` ioeGetErrorString err)
                 (fail ("construction CPP boundary rejected for the wrong reason: " ++ show err))
         Right () -> fail "construction checking must not accept preprocessed home sources"
+
+checkAcceptedCPP :: ReferenceEnvironment -> IO ()
+checkAcceptedCPP environment = do
+    root <- createTempDirectory (environmentRoot environment) "accepted-cpp-"
+    let header = root </> "include.h"
+        included = root </> "IncludedCPP.hs"
+        identity = root </> "IdentityCPP.hs"
+    writeFile header "#define IDENTITY(x) x\n"
+    writeFile included (unlines
+        ["{-# LANGUAGE CPP #-}", "module Example where",
+         "#include " ++ show header, "f :: a -> a", "f x = IDENTITY(x)"])
+    writeFile identity (unlines
+        ["{-# LANGUAGE CPP #-}", "module Example where",
+         "#define IDENTITY(x) x", "#define HIDDEN hidden",
+         "f :: a -> a", "f x = IDENTITY(x)",
+         "HIDDEN :: a -> a", "HIDDEN x = x",
+         "(%%) :: a -> b -> a", "x %% y = x"])
+    artifacts <- runReferenceCase environment ("identity", [included])
+    pureArtifacts <- runReferenceCase environment ("identity", [identity])
+    checkSourceOptimizations environment (artifacts ++ pureArtifacts)
+    let pureOutput = root </> "PureGenerated.hs"
+    purePublication <- stageAndTranslate identity pureOutput >>= either fail pure
+    writeFile (root </> "Example.hs") "module Example where\n"
+    writeFile pureOutput "module PureGenerated where\n"
+    missing <- try (checkAcceptedFunctions purePublication pureOutput)
+    case missing of
+        Left (err :: IOException) ->
+            unless (all (`isInfixOf` ioeGetErrorString err)
+                    ["binding fM", "binding hiddenM", "binding operatorM_37_37"])
+                (fail ("accepted CPP syntax lost original obligations: " ++ show err))
+        Right () -> fail "accepted CPP syntax must retain hidden and operator obligations"
+    putStrLn "PASS: pure accepted CPP / actual parsed syntax, hidden/operator obligations / independent O0/O2 references"
 
 -- These are infrastructure specimens, not translator correctness evidence.
 -- They deliberately inject known mistakes and must be rejected by the same

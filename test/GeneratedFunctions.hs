@@ -1,8 +1,9 @@
-module GeneratedFunctions (checkTopLevelFunctions, checkGeneratedFunctionSpecimens, parseHaskellModule) where
+module GeneratedFunctions (checkTopLevelFunctions, checkAcceptedFunctions, checkGeneratedFunctionSpecimens, parseHaskellModule) where
 
 import Control.Exception (IOException, displayException, try)
 import Control.Monad (unless)
 import Cost.Translate (generatedName)
+import Cost.Publication (Publication, publicationSyntax)
 import Data.List (isInfixOf)
 import GHC
     ( GhcPs, HsModule(..), HsDecl(..), HsBindLR(..), MatchGroup(..), Match(..), Pat(..)
@@ -31,6 +32,13 @@ import System.FilePath ((</>))
 checkTopLevelFunctions :: FilePath -> FilePath -> IO ()
 checkTopLevelFunctions source output = do
     original <- parseHaskellModule source
+    checkFunctionSyntax original output
+
+checkAcceptedFunctions :: Publication -> FilePath -> IO ()
+checkAcceptedFunctions publication = checkFunctionSyntax (publicationSyntax publication)
+
+checkFunctionSyntax :: HsModule GhcPs -> FilePath -> IO ()
+checkFunctionSyntax original output = do
     generated <- parseHaskellModule output
     let bindings = concatMap topLevelNames (hsmodDecls generated)
         missing =

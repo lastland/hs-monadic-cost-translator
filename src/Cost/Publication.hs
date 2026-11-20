@@ -4,6 +4,7 @@ module Cost.Publication
     , Publication
     , stageAndTranslate
     , verifyOrigin
+    , publicationSyntax
     ) where
 
 import Control.Exception (IOException, SomeException, displayException, try)
@@ -44,6 +45,9 @@ translateAccepted source output = do
             writeFile logPath (message ++ "\n") >> pure (Left message)
 
 data Publication = Publication FilePath [FilePath] AcceptedSource
+
+publicationSyntax :: Publication -> GHC.HsModule GHC.GhcPs
+publicationSyntax (Publication _ _ accepted) = acceptedSyntax accepted
 
 stageAndTranslate :: FilePath -> FilePath -> IO (Either String Publication)
 stageAndTranslate fixture output = do
