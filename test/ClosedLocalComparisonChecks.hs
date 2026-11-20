@@ -16,7 +16,7 @@ checkClosedLocalComparisons = forM_ cases $ \(label, body, expected) ->
     withSystemTempDirectory ("closed-local-" ++ label) $ \directory -> do
         let path = directory </> "Generated.hs"
         writeFile path (unlines
-            (["{-# LANGUAGE NoMonoLocalBinds, FlexibleContexts, FlexibleInstances, UndecidableInstances #-}",
+            (["{-# LANGUAGE NoMonoLocalBinds, FlexibleContexts, FlexibleInstances, UndecidableInstances, TypeFamilies #-}",
               "module Generated where", "import qualified Memorist.Memorist as M"] ++ body))
         (status, out, err) <- readProcessWithExitCode "ghc"
             ["-v0", "-fno-code", "-fforce-recomp", "-i", "-outputdir", directory,
@@ -103,6 +103,20 @@ checkClosedLocalComparisons = forM_ cases $ \(label, body, expected) ->
              "                         pure (Callback (\\y -> (M.tick :: M.MemoristM ()) >> pure (x == y)))",
              "       in do Callback callback <- producer (1::Int)",
              "             callback 2"], Just eqFailure)
+        ,("callback-argument",
+            ["root :: M.MemoristM Bool",
+             "root = let helper x callback = (M.tick :: M.MemoristM ()) >> pure (x == callback x)",
+             "       in helper (1::Int) (\\x -> x)"], Just eqFailure)
+        ,("family-result-interface",
+            ["type family Payload a where",
+             "  Payload Int = Bool",
+             "  Payload a = a",
+             "payload :: a -> Payload a",
+             "payload _ = undefined",
+             "root :: M.MemoristM Bool",
+             "root = let helper x = (M.tick :: M.MemoristM ()) >>",
+             "                        pure (if x == x then payload x else payload x)",
+             "       in helper (1::Int)"], Just eqFailure)
         ,("unrelated-class-not-authorized",
             ["class Other a where mystery :: a -> Bool",
              "instance Other Int where mystery _ = True",
