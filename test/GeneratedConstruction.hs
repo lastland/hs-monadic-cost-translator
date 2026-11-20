@@ -127,6 +127,17 @@ checkGeneratedConstructionSpecimens = do
     accepts "QuantifiedApplication.hs"
     accepts "ConcreteCaller.hs"
     accepts "RenamedProof.hs"
+    rejectsAt "QuantifiedEscapes.hs"
+        [(16, reprFailure), (19, reprFailure), (21, reprFailure),
+         (23, forbidden "Memorist.Data.Interface.Data.abstract"),
+         (31, reprFailure), (39, reprFailure), (46, protectedEq), (49, reprFailure)]
+    rejectsAt "QuantifiedWrapper.hs" [(19, reprFailure), (22, reprFailure)]
+    rejectsAt "QuantifiedFunction.hs" [(18, reprFailure), (21, reprFailure)]
+    rejectsAt "QuantifiedForeign.hs"
+        [(18, unknown "QuantifiedForeign.reprM"), (19, unknown "QuantifiedForeign.abstract")]
+    quantifiedCollision <- specimen "QuantifiedCollision.hs"
+    typechecks quantifiedCollision
+    rejection quantifiedCollision >>= requireMappedCollision
     accepts "StockSimple.hs"
     accepts "StockSum.hs"
     accepts "StockReset.hs"
@@ -533,6 +544,8 @@ checkGeneratedConstructionSpecimens = do
     selected op = "unapproved selected method " ++ op
     unknown op = selected (op ++ ": unknown executable method/default dependency")
     reprFailure = selected "Memorist.Data.Interface.Data.reprM: reprM requires a concrete method-specific construction closure and audited carrier"
+    requireMappedCollision reports =
+        requireAt reports "same-physical-roles.hs" [(50, reprFailure)]
     functorWrapper = selected "GHC.Internal.Data.Functor.<$>: requires the concrete audited Memorist instance"
     carrier op = selected ("GHC.Internal.Base." ++ op ++ ": requires the concrete audited Memorist instance")
     checksParameterizedTags = do
