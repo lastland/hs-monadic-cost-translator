@@ -64,3 +64,24 @@ sh scripts/stack-test.sh --test-arguments=manual-thunk-matching
 sh scripts/stack-test.sh --test-arguments=thunk-matching-sharing
 sh scripts/stack-test.sh --test-arguments=thunk-sharing
 ```
+
+## Bounded feasibility evidence
+
+Throwaway branch `constructor-field-sharing-prototype-probe`, commit `c6e696e`,
+retains a native O0/O2 probe and its receipt under
+`.scratch/constructor-field-sharing-prototype/`. No probe implementation is
+integrated into the translator.
+
+For one `sameM` call, manually retaining one native thunk gives sum 20, cost 2
+and equal field identities, matching the unchanged reference. Complete
+structural/construction checks and ordinary callers pass. The hand-edited
+candidate is not claimed to retain authenticated publication provenance.
+Two calls still cost 4 instead of 3 and retain different identities. The
+unchanged full caller remains RED, including cross-export sharing.
+
+A separate full monomorphic source variant confirms the same bounded result.
+This does not establish an automatic occurrence planner or dictionary
+equivalence for the original polymorphic `shared`. Existing specialization
+checks reconstruct types and predicates, not selected dictionary identities.
+No constrained result-type-only merging, runtime extension or test waiver is
+approved by this evidence.
