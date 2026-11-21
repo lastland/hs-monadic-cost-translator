@@ -5,6 +5,7 @@ module RuntimeAllocator (checkRuntimeAllocator) where
 import Control.Monad (forM_, unless)
 import Data.List (isInfixOf, isSuffixOf, sort)
 import Paths_cost_translate (getDataFileName)
+import ReferenceRunner (checkProcessCrash)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, listDirectory)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeBaseName)
@@ -28,9 +29,11 @@ checkRuntimeAllocator = do
         (status, out, err) <- readProcessWithExitCode "ghc"
             (compilerFlags output ++ ["-O" ++ optimization, source, "-o", executable]) ""
         writeFile (output </> "compile.log") (out ++ err)
+        checkProcessCrash status (out ++ err)
         unless (status == ExitSuccess) (fail ("allocator positive control did not compile\n" ++ out ++ err))
         (ran, results, problems) <- readProcessWithExitCode executable [] ""
         writeFile (output </> "execution.log") (results ++ problems)
+        checkProcessCrash ran (results ++ problems)
         unless (ran == ExitSuccess && "PASS: ordinary State and native allocation" `isInfixOf` results) $
             fail ("allocator positive control failed\n" ++ results ++ problems)
     forM_ rejectedClients $ \(name, expected) -> do
@@ -41,7 +44,8 @@ checkRuntimeAllocator = do
             (compilerFlags output ++ ["-fno-code", source]) ""
         let diagnostic = out ++ err
         writeFile (output </> "compile.log") diagnostic
-        unless (status /= ExitSuccess && all (`isInfixOf` diagnostic) expected) $
+        checkProcessCrash status diagnostic
+        unless (status == ExitFailure 1 && all (`isInfixOf` diagnostic) expected) $
             fail (name ++ ": allocator access must be rejected with " ++ show expected ++ ", got " ++
                 show status ++ "\n" ++ diagnostic ++ "\nArtifacts: " ++ root)
     putStrLn ("PASS: runtime-allocator / " ++ show (length rejectedClients) ++

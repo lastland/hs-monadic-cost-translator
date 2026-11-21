@@ -13,7 +13,7 @@ module ReferenceRunner
 import Control.Exception (IOException, catch, throwIO, try, bracket_)
 import Control.Monad (forM, forM_, unless, when, void)
 import AcceptedOptionsChecks (checkAcceptedOptions)
-import Cost.Publication (stageAndTranslate)
+import Cost.Publication (isCompilerPanic, stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
@@ -162,8 +162,9 @@ compileAt options support sandbox entry packages executable = do
         externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) (out ++ err)
 
 checkProcessCrash :: ExitCode -> String -> IO ()
-checkProcessCrash (ExitFailure code) output | code < 0 || code >= 128 =
-    fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
+checkProcessCrash (ExitFailure code) output
+    | code < 0 || code >= 128 || isCompilerPanic output =
+        fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
 checkProcessCrash _ _ = pure ()
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real

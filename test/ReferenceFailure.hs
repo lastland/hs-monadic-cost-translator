@@ -6,6 +6,7 @@ module ReferenceFailure
     ) where
 
 import Control.Exception (Exception, throwIO)
+import Cost.Publication (isCompilerPanic)
 import Data.Char (isSpace)
 import Data.List (isInfixOf, isPrefixOf)
 
@@ -35,8 +36,9 @@ isSetup TranslationDiagnostic diagnostic =
      any (`isInfixOf` diagnostic)
         ["unknown symbol", "undefined symbol", "Symbol not found", "dlopen", "panic!"])
 isSetup CompilationDiagnostic diagnostic =
+    isCompilerPanic diagnostic ||
     any (`isInfixOf` diagnostic)
-        ["cannot satisfy -package", "can't find a package database", "ghc: panic!"]
+        ["cannot satisfy -package", "can't find a package database"]
 isSetup ComparisonDiagnostic diagnostic = any protocolFailure (lines diagnostic)
   where
     protocolFailure line =
