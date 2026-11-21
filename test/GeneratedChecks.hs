@@ -61,10 +61,11 @@ checkManualSourceWarnings artifacts = do
     (compiled, out, err) <- readProcessWithExitCode "ghc"
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-outputdir", root </> "source-objects", source] ""
-    writeFile (root </> "source-warnings.log") (out ++ err)
-    ReferenceRunner.checkProcessCrash compiled (out ++ err)
+    let diagnostic = out ++ "\n" ++ err
+    writeFile (root </> "source-warnings.log") diagnostic
+    ReferenceRunner.checkProcessCrash compiled diagnostic
     unless (compiled == ExitSuccess) $
-        externalFailure CompilationDiagnostic "manual source warning check failed" (out ++ err)
+        externalFailure CompilationDiagnostic "manual source warning check failed" diagnostic
     hlint <- findExecutable "hlint"
     command <- maybe (fatalSetupFailure "manual example lint requires hlint on PATH") pure hlint
     (linted, lintOut, lintErr) <- readProcessWithExitCode command [source] ""
@@ -159,10 +160,11 @@ checkWarningsAndHLint root warningLog = do
     (compiled, out, err) <- readProcessWithExitCode "ghc"
         ["-v0", "-fno-code", "-fforce-recomp", "-Wall", "-Werror",
          "-package", "MemoristANT", "-package", "QuickCheck", "-i", "-i" ++ root, output] ""
-    writeFile (root </> warningLog) (out ++ err)
-    ReferenceRunner.checkProcessCrash compiled (out ++ err)
+    let diagnostic = out ++ "\n" ++ err
+    writeFile (root </> warningLog) diagnostic
+    ReferenceRunner.checkProcessCrash compiled diagnostic
     unless (compiled == ExitSuccess) $
-        externalFailure CompilationDiagnostic "generated warning check failed" (out ++ err)
+        externalFailure CompilationDiagnostic "generated warning check failed" diagnostic
     hlint <- findExecutable "hlint"
     case hlint of
         Nothing -> fatalSetupFailure "generated code HLint requires hlint"

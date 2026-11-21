@@ -23,6 +23,7 @@ import ConstructionRuntime (resolveExport, resolveValue, runtime)
 import ConstructionSyntax (checkCompilerOptions, checkParsedSyntax, checkSyntax)
 import ConstructionViews (coreViewNames, viewSupport)
 import GeneratedFunctions (parseHaskellModule)
+import ReferenceFailure (checkProcessCrash)
 import GHC
     ( ClsInstDecl(..), GRHS(..), GRHSs(..), GhcPs, HsBindLR(FunBind), HsDecl(..)
     , HsModule(..), HsType(..), InstDecl(ClsInstD), LHsBind, LPat, Match(..), MatchGroup(..), Pat(BangPat)
@@ -183,6 +184,7 @@ checkGeneratedConstructionSpecimens = do
     typechecks quantifiedCollision
     rejection quantifiedCollision >>= requireMappedCollision
     accepts "ShapeStock.hs"
+    accepts "ShapeStockNat.hs"
     accepts "ShapeStockSum.hs"
     accepts "RenamedStock.hs"
     rejectsAt "ShapeStockEscapes.hs"
@@ -666,7 +668,8 @@ checkGeneratedConstructionSpecimens = do
             (status, out, err) <- readProcessWithExitCode "ghc"
                 ["-v0", "-fno-code", "-fforce-recomp", "-i", "-i" ++ takeDirectory output,
                  "-outputdir", objects, "-package", "MemoristANT", output] ""
-            unless (status /= ExitSuccess && "Duplicate instance declarations" `isInfixOf` err) $
+            checkProcessCrash status (out ++ "\n" ++ err)
+            unless (status == ExitFailure 1 && "Duplicate instance declarations" `isInfixOf` err) $
                 fail ("generic stock/manual heads must conflict even with different contexts or overlap flags:\n" ++ out ++ err)
     tval = "Memorist.Base.Thunk.tval"
     eval1 = "Memorist.Base.Core.eval1"

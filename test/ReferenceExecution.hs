@@ -54,7 +54,7 @@ runReferences environment cases = do
                 (checkOptimizedReferenceCases "acyclic runtime demand bundle" environment [artifact])
             when (label == "higher-kinded-stock-context")
                 (checkOptimizedReferenceCases "higher-kinded stock context" environment [artifact])
-            when (label `elem` ["higher-kinded-datatype-field", "higher-kinded-polykinded-field",
+            when (label `elem` ["higher-kinded-demands", "higher-kinded-datatype-field", "higher-kinded-polykinded-field",
                     "polymorphic-checked-payload-kinds", "polymorphic-dependent-payload-kinds",
                     "polymorphic-vacuous-quantification"])
                 (checkOptimizedReferenceCases label environment [artifact])

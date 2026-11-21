@@ -92,7 +92,7 @@ checkSelection = do
                 not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"])) $
             fail ("setup errors must be fatal, not reported as reference regressions\n" ++ childResult status out err)
     checkInterrupted executable
-    checkCandidateCompilerCrashes executable
+    checkCompilerCrashes executable
     checkMissingRuntimeCompilerCrash executable
     putStrLn "PASS: reference-selection / per-source isolation, strict failures, continuation, listing and mode selection"
 
@@ -148,7 +148,7 @@ withComparisonOutcome recovered executable source action =
         writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
             ["if [ \"$REFERENCE_RECOVERY\" = 0 ] && [ -z \"$REFERENCE_FAILURE_SOURCE\" ]; then"
             ,"  case \"$*\" in *-fno-code*Generated.hs*)"
-            ,"    echo 'Example.hs:1:1: error: user payload \"ghc: panic!\"' >&2; exit 1 ;; esac"
+            ,"    echo 'Example.hs:1:1: error: user payload \"ghc: panic!\" and \"ghc-9.10.3: panic!\"' >&2; exit 1 ;; esac"
             ,"fi"]
             ["if [ \"$REFERENCE_RECOVERY\" = 1 ]; then exec \"$0.real\" \"$2\" \"$2\"; fi"
             ,"sandbox=${1%/*}"
@@ -197,41 +197,88 @@ checkNegativeComparerCrash executable =
                 childResult status out err)
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
-checkCandidateCompilerCrashes :: FilePath -> IO ()
-checkCandidateCompilerCrashes executable =
-    mapM_ check
+data CompilerStage = CandidateCompiler | ObserverCompiler | AllocatorCompiler
+    | ManualWarningCompiler | GeneratedWarningCompiler | DuplicateCompiler
+
+checkCompilerCrashes :: FilePath -> IO ()
+checkCompilerCrashes executable = do
+    mapM_ (check DuplicateCompiler)
+        [("signal resembling rejection", "echo 'Duplicate instance declarations' >&2; kill -TERM \"$$\"")
+        ,("raw panic resembling rejection",
+          "echo \"ghc: panic! (the 'impossible' happened)\" >&2; " ++
+          "echo 'Duplicate instance declarations' >&2; exit 1")
+        ,("versioned panic resembling rejection",
+          "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
+          "echo 'Duplicate instance declarations' >&2; exit 1")]
+    mapM_ (`check` versionedPanicAfterStdout)
+        [ManualWarningCompiler, GeneratedWarningCompiler]
+    check AllocatorCompiler
+        ("versioned panic resembling rejection",
+         "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
+         "echo 'No instance for MonadState' >&2; exit 1")
+    mapM_ (check ObserverCompiler) [versionedPanicAfterStdout, versionedPanic]
+    mapM_ (check CandidateCompiler)
         [("signal", "kill -TERM \"$$\"")
-        ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+        ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
+        ,versionedPanic
+        ,versionedPanicAfterStdout]
   where
-    check (label, crash) =
+    panicCommand = "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1"
+    versionedPanic =
+        ("versioned exit-1 panic", panicCommand)
+    versionedPanicAfterStdout =
+        ("versioned exit-1 panic after stdout", "printf compiler-progress; " ++ panicCommand)
+    check stage (label, crash) =
         withSystemTempDirectory "reference-selection-crash-" $ \root -> do
             realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
             environment <- getEnvironment
-            let wrapper = root </> "ghc"
+            let (target, context, arguments, diagnostic, artifactMessage) = case stage of
+                    CandidateCompiler ->
+                        ("Generated.hs", "candidate", ["--all-references", "anf-scoped-renaming", "identity"],
+                         "setup error: generated module compiler crashed", "Reference fixtures and logs:")
+                    ObserverCompiler ->
+                        ("Observe.hs", "observer", ["--all-references", "anf-scoped-renaming", "identity"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                    AllocatorCompiler ->
+                        ("/Get.hs", "allocator rejection", ["runtime-allocator"],
+                         "reference setup error:", "Allocator contract clients and logs:")
+                    ManualWarningCompiler ->
+                        ("source-objects", "manual warning", ["manual-terminal-do"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                    GeneratedWarningCompiler ->
+                        ("-Wall*-Werror*-package", "generated warning", ["generated-warnings-minimal"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                    DuplicateCompiler ->
+                        ("/DuplicateGeneric.hs", "duplicate instance rejection", ["generated-construction"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                wrapper = root </> "ghc"
                 injected =
                     [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
                     ,("REFERENCE_REAL_GHC", realGhc)]
             writeFile wrapper (compilerWrapper "\"$REFERENCE_REAL_GHC\" \"$@\""
-                ["case \"$*\" in *Generated.hs*)", "  " ++ crash ++ " ;; esac"]
+                ["case \"$*\" in *" ++ target ++ "*)", "  " ++ crash ++ " ;; esac"]
                 ["exec \"$0.real\" \"$@\""])
             permissions <- getPermissions wrapper
             setPermissions wrapper permissions {executable = True}
             (status, out, err) <- readCreateProcessWithExitCode
-                (proc executable ["--all-references", "anf-scoped-renaming", "identity"])
+                (proc executable arguments)
                     {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
             unless (status /= ExitSuccess &&
-                    "setup error: generated module compiler crashed" `isInfixOf` err &&
-                    not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
-                    length (filter ("Reference fixtures and logs:" `isPrefixOf`) (lines out)) == 1) $
-                fail ("candidate compiler " ++ label ++ " must stop the suite before later cases\n" ++
+                    diagnostic `isInfixOf` err &&
+                    (case stage of
+                        DuplicateCompiler -> not ("PASS: generated-construction / nominal observer support" `isInfixOf` out)
+                        _ -> not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
+                            length (filter (artifactMessage `isPrefixOf`) (lines out)) == 1)) $
+                fail (context ++ " compiler " ++ label ++ " must stop the suite before later cases\n" ++
                     childResult status out err)
-            putStrLn ("PASS: reference-selection / candidate compiler " ++ label ++ " is fatal")
+            putStrLn ("PASS: reference-selection / " ++ context ++ " compiler " ++ label ++ " is fatal")
 
 checkMissingRuntimeCompilerCrash :: FilePath -> IO ()
 checkMissingRuntimeCompilerCrash executable =
     mapM_ check
         [("signal", "kill -TERM \"$$\"")
-        ,("panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")]
+        ,("panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
+        ,("versioned panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")]
   where
     check (label, crash) =
         withSystemTempDirectory "reference-missing-runtime-crash-" $ \root -> do

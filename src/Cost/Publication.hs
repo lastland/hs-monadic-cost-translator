@@ -5,6 +5,7 @@ module Cost.Publication
     , stageAndTranslate
     , verifyOrigin
     , publicationSyntax
+    , isCompilerPanic
     ) where
 
 import Control.Exception
@@ -23,6 +24,7 @@ import Cost.Translate.Frontend (generate)
 import Cost.Translate.Names (generatedName)
 import Data.List (isInfixOf, isPrefixOf)
 import GHC qualified
+import GHC.Settings.Config (cProjectVersion)
 import System.Directory (canonicalizePath, copyFile, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, takeDirectory, takeFileName, (</>))
@@ -105,7 +107,8 @@ publishCandidate source output code temp = do
             , candidate
             ]
             ""
-    appendFile logPath (out ++ err)
+    let diagnostic = unlines [out, err]
+    appendFile logPath diagnostic
     case status of
         ExitSuccess -> do
             renameFile candidate output
@@ -118,7 +121,7 @@ publishCandidate source output code temp = do
             let category =
                     if exitStatus < 0 || exitStatus >= 128
                         then "setup error: generated module compiler crashed"
-                        else failureCategory (out ++ err)
+                        else failureCategory diagnostic
             appendFile logPath (category ++ "\n")
             pure (Left (category ++ "; see " ++ logPath))
     where
@@ -126,7 +129,7 @@ publishCandidate source output code temp = do
 
 failureCategory :: String -> String
 failureCategory diagnostic
-    | any ("ghc: panic!" `isPrefixOf`) (lines diagnostic) =
+    | isCompilerPanic diagnostic =
         "setup error: generated module compiler crashed"
     | any
         (`isInfixOf` diagnostic)
@@ -136,3 +139,9 @@ failureCategory diagnostic
         ] =
         "setup error: target modules are unavailable in GHC's environment"
     | otherwise = "generated-code type error"
+
+isCompilerPanic :: String -> Bool
+isCompilerPanic diagnostic =
+    any (\line -> any (`isPrefixOf` line) headers) (lines diagnostic)
+    where
+        headers = ["ghc: panic!", "ghc-" ++ cProjectVersion ++ ": panic!"]
