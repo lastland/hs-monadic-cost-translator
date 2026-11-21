@@ -205,14 +205,18 @@ checkCompilerCrashes executable = do
         ("versioned panic resembling rejection",
          "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
          "echo 'No instance for MonadState' >&2; exit 1")
-    check ObserverCompiler versionedPanic
+    mapM_ (check ObserverCompiler) [versionedPanicAfterStdout, versionedPanic]
     mapM_ (check CandidateCompiler)
         [("signal", "kill -TERM \"$$\"")
         ,("exit-1 panic", "echo \"ghc: panic! (the 'impossible' happened)\" >&2; exit 1")
-        ,versionedPanic]
+        ,versionedPanic
+        ,versionedPanicAfterStdout]
   where
+    panicCommand = "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1"
     versionedPanic =
-        ("versioned exit-1 panic", "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; exit 1")
+        ("versioned exit-1 panic", panicCommand)
+    versionedPanicAfterStdout =
+        ("versioned exit-1 panic after stdout", "printf compiler-progress; " ++ panicCommand)
     check stage (label, crash) =
         withSystemTempDirectory "reference-selection-crash-" $ \root -> do
             realGhc <- findExecutable "ghc" >>= maybe (fail "compiler crash test needs ghc") pure
