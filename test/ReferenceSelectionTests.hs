@@ -198,10 +198,18 @@ checkNegativeComparerCrash executable =
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
 data CompilerStage = CandidateCompiler | ObserverCompiler | AllocatorCompiler
-    | ManualWarningCompiler | GeneratedWarningCompiler
+    | ManualWarningCompiler | GeneratedWarningCompiler | DuplicateCompiler
 
 checkCompilerCrashes :: FilePath -> IO ()
 checkCompilerCrashes executable = do
+    mapM_ (check DuplicateCompiler)
+        [("signal resembling rejection", "echo 'Duplicate instance declarations' >&2; kill -TERM \"$$\"")
+        ,("raw panic resembling rejection",
+          "echo \"ghc: panic! (the 'impossible' happened)\" >&2; " ++
+          "echo 'Duplicate instance declarations' >&2; exit 1")
+        ,("versioned panic resembling rejection",
+          "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
+          "echo 'Duplicate instance declarations' >&2; exit 1")]
     mapM_ (`check` versionedPanicAfterStdout)
         [ManualWarningCompiler, GeneratedWarningCompiler]
     check AllocatorCompiler
@@ -240,6 +248,9 @@ checkCompilerCrashes executable = do
                     GeneratedWarningCompiler ->
                         ("-Wall*-Werror*-package", "generated warning", ["generated-warnings-minimal"],
                          "reference setup error:", "Reference fixtures and logs:")
+                    DuplicateCompiler ->
+                        ("/DuplicateGeneric.hs", "duplicate instance rejection", ["generated-construction"],
+                         "reference setup error:", "Reference fixtures and logs:")
                 wrapper = root </> "ghc"
                 injected =
                     [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
@@ -254,8 +265,10 @@ checkCompilerCrashes executable = do
                     {env = Just (injected ++ filter (\(key, _) -> key `notElem` map fst injected) environment)} ""
             unless (status /= ExitSuccess &&
                     diagnostic `isInfixOf` err &&
-                    not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
-                    length (filter (artifactMessage `isPrefixOf`) (lines out)) == 1) $
+                    (case stage of
+                        DuplicateCompiler -> not ("PASS: generated-construction / nominal observer support" `isInfixOf` out)
+                        _ -> not (any (`isInfixOf` out) ["FAIL: ", "PASS: ", "Reference summary:"]) &&
+                            length (filter (artifactMessage `isPrefixOf`) (lines out)) == 1)) $
                 fail (context ++ " compiler " ++ label ++ " must stop the suite before later cases\n" ++
                     childResult status out err)
             putStrLn ("PASS: reference-selection / " ++ context ++ " compiler " ++ label ++ " is fatal")
