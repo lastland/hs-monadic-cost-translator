@@ -198,9 +198,12 @@ checkNegativeComparerCrash executable =
         putStrLn "PASS: reference-harness / negative-specimen comparer crashes are fatal"
 
 data CompilerStage = CandidateCompiler | ObserverCompiler | AllocatorCompiler
+    | ManualWarningCompiler | GeneratedWarningCompiler
 
 checkCompilerCrashes :: FilePath -> IO ()
 checkCompilerCrashes executable = do
+    mapM_ (\stage -> check stage versionedPanicAfterStdout)
+        [ManualWarningCompiler, GeneratedWarningCompiler]
     check AllocatorCompiler
         ("versioned panic resembling rejection",
          "echo \"ghc-9.10.3: panic! (the 'impossible' happened)\" >&2; " ++
@@ -231,6 +234,12 @@ checkCompilerCrashes executable = do
                     AllocatorCompiler ->
                         ("/Get.hs", "allocator rejection", ["runtime-allocator"],
                          "reference setup error:", "Allocator contract clients and logs:")
+                    ManualWarningCompiler ->
+                        ("source-objects", "manual warning", ["manual-terminal-do"],
+                         "reference setup error:", "Reference fixtures and logs:")
+                    GeneratedWarningCompiler ->
+                        ("-Wall*-Werror*-package", "generated warning", ["generated-warnings-minimal"],
+                         "reference setup error:", "Reference fixtures and logs:")
                 wrapper = root </> "ghc"
                 injected =
                     [("PATH", root ++ ":" ++ fromMaybe "" (lookup "PATH" environment))
