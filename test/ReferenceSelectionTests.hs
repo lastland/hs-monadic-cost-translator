@@ -202,7 +202,7 @@ data CompilerStage = CandidateCompiler | ObserverCompiler | AllocatorCompiler
 
 checkCompilerCrashes :: FilePath -> IO ()
 checkCompilerCrashes executable = do
-    mapM_ (\stage -> check stage versionedPanicAfterStdout)
+    mapM_ (`check` versionedPanicAfterStdout)
         [ManualWarningCompiler, GeneratedWarningCompiler]
     check AllocatorCompiler
         ("versioned panic resembling rejection",
