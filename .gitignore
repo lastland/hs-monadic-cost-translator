@@ -8,4 +8,4 @@ __pycache__/
 /examples/flycheck_*.hs
 /examples/*M.hs.log
 
-paper.pdf
+*.pdf
