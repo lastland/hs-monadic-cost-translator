@@ -28,8 +28,8 @@ checkRuntimeAllocator = do
         createDirectoryIfMissing True output
         (status, out, err) <- readProcessWithExitCode "ghc"
             (compilerFlags output ++ ["-O" ++ optimization, source, "-o", executable]) ""
-        writeFile (output </> "compile.log") (out ++ err)
-        checkProcessCrash status (out ++ err)
+        writeFile (output </> "compile.log") (out ++ "\n" ++ err)
+        checkProcessCrash status (out ++ "\n" ++ err)
         unless (status == ExitSuccess) (fail ("allocator positive control did not compile\n" ++ out ++ err))
         (ran, results, problems) <- readProcessWithExitCode executable [] ""
         writeFile (output </> "execution.log") (results ++ problems)
@@ -42,7 +42,7 @@ checkRuntimeAllocator = do
         createDirectoryIfMissing True output
         (status, out, err) <- readProcessWithExitCode "ghc"
             (compilerFlags output ++ ["-fno-code", source]) ""
-        let diagnostic = out ++ err
+        let diagnostic = out ++ "\n" ++ err
         writeFile (output </> "compile.log") diagnostic
         checkProcessCrash status diagnostic
         unless (status == ExitFailure 1 && all (`isInfixOf` diagnostic) expected) $

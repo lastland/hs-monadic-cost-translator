@@ -107,7 +107,8 @@ publishCandidate source output code temp = do
             , candidate
             ]
             ""
-    appendFile logPath (out ++ err)
+    let diagnostic = unlines [out, err]
+    appendFile logPath diagnostic
     case status of
         ExitSuccess -> do
             renameFile candidate output
@@ -120,7 +121,7 @@ publishCandidate source output code temp = do
             let category =
                     if exitStatus < 0 || exitStatus >= 128
                         then "setup error: generated module compiler crashed"
-                        else failureCategory (out ++ err)
+                        else failureCategory diagnostic
             appendFile logPath (category ++ "\n")
             pure (Left (category ++ "; see " ++ logPath))
     where

@@ -156,10 +156,11 @@ compileAt options support sandbox entry packages executable = do
         (options ++ ["-v0", "-dynamic", "-Werror=unused-imports", "-i", "-i" ++ sandbox, "-i" ++ support,
           "-outputdir", objects, "-main-is", entry ++ ".main", support </> entry ++ ".hs",
           "-o", executable] ++ concatMap (\package -> ["-package", package]) packages) ""
-    writeFile (sandbox </> "compile.log") (out ++ err)
-    checkProcessCrash status (out ++ err)
+    let diagnostic = out ++ "\n" ++ err
+    writeFile (sandbox </> "compile.log") diagnostic
+    checkProcessCrash status diagnostic
     unless (status == ExitSuccess) $
-        externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) (out ++ err)
+        externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) diagnostic
 
 checkProcessCrash :: ExitCode -> String -> IO ()
 checkProcessCrash (ExitFailure code) output
