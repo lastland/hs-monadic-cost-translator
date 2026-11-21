@@ -13,14 +13,14 @@ module ReferenceRunner
 import Control.Exception (IOException, catch, throwIO, try, bracket_)
 import Control.Monad (forM, forM_, unless, when, void)
 import AcceptedOptionsChecks (checkAcceptedOptions)
-import Cost.Publication (isCompilerPanic, stageAndTranslate)
+import Cost.Publication (stageAndTranslate)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import GeneratedConstruction (checkGeneratedConstruction, checkGeneratedConstructionWithOrigin)
 import GeneratedFunctions (checkAcceptedFunctions)
 import GHC.Settings.Config (cProjectVersion)
 import Paths_cost_translate (getDataFileName)
-import ReferenceFailure (fatalSetupFailure, ExternalDiagnostic(..), externalFailure)
+import ReferenceFailure (fatalSetupFailure, ExternalDiagnostic(..), externalFailure, checkProcessCrash)
 import System.Directory
     ( Permissions(..), copyFile, createDirectoryIfMissing, doesFileExist, findExecutable
     , getPermissions, getTemporaryDirectory, setPermissions
@@ -161,12 +161,6 @@ compileAt options support sandbox entry packages executable = do
     checkProcessCrash status diagnostic
     unless (status == ExitSuccess) $
         externalFailure CompilationDiagnostic ("observer compilation failed in " ++ sandbox) diagnostic
-
-checkProcessCrash :: ExitCode -> String -> IO ()
-checkProcessCrash (ExitFailure code) output
-    | code < 0 || code >= 128 || isCompilerPanic output =
-        fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
-checkProcessCrash _ _ = pure ()
 
 -- Mutate a real publication, not the lifecycle API. The wrapper first runs real
 -- GHC, then replaces its successfully checked candidate before publication.

@@ -3,12 +3,14 @@
 module ReferenceFailure
     ( FatalSetupFailure(..), fatalSetupFailure
     , ExternalDiagnostic(..), externalFailure
+    , checkProcessCrash
     ) where
 
 import Control.Exception (Exception, throwIO)
 import Cost.Publication (isCompilerPanic)
 import Data.Char (isSpace)
 import Data.List (isInfixOf, isPrefixOf)
+import System.Exit (ExitCode(..))
 
 newtype FatalSetupFailure = FatalSetupFailure String
 
@@ -19,6 +21,12 @@ instance Exception FatalSetupFailure
 
 fatalSetupFailure :: String -> IO a
 fatalSetupFailure = throwIO . FatalSetupFailure
+
+checkProcessCrash :: ExitCode -> String -> IO ()
+checkProcessCrash (ExitFailure code) output
+    | code < 0 || code >= 128 || isCompilerPanic output =
+        fatalSetupFailure ("process crashed (" ++ show code ++ ")\n" ++ output)
+checkProcessCrash _ _ = pure ()
 
 data ExternalDiagnostic = TranslationDiagnostic | CompilationDiagnostic | ComparisonDiagnostic
 
