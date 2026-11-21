@@ -40,14 +40,20 @@ then run:
 
 ```sh
 sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
-  --test-arguments=anf-scoped-renaming
+  --test-arguments='--known-failures anf-scoped-renaming'
 ```
 
-The existing selector runs source variants in sorted order. `Renamed.hs` is
-first, so its failure currently prevents the same command from reaching
-`Shadowed.hs`. The unpublished audit independently selected each source;
-the baseline CLI has no per-source command. Per-source CLI reproduction is
-pending, not an additional argument to the command above.
+The selector visits both source variants independently, in sorted order, and
+returns failure while either reference comparison fails. To run one source:
+
+```sh
+sh scripts/stack-test.sh cost-translate:test:cost-translate-test \
+  --test-arguments='--known-failures anf-scoped-renaming:test/cases/anf-scoped-renaming/Shadowed.hs'
+```
+
+The original audit predates per-source CLI selection. Its separate executions
+remain historical evidence; the current CLI no longer stops at the first
+ordinary comparison failure. Setup failures still stop execution immediately.
 
 ## Intended behavior and scope
 
