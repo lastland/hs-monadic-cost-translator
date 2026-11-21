@@ -42,8 +42,9 @@ reports identity **value** mismatches as well as costs at the boundary sample:
   `([True,True,True],2)`, with no cost attached to that identity observation.
 
 These cases exercise retained top-level identities, dictionary keys and local
-freshness. Not every numeric discrepancy is thereby proved source-global:
-local-scoped and one-observation ticks need separate accounting.
+freshness. The original mismatch list alone did not establish the binding scope
+of every discrepancy. The scope audit below traces the originating bindings and
+separately checks the genuinely local observations.
 
 ## Intended behavior and acceptance
 
@@ -54,6 +55,46 @@ identity assertions unchanged. Source-global identity support remains a separate
 scope decision; this issue authorizes no runtime cache or initialization scheme.
 Keep complete-output guards and ordinary caller builds before all comparisons,
 including boundary/seeded samples and existing optimized postchecks.
+
+## Scope accounting
+
+The [global-cost decision in #2](https://github.com/lastland/hs-monadic-cost-translator/issues/2#issuecomment-6972277826)
+and [global-identity decision in #4](https://github.com/lastland/hs-monadic-cost-translator/issues/4#issuecomment-6970326527)
+defer these global requirements. The #4 report explicitly includes the two Int
+fields of one `same` result failing to alias. A single function invocation does
+not make its uses of the top-level `shared` binding source-local.
+
+- In `test/cases/thunk-sharing/Example.hs`, `same` and `different` use top-level
+  `shared`; the genuinely local binding is `y` inside `local`.
+- In `test/cases/thunk-matching-sharing/Example.hs`, `localScoped` defines a local
+  function `go`, but `go` still reads top-level `shared`. The numeric, wide and
+  top-polymorphic mismatches likewise originate at top-level bindings.
+- In `examples/ThunkMatching.hs`, the failing identity-vector components compare
+  top-level `shared` or `sharedEmpty`. Numeric components 6–9 and polymorphic
+  components 3–5 check local sharing, dictionary separation and freshness; those
+  components match.
+
+A bounded audit at the `3008833` source checkpoint compared every original probe
+over all 12 boundaries and 200 seeded inputs at both O0 and O2, without stopping
+at or truncating the global mismatches. The actual local probes and the local
+identity components above match throughout. All three original fixture
+comparisons still fail.
+
+The manual fixture mixes local and global calls in its repeated-cost probes.
+Supplementary ordinary callers therefore invoked only its existing
+`localDictionariesM` and `localPolymorphicM` exports, against the complete unchanged
+generated module and independent reference. At each optimization, all 124
+supplementary checks match the reference and independently derived expectations:
+numeric full demand costs 3, repeated demands on one result still cost 3, and
+separate calls cost `3*r`; the corresponding polymorphic costs are 2, 2 and
+`2*r`. Partial demands, skipped fields, ignored bottom arguments, dictionary
+partitions and fresh calls also match.
+
+No independently local mismatch was found in these observations. This is bounded
+scope evidence, not an exhaustive correctness proof or a replacement passing
+suite. All 130 original artifacts remained unchanged. No production reuse rule,
+runtime change, assertion change or catalog promotion follows from this audit;
+the strict global counterexamples remain deferred and visible.
 
 ## Reproduce
 
