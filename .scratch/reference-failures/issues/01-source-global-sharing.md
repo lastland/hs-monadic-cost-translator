@@ -66,8 +66,14 @@ the current implementation effort. This issue preserves the stricter reference
 failure for a later decision; it does not authorize a runtime change, evaluator,
 new cache, initialization protocol or extra caller constraint.
 
-Related unresolved clarification:
-[issue #13](https://github.com/lastland/hs-monadic-cost-translator/issues/13#issuecomment-7034721010).
+The [issue #13 closure decision](https://github.com/lastland/hs-monadic-cost-translator/issues/13#issuecomment-7054311100)
+resolves the comparison clarification. In these two variants, the existing
+source-global exclusion covers only the tick differences for
+`factory/int-repeated`, `factory/integer-repeated`, and
+`factory/mixed-dictionaries`. Keep their probes and expected costs unchanged.
+All values must match; comparisons, parameter scoping and fresh locals must
+match on both values and ticks. The retained global-cost failures do not reopen
+the completed comparison issue.
 
 ## Acceptance
 
