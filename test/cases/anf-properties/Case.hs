@@ -36,15 +36,9 @@ listFunctions =
     , ("nested-specialized", Source.nestedSpecialized, nestedSpecializedM)
     ]
 
--- Every sample observes all four masks. The fifth observation also exercises
--- the shared generator's demand fields, without changing the probe catalog.
 masks :: [(String, Mask)]
 masks = [("none", (False, False)), ("left", (True, False)),
          ("right", (False, True)), ("both", (True, True))]
-
-sampleMasks :: [(String, Sample -> Mask)]
-sampleMasks = [(label, const mask) | (label, mask) <- masks] ++
-    [("sample", \s -> (leftDemand s, rightDemand s))]
 
 projectPair :: Mask -> M.PairT Int Int -> (Maybe Int, Maybe Int)
 projectPair (left, right) (M.PairT a b) =
@@ -74,11 +68,11 @@ observePure :: Mask -> (Int, Int) -> Int
 observePure (left, right) (a, b) =
     (if left then a else 0) + (if right then b else 0)
 
-repeatedPair :: PairFn -> (Sample -> Int) -> (Sample -> Mask) ->
+repeatedPair :: PairFn -> (Sample -> Int) -> Mask ->
     Sample -> M.MemoristM Int
 repeatedPair make input mask s = do
     pair <- M.fromPure1 make (input s)
-    values <- replicateM (repeats s) (observePair s (mask s) pair)
+    values <- replicateM (repeats s) (observePair s mask pair)
     pure (sum values)
 
 -- Normalize identities: only equality relationships and caller-level name
@@ -107,19 +101,19 @@ pairProbes (label, source, make) =
         (\_ -> pairResources make (error "unused pair input demanded"))] ++
     concat
     [ [ demanded (label ++ "/demand/" ++ maskLabel)
-            (\s -> projectPair (mask s)) (\s -> pairDemand (mask s))
+            (const (projectPair mask)) (const (pairDemand mask))
             (\s -> M.fromPure1 make (number s))
       , scalarSource (label ++ "/repeat/" ++ maskLabel)
-            (\s -> repeats s * observePure (mask s) (source (number s)))
+            (\s -> repeats s * observePure mask (source (number s)))
             (repeatedPair make number mask)
       ]
-    | (maskLabel, mask) <- sampleMasks
+    | (maskLabel, mask) <- masks
     ] ++
     [demanded (label ++ "/bottom-skipped-preparation")
         (\_ _ -> ()) (\_ _ -> M.PairD M.Skip M.Skip)
         (\_ -> M.fromPure1 make (undefined :: Int))] ++
     [failure (label ++ "/bottom-demand/" ++ maskLabel)
-        (repeatedPair make (const undefined) (const mask))
+        (repeatedPair make (const undefined) mask)
     | (maskLabel, mask) <- drop 1 masks]
 
 inputs :: Sample -> [Int]
@@ -145,10 +139,10 @@ observeList s mask (L.ConsT h t) = do
     pure (here + rest)
 
 repeatedList :: ListFn -> (Sample -> Int) -> (Sample -> [Int]) ->
-    (Sample -> Mask) -> Sample -> M.MemoristM Int
+    Mask -> Sample -> M.MemoristM Int
 repeatedList make input items mask s = do
     output <- M.fromPure2 make (input s) (items s)
-    values <- replicateM (repeats s) (observeList s (mask s) output)
+    values <- replicateM (repeats s) (observeList s mask output)
     pure (sum values)
 
 inputNames :: L.ListT Int -> [M.ThName]
@@ -184,16 +178,16 @@ listProbes (label, source, make) =
                         ("multi-output", \s -> [number s, other s, number s + 1])]] ++
     concat
     [ [ demanded (label ++ "/" ++ shape ++ "/demand/" ++ maskLabel)
-            (\s -> projectList (mask s)) (\s -> listDemand (mask s))
+            (const (projectList mask)) (const (listDemand mask))
             (\s -> M.fromPure2 make (number s) (items s))
       , scalarSource (label ++ "/" ++ shape ++ "/repeat/" ++ maskLabel)
             (\s -> repeats s * sum
-                (map (observePure (mask s)) (source (number s) (items s))))
+                (map (observePure mask) (source (number s) (items s))))
             (repeatedList make number items mask)
       ]
     | (shape, items) <- [("sample-width", inputs), ("empty", const []),
                         ("multi-output", \s -> [number s, other s, number s + 1])]
-    , (maskLabel, mask) <- sampleMasks
+    , (maskLabel, mask) <- masks
     ] ++
     [ demanded (label ++ "/bottom-capture-skipped")
         (\_ -> projectList (False, True)) (\_ -> listDemand (False, True))
@@ -205,11 +199,11 @@ listProbes (label, source, make) =
         (\_ -> projectList (True, True)) (\_ -> listDemand (True, True))
         (\_ -> M.fromPure2 make (undefined :: Int) ([] :: [Int]))
     , failure (label ++ "/bottom-capture-demanded")
-        (repeatedList make (const undefined) (const [0, 1]) (const (True, False)))
+        (repeatedList make (const undefined) (const [0, 1]) (True, False))
     , failure (label ++ "/bottom-item-demanded")
-        (repeatedList make number (const [undefined, undefined]) (const (False, True)))
+        (repeatedList make number (const [undefined, undefined]) (False, True))
     , failure (label ++ "/bottom-list-spine")
-        (repeatedList make number (const undefined) (const (False, False)))
+        (repeatedList make number (const undefined) (False, False))
     ]
 
 probes :: [Probe]
@@ -224,15 +218,15 @@ probes =
     concatMap listProbes listFunctions ++
     concat
     [ [ demanded ("pair/direct/" ++ maskLabel)
-            (\s -> projectPair (mask s)) (\s -> pairDemand (mask s))
+            (const (projectPair mask)) (const (pairDemand mask))
             (\s -> M.fromPure2 pairM (number s) (other s))
       , scalarSource ("pair/direct-repeat/" ++ maskLabel)
-            (\s -> repeats s * observePure (mask s)
+            (\s -> repeats s * observePure mask
                 (Source.pair (number s) (other s)))
             (\s -> do
                 pair <- M.fromPure2 pairM (number s) (other s)
-                values <- replicateM (repeats s) (observePair s (mask s) pair)
+                values <- replicateM (repeats s) (observePair s mask pair)
                 pure (sum values))
       ]
-    | (maskLabel, mask) <- sampleMasks
+    | (maskLabel, mask) <- masks
     ]

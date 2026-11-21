@@ -683,13 +683,13 @@ class WorkingCheckoutScripts(unittest.TestCase):
         sibling = self.checkout("checkout")
         good = b"module Example where\n\nvalue :: Int\nvalue = 1\n"
         (sibling / "src/Example.hs").write_bytes(good)
+        accepted = self.invoke(sibling, "check-source.sh")
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
             with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
                 root = self.checkout("checkout" + suffix, scripts)
                 bad = b"module Example where\nvalue=1\n"
                 (root / "src/Example.hs").write_bytes(bad)
-                accepted = self.invoke(sibling, "check-source.sh")
-                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
                 result = self.invoke(root, "check-source.sh", scripts=scripts, relative=relative)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("src/Example.hs: formatting:", result.stderr)
@@ -700,13 +700,13 @@ class WorkingCheckoutScripts(unittest.TestCase):
         sibling = self.checkout("checkout")
         good = b'#!/bin/sh\nargument="two words"\nprintf "%s\\n" "$argument"\n'
         (sibling / "probe.sh").write_bytes(good)
+        accepted = self.invoke(sibling, "check-shell.sh")
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
             with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
                 root = self.checkout("checkout" + suffix, scripts)
                 bad = b'#!/bin/sh\nargument="two words"\nprintf "%s\\n" $argument\n'
                 (root / "probe.sh").write_bytes(bad)
-                accepted = self.invoke(sibling, "check-shell.sh")
-                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
                 result = self.invoke(root, "check-shell.sh", scripts=scripts, relative=relative)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("probe.sh:3:", result.stderr)
@@ -718,13 +718,13 @@ class WorkingCheckoutScripts(unittest.TestCase):
         sibling = self.checkout("checkout")
         good = b"module Example where\n\nvalue :: Int\nvalue = 1\n"
         (sibling / "src/Example.hs").write_bytes(good)
+        accepted = self.invoke(sibling, "check-hlint.sh")
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         for suffix, scripts, relative in (("\n", "scripts", False), ("\n\n", "scripts\n", True), ("\n\n\n", "\n", True)):
             with self.subTest(suffix=repr(suffix), scripts=repr(scripts), relative=relative):
                 root = self.checkout("checkout" + suffix, scripts)
                 bad = b"module Example where\n\nvalue :: Int\nvalue = id 1\n"
                 (root / "src/Example.hs").write_bytes(bad)
-                accepted = self.invoke(sibling, "check-hlint.sh")
-                self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
                 result = self.invoke(root, "check-hlint.sh", scripts=scripts, relative=relative)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("src/Example.hs:4:", result.stderr)

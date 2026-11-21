@@ -18,12 +18,20 @@ import System.IO.Temp (createTempDirectory)
 import System.Process (readProcessWithExitCode)
 
 checkCapturedKeySharing :: ReferenceEnvironment -> IO ()
-checkCapturedKeySharing environment = forM_ ["inferred-key-captured", "captured-producer-demand"] $ \label -> do
+checkCapturedKeySharing environment = do
     temporary <- getTemporaryDirectory
     root <- createTempDirectory temporary "captured-key-"
     putStrLn ("Captured key artifacts: " ++ root)
-    fixtures <- getDataFileName ("test/cases" </> label)
     support <- getDataFileName "test/reference"
+    forM_ ["inferred-key-captured", "captured-producer-demand"] $ \label ->
+        checkFixture environment support (root </> label) label
+    forM_ ["Overlap.hs", "TwoKeys.hs", "Ambiguous.hs"] $ \fixture ->
+        checkControl (root </> fixture) fixture
+    putStrLn "PASS: captured-key-sharing / complete construction passed before O0/O2 caller compilation; local native sharing and controls unchanged"
+
+checkFixture :: ReferenceEnvironment -> FilePath -> FilePath -> String -> IO ()
+checkFixture environment support root label = do
+    fixtures <- getDataFileName ("test/cases" </> label)
     let actual = root </> "actual"
         reference = root </> "reference"
         output = actual </> "Generated.hs"
@@ -54,24 +62,24 @@ checkCapturedKeySharing environment = forM_ ["inferred-key-captured", "captured-
         (status, out, err) <- readProcessWithExitCode (comparer environment) [observed, expected] ""
         writeFile (root </> ("comparison" ++ optimization ++ ".log")) (out ++ err)
         unless (status == ExitSuccess) (fail (out ++ err))
-    forM_ ["Overlap.hs", "TwoKeys.hs", "Ambiguous.hs"] $ \fixture -> do
-        specimen <- getDataFileName ("test/captured-key-controls" </> fixture)
-        let sandbox = root </> fixture
-        createDirectoryIfMissing True sandbox
-        copyFile specimen (sandbox </> "Example.hs")
-        let generated = sandbox </> "Generated.hs"
-        result <- translateFile (sandbox </> "Example.hs") generated
-        if fixture == "Ambiguous.hs" then do
-            published <- doesFileExist generated
-            unless (not published && either ("cannot locate constrained type parameter" `isInfixOf`) (const False) result) $
-                fail "a genuinely ambiguous dictionary must retain its diagnostic and not publish"
-        else do
-            either fail pure result
-            bindings <- ownerBindings generated
-            let refs = [pretty (unLoc name) | b <- bindings, HsVar _ name <- collectAst b :: [HsExpr GhcPs]]
-            unless (any (`elem` refs) ["sharedAt", "sharedAtBy"]) $
-                fail (fixture ++ ": multiple keys must retain their existing fallback")
-    putStrLn "PASS: captured-key-sharing / complete construction passed before O0/O2 caller compilation; local native sharing and controls unchanged"
+
+checkControl :: FilePath -> FilePath -> IO ()
+checkControl sandbox fixture = do
+    specimen <- getDataFileName ("test/captured-key-controls" </> fixture)
+    createDirectoryIfMissing True sandbox
+    copyFile specimen (sandbox </> "Example.hs")
+    let generated = sandbox </> "Generated.hs"
+    result <- translateFile (sandbox </> "Example.hs") generated
+    if fixture == "Ambiguous.hs" then do
+        published <- doesFileExist generated
+        unless (not published && either ("cannot locate constrained type parameter" `isInfixOf`) (const False) result) $
+            fail "a genuinely ambiguous dictionary must retain its diagnostic and not publish"
+    else do
+        either fail pure result
+        bindings <- ownerBindings generated
+        let refs = [pretty (unLoc name) | b <- bindings, HsVar _ name <- collectAst b :: [HsExpr GhcPs]]
+        unless (any (`elem` refs) ["sharedAt", "sharedAtBy"]) $
+            fail (fixture ++ ": multiple keys must retain their existing fallback")
 
 ownerBindings :: FilePath -> IO [HsBind GhcPs]
 ownerBindings output = do
